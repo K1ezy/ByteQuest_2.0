@@ -75,9 +75,13 @@ class InstructionalDocument(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     uploaded_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=False)
     title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
     language_tag = Column(Enum(ProgrammingLang), nullable=False)
+    topic_concept = Column(String(100), nullable=True)
     storage_path = Column(Text, nullable=False)
     status = Column(String(20), default="processing", nullable=False)
+    processing_status = Column(String(20), default="processing", nullable=False)
+    total_chunks = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
@@ -92,8 +96,10 @@ class DocumentChunk(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id = Column(UUID(as_uuid=True), ForeignKey("instructional_documents.id", ondelete="CASCADE"), nullable=False)
     chunk_index = Column(Integer, nullable=False)
+    page_number = Column(Integer, default=1, nullable=False)
     content_text = Column(Text, nullable=False)
     token_count = Column(Integer, nullable=False)
+    embedding = Column(JSONB, nullable=True)
     embedding_model = Column(String(50), default="gemini-embedding-2", nullable=False)
     embedding_dim = Column(Integer, default=768, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -109,20 +115,26 @@ class LearningActivity(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     source_document_id = Column(UUID(as_uuid=True), ForeignKey("instructional_documents.id", ondelete="SET NULL"), nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=True)
     activity_type = Column(Enum(ActivityKind), nullable=False)
     language = Column(Enum(ProgrammingLang), nullable=False)
     topic_concept = Column(String(100), nullable=False)
+    title = Column(String(255), nullable=True)
+    problem_statement = Column(Text, nullable=True)
+    starter_code = Column(Text, nullable=True)
     difficulty_level = Column(Integer, nullable=False, default=1)
     sequence_order = Column(Integer, nullable=False, default=1)
     review_status = Column(Enum(ReviewState), default=ReviewState.draft, nullable=False)
     reference_solution_code = Column(Text, nullable=True)
     judge0_verified = Column(Boolean, default=False, nullable=False)
+    judge0_verification_log = Column(JSONB, nullable=True)
     reviewed_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=True)
     xp_reward = Column(Integer, default=50, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     test_cases = relationship("TestCase", back_populates="activity", cascade="all, delete-orphan", order_by="TestCase.order_index")
     attempts = relationship("ActivityAttempt", back_populates="activity", cascade="all, delete-orphan")
+
 
 
 # ============================================================================

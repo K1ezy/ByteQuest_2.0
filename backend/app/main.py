@@ -5,6 +5,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from app.api.rag_instructor import router as rag_instructor_router
 from app.api.submissions import router as submissions_router
 from app.core.config import settings
 
@@ -43,6 +44,7 @@ app.add_middleware(
 
 # Register API Routers
 app.include_router(submissions_router)
+app.include_router(rag_instructor_router)
 
 
 @app.get("/health", tags=["Health"])

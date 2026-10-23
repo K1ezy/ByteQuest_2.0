@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL_ID: str = "gemini-3.5-flash-lite"
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
+    GEMINI_EMBEDDING_MODEL_ID: str = "gemini-embedding-2"
     GEMINI_EMBEDDING_DIM: int = 768
     
     # Judge0 CE (Rule 3)

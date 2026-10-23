@@ -107,3 +107,15 @@ async def get_current_user(
         db.refresh(profile)
 
     return profile
+
+
+async def require_instructor(
+    current_user: Profile = Depends(get_current_user),
+) -> Profile:
+    """Dependency that restricts endpoints to instructors and admins."""
+    if current_user.role not in (UserRole.instructor, UserRole.admin):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Instructor or admin privileges required.",
+        )
+    return current_user
