@@ -1,0 +1,85 @@
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+*.env
+*.pem
+*.key
+*.cert
+service_account.json
+credentials.json
+
+# Python & FastAPI
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Node.js & Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.turbo/
+node_modules/
+.next/
+out/
+build/
+.npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+next-env.d.ts
+
+# Machine Learning & Large Artifacts
+ml_pipeline/artifacts/*.joblib
+!ml_pipeline/artifacts/.gitkeep
+ml_pipeline/data/raw/
+*.h5
+*.pkl
+
+# Logs & Temporary Files
+logs/
+*.log
+tmp/
+temp/
+
+# IDE & Editor Settings (Optional, allow user custom settings)
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.sublime-project
+*.sublime-workspace

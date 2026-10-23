@@ -1,0 +1,27 @@
+# ByteQuest 2.0 Caddy Reverse Proxy Configuration
+# Automatic HTTPS for VPS API endpoint (accessed by Vercel frontend)
+
+{$DOMAIN:api.bytequest.online} {
+    encode gzip zstd
+
+    # Security Headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Proxy API requests to FastAPI backend
+    reverse_proxy backend:8000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}

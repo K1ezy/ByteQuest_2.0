@@ -1,0 +1,102 @@
+services:
+  # Caddy Reverse Proxy (Auto-HTTPS)
+  caddy:
+    image: caddy:2-alpine
+    container_name: bytequest_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - bytequest_net
+    depends_on:
+      - backend
+
+  # FastAPI Backend Service
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: bytequest_backend
+    restart: unless-stopped
+    expose:
+      - "8000"
+    environment:
+      - ENVIRONMENT=production
+      - JUDGE0_BASE_URL=http://judge0-server:2358
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL_ID=gemini-2.5-flash
+    networks:
+      - bytequest_net
+    depends_on:
+      - judge0-server
+
+  # Judge0 CE Server (Code Execution Sandbox)
+  # Internal network only: ports not exposed to public host (Rule 3)
+  judge0-server:
+    image: judge0/judge0:latest
+    container_name: bytequest_judge0_server
+    restart: unless-stopped
+    volumes:
+      - ./judge0.conf:/judge0.conf:ro
+    expose:
+      - "2358"
+    environment:
+      - REDIS_HOST=judge0-redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=judge0-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=judge0
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=judge0_secure_db_pass
+    networks:
+      - bytequest_net
+    depends_on:
+      - judge0-db
+      - judge0-redis
+
+  # Judge0 Redis Queue
+  judge0-redis:
+    image: redis:7-alpine
+    container_name: bytequest_judge0_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    expose:
+      - "6379"
+    volumes:
+      - judge0_redis_data:/data
+    networks:
+      - bytequest_net
+
+  # Judge0 Internal PostgreSQL
+  judge0-db:
+    image: postgres:15-alpine
+    container_name: bytequest_judge0_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=judge0
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=judge0_secure_db_pass
+    expose:
+      - "5432"
+    volumes:
+      - judge0_pg_data:/var/lib/postgresql/data
+    networks:
+      - bytequest_net
+
+networks:
+  bytequest_net:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
+  judge0_redis_data:
+  judge0_pg_data:
