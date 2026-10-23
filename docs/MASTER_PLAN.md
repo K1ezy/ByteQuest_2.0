@@ -54,9 +54,9 @@ All developers and AI assistants working on ByteQuest 2.0 must adhere to the fol
 * **Rule 1: Configurable LLM & Structured Outputs**  
   All generative AI calls to Google Gemini must use an environment-configurable model ID (`GEMINI_MODEL_ID` defaulting to `gemini-2.5-flash` or `gemini-3.5-flash-lite`). Every generation prompt must enforce strict Pydantic schemas (Structured Outputs) for predictable JSON payloads and use `tenacity` exponential backoff to handle transient API limits.
 * **Rule 2: Semantic Document Grounding & Embedding Dimensionality**  
-  Text chunks extracted from uploaded instructional PDFs must be vectorized using `gemini-embedding-2` with `output_dimensionality = 768`. Embedding tasks must strictly specify `task_type = "RETRIEVAL_DOCUMENT"` for indexing chunks and `task_type = "RETRIEVAL_QUERY"` for student query/topic matching.
+  The embedding model ID and output dimension are environment-configurable. Store the actual `embedding_model` and `embedding_dim` with each chunk, and keep the model output dimension aligned with the database vector column. The current schema uses `vector(768)`, so the configured dimension must remain 768 until a reviewed schema migration changes it. Retrieval must use `RETRIEVAL_DOCUMENT` for indexed chunks and `RETRIEVAL_QUERY` for queries.
 * **Rule 3: Isolated Code Execution Sandbox**  
-  Judge0 CE must run inside an isolated Docker network on a host configured with cgroup v1 (`systemd.unified_cgroup_hierarchy=0`). Judge0 internal ports (Redis and Postgres) must **never** be exposed publicly. All submissions must be wrapped with timeouts and circuit breaker logic in FastAPI.
+  The active development target is the private Ubuntu VM on D: running Judge0 Extra CE 1.13.1 on cgroup v1. FastAPI authenticates to it with `X-Auth-Token` and discovers language IDs from `/languages`; the browser never calls it directly. Judge0 Redis and Postgres ports must never be exposed publicly. The separate Compose file is a later Linux VPS template and currently uses standard Judge0 CE, so it is not the local development target. All submissions must use timeouts and circuit-breaker handling in FastAPI.
 * **Rule 4: Centralized Backend Gatekeeping**  
   Client applications (Next.js) must **never** query or mutate the Supabase database directly for core business logic, code submissions, RAG generation, or ML predictions. All mutations route through the FastAPI backend (`/api/v1/*`) validated by Supabase JWT bearer tokens.
 * **Rule 5: Immutable Performance Logging & Zero Train-Serve Leakage**  
@@ -79,7 +79,9 @@ ByteQuest_2.0/
 ├── docs/
 │   └── MASTER_PLAN.md          # Full architecture, rules, and checklist for AI & team
 ├── infra/
-│   ├── docker-compose.yml      # FastAPI, Caddy, Judge0 CE, Judge0 Redis/Postgres
+│   ├── configure-judge0-vm.ps1 # Primary local workflow: configure private D: Ubuntu VM endpoint/token
+│   ├── start-local.ps1         # Starts local Supabase; keeps the configured VM Judge0 target
+│   ├── docker-compose.yml      # Later Linux VPS template; not used for local Judge0
 │   ├── Caddyfile               # Automatic HTTPS reverse proxy for Vercel -> VPS
 │   └── judge0.conf             # Judge0 sandbox resource limits & worker config
 ├── frontend/                   # Next.js (TypeScript), Tailwind CSS, shadcn/ui, Monaco, TanStack Query
@@ -101,9 +103,9 @@ ByteQuest_2.0/
 │   │       └── ml_predictor/   # Live model loader & real-time feature extraction
 │   └── tests/                  # Pytest integration & unit tests
 └── ml_pipeline/                # Offline training & empirical evaluation for thesis Chapter 4
-    ├── train_compare.py        # GroupKFold, Optuna/GridSearchCV (Logistic Regression vs Random Forest)
-    ├── feature_engineering.py  # Shared feature extractor (used by both ML pipeline and backend)
-    └── artifacts/              # Serialized .joblib models, ROC curves, confusion matrices, metrics.json
+    ├── train_compare.py        # Nested GroupKFold + GridSearchCV comparison and artifact export
+    ├── feature_engineering.py  # Compatibility exports for the backend's canonical extractor
+    └── artifacts/              # Serialized pipelines, ROC curve data, confusion matrices, metrics JSON
 ```
 
 ---
@@ -121,6 +123,8 @@ ByteQuest 2.0 strictly enforces language assignment based on the student's acade
 ---
 
 ## 5. Database Schema Blueprint (Supabase PostgreSQL + pgvector)
+
+The current migrations create **9 physical tables**: `profiles`, `instructional_documents`, `document_chunks`, `learning_activities`, `test_cases`, `activity_attempts`, `ml_predictions`, `badges`, and `student_badges`. Badges and student badge awards are separate tables.
 
 ### PostgreSQL Schema DDL
 
@@ -161,7 +165,7 @@ CREATE TABLE document_chunks (
     chunk_index INT NOT NULL,
     content_text TEXT NOT NULL,
     token_count INT NOT NULL,
-    embedding vector(768) NOT NULL, -- gemini-embedding-2 768-dim vector
+    embedding vector(768) NOT NULL, -- Must match the configured model's output dimension
     embedding_model VARCHAR(50) NOT NULL DEFAULT 'gemini-embedding-2',
     embedding_dim INT NOT NULL DEFAULT 768,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -178,6 +182,7 @@ CREATE TABLE learning_activities (
     source_document_id UUID REFERENCES instructional_documents(id) ON DELETE SET NULL,
     activity_type VARCHAR(20) NOT NULL CHECK (activity_type IN ('quiz', 'challenge')),
     language VARCHAR(10) NOT NULL CHECK (language IN ('cpp', 'python', 'java')),
+    quiz_questions_json JSONB, -- Quiz questions; correct answers remain server-side
     topic_concept VARCHAR(100) NOT NULL,
     difficulty_level INT NOT NULL CHECK (difficulty_level BETWEEN 1 AND 5),
     sequence_order INT NOT NULL DEFAULT 1,
@@ -225,6 +230,7 @@ ON activity_attempts (student_id, activity_id, created_at);
 CREATE TABLE ml_predictions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     student_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    source_attempt_id UUID REFERENCES activity_attempts(id) ON DELETE SET NULL,
     target_activity_id UUID NOT NULL REFERENCES learning_activities(id) ON DELETE CASCADE,
     features_snapshot_json JSONB NOT NULL,
     logreg_prob FLOAT NOT NULL,
@@ -232,6 +238,8 @@ CREATE TABLE ml_predictions (
     rf_prob FLOAT NOT NULL,
     rf_pred BOOLEAN NOT NULL,
     actual_outcome BOOLEAN, -- Populated after subsequent activity attempt completion
+    active_sequencer_mode VARCHAR(50),
+    recommended_action VARCHAR(50),
     model_version VARCHAR(50) NOT NULL DEFAULT 'v1.0.0',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -239,6 +247,7 @@ CREATE TABLE ml_predictions (
 -- 8. BADGES & STUDENT BADGES (Gamification Elements)
 CREATE TABLE badges (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code VARCHAR(64) UNIQUE,
     name VARCHAR(100) NOT NULL,
     description TEXT NOT NULL,
     icon_url TEXT NOT NULL,
@@ -263,7 +272,7 @@ CREATE TABLE student_badges (
 Phase 1: Core Infra & Auth (Days 1–5)
    │
    ▼
-Phase 2: Judge0 CE Assessment Subsystem (Days 6–11)
+Phase 2: Judge0 Assessment Subsystem (Days 6–11)
    │
    ▼
 Phase 3: Document RAG & Gemini Content Generator (Days 12–18)
@@ -275,27 +284,62 @@ Phase 4: Gamification & Rule-Based Sequencer (Days 19–23)
 Phase 5: Feature Engineering & Comparative ML Pipeline (Days 24–30)
    │
    ▼
-Phase 6: Live ML Integration & Adaptive Sequencer (Days 31–34)
+Phase 6: Shadow ML Evaluation & Sequencer Review (Days 31–34)
    │
    ▼
 Phase 7: VPS Deployment, NEMSU Classroom Study & Evaluation (Days 35–42)
 ```
 
+### Reconciled Delivery Baseline (Adopted 2026-10-24)
+
+The original product and thesis goals remain in scope. Delivery proceeds through a small, verifiable local stack before RAG, ML activation, or cloud deployment.
+
+**Local development topology**
+
+```text
+Next.js (localhost:3000) → FastAPI (localhost:8000) → Local Supabase (CLI, localhost:54321/54322)
+                                                   └→ Private Ubuntu VM on D: (Judge0 Extra CE 1.13.1)
+```
+
+- `infra/start-local.ps1` starts local Supabase and writes local connection settings. It preserves the VM Judge0 URL/token and does not start a local Judge0 container.
+- `infra/configure-judge0-vm.ps1` configures the private VM target; its token stays in ignored `backend/.env.local`.
+- `infra/docker-compose.yml` is reserved for later Linux VPS deployment. Every service requires the explicit `vps` Compose profile, so an ordinary `docker compose up` does not start this stack. It currently uses standard Judge0 CE, unlike the development VM's Extra CE, and must be reconciled before that deployment is selected.
+- The VM is development infrastructure. A classroom pilot needs a stable, managed host and an explicit network/security review.
+- The phase day ranges are planning estimates, not completion dates or evidence of completion.
+
+**Milestone 1 scope**
+
+Seed and verify one published programming challenge per language directly in local Supabase. Verify dry-run and official submission behavior through the browser and database. RAG is deferred to a later milestone and is not required for coding challenges. Deterministic rules remain the active sequencer. ML work is offline until real, consented data exists; any first online evaluation is shadow-only and cannot affect student recommendations.
+
+**Implementation and verification tracker**
+
+`Implemented` means relevant code/configuration exists. `Verified` requires a dated execution log or database evidence under `docs/verification/`. Presence of files alone never marks a phase complete.
+
+| Area | Implementation status | Verification status | Evidence / remaining gate |
+|---|---|---|---|
+| Nine-table schema and migrations | Implemented | Verified locally | Milestone 1 log records the live local table query. |
+| Python, C++, and Java Judge0 client execution | Implemented | Verified against the private VM | Milestone 1 log records Accepted results for two cases per language. |
+| Published seed challenges and linked test cases | Implemented | Verified locally | Milestone 1 log records one published challenge and two cases per language. |
+| Browser onboarding, dry run, official submission, and persisted attempt effects | Implemented in part | Pending verification | Current profile schema and onboarding have no `consent_accepted` field or approved consent step; resolve this before marking the requested consent check complete. |
+| RAG ingestion and Gemini generation | Implemented in part | Pending verification; deferred from Milestone 1 | Requires a configured Gemini key and a separate end-to-end check. |
+| ML predictor and student-facing sequencing | Implemented in part | Pending verification; model activation pending | No trained model artifacts are available. The quest submission flow remains rule-based; verify shadow gating before loading any model artifacts. |
+| Production deployment and classroom pilot | Planned | Pending verification | Select a managed host, reconcile Judge0 CE variant, and complete readiness review. |
+
 ### Phase 1: Core Infrastructure, Auth & Database Setup (Days 1–5)
 * **Goal**: Establish the foundational infrastructure, database tables, and authentication shell with role-based routing.
 * **Specific Objective**: SO-1.
 * **Deliverables**:
-  1. Provision Supabase project (Singapore region) and execute migration script for the 8 core tables with pgvector enabled.
+  1. Run local Supabase and apply migrations for all 9 physical tables with pgvector enabled. Hosted Supabase is a later staging/pilot decision.
   2. Implement FastAPI backend skeleton (`backend/app/main.py`) with Supabase JWT bearer token verification middleware.
   3. Initialize Next.js frontend with TypeScript, Tailwind CSS, shadcn/ui, and role-based route guards (`/dashboard/student` vs `/dashboard/instructor`).
   4. Build registration/onboarding flow enforcing curriculum alignment (1st Year Sem 1 $\rightarrow$ C++, 1st Year Sem 2 $\rightarrow$ Python, 2nd Year Sem 1 $\rightarrow$ Java).
 * **Verification**: Successful registration of student and instructor accounts; backend rejects unauthenticated requests with 401; authenticated requests populate profile metadata.
 
-### Phase 2: Automated Code Assessment Subsystem — Judge0 CE (Days 6–11)
+### Phase 2: Automated Code Assessment Subsystem — Judge0 (Days 6–11)
 * **Goal**: Enable isolated execution of C++, Python, and Java code against predefined test cases.
 * **Specific Objective**: SO-3.
 * **Deliverables**:
-  1. Set up `infra/docker-compose.yml` with Judge0 CE (`judge0/judge0:latest`), Redis, and Postgres on internal Docker network.
+  1. For local development, use the private D: Ubuntu VM running Judge0 Extra CE 1.13.1. `infra/docker-compose.yml` is reserved for a later Linux VPS deployment and currently describes standard Judge0 CE.
   2. Build `backend/app/services/judge0/client.py` with batch test-case submission, timeout limits (2000ms), and circuit-breaker fault tolerance.
   3. Develop Frontend Coding Arena (`frontend/src/components/arena/`) using `@monaco-editor/react` with active language locking, sample test-case runner, and final submission handler.
   4. Write execution results into `activity_attempts` as immutable rows.
@@ -326,29 +370,32 @@ Phase 7: VPS Deployment, NEMSU Classroom Study & Evaluation (Days 35–42)
 * **Goal**: Build feature extraction pipeline and train/evaluate Logistic Regression vs Random Forest on student performance data.
 * **Specific Objectives**: SO-4, SO-5, SO-6, SO-7.
 * **Deliverables**:
-  1. Implement shared `feature_engineering.py` computing:
+  1. Implement one canonical `feature_engineering.py` contract shared by training and inference, computing:
      - Historical pass rate in target language/concept.
-     - Average attempts per activity prior to completion.
+     - Prior attempt count and average attempts through successful activity completion.
      - Syntax/compilation error ratio vs logic error ratio.
-     - Mean execution time and time spent on prior $k$ activities.
+     - Mean execution time and time spent across prior attempts.
      - Preceding topic quiz score percentage.
+     - Target difficulty and its delta from the baseline difficulty.
   2. Define binary outcome variable $Y \in \{0, 1\}$ (success on subsequent task $T_n$).
-  3. Implement `ml_pipeline/train_compare.py` using `GroupKFold(n_splits=5)` grouped by `student_id` to prevent data leakage.
-  4. Perform hyperparameter tuning (GridSearchCV/Optuna) for `LogisticRegression` and `RandomForestClassifier`.
-  5. Generate comparative evaluation artifacts (Accuracy, Precision, Recall, F1-Score, ROC-AUC curves, confusion matrices) and serialize models using `joblib`.
-* **Verification**: Script trains both models, validates zero data leakage across folds, produces evaluation report for Chapter 4, and exports `.joblib` files to `ml_pipeline/artifacts/`.
+  3. Implement `ml_pipeline/train_compare.py` with nested `GroupKFold` splits grouped by `student_id` to prevent data leakage during evaluation and tuning.
+  4. Tune `LogisticRegression` and `RandomForestClassifier` inside each training fold; fit preprocessing only on that fold's training data.
+  5. Generate Accuracy, Precision, Recall, F1-Score, ROC-AUC curves, confusion matrices, and versioned joblib/model metadata artifacts.
+* **Verification**: The script includes each student's first cold-start outcome. Its synthetic bootstrap fallback is labeled and must not be reported as empirical classroom or thesis evidence; production inference rejects synthetic model artifacts.
+  Run `python ml_pipeline/train_compare.py --data-csv <attempts.csv>` for training. The CSV must contain one joined attempt/activity row with `id`, `student_id`, `activity_id`, `attempt_number`, `created_at`, `language`, `topic_concept`, `activity_type`, `difficulty_level`, `is_successful`, `score_percentage`, `error_category`, `compiler_status_id`, `execution_time_ms`, and `time_spent_seconds`. Omitting `--data-csv` generates bootstrap artifacts for development only. Copy trained artifacts into `ml_pipeline/artifacts/` on the deployment host before starting the backend; Compose mounts that folder read-only.
 
-### Phase 6: Live ML Integration for Task Sequencing (Days 31–34)
-* **Goal**: Embed trained models into the live FastAPI backend to adaptively sequence programming challenges.
+### Phase 6: Shadow ML Evaluation for Task Sequencing (Days 31–34)
+* **Goal**: Evaluate trained models without changing student recommendations; deterministic rules remain the active sequencer until real, consented data supports a reviewed activation decision.
 * **Specific Objective**: SO-8.
 * **Deliverables**:
-  1. Load serialized `.joblib` pipelines into backend memory on application startup (`lifespan` handler).
-  2. Create endpoint `/api/v1/predict/next-task`: extract student's real-time feature vector, compute predictions from both models, and log in `ml_predictions`.
-  3. Implement adaptive sequencing policy:
-     - If $P(\text{success}) < 0.50$: recommend scaffolding/foundational challenge.
-     - If $P(\text{success}) \ge 0.50$: unlock standard/advanced quest challenge.
+  1. Load compatible serialized `.joblib` pipelines into backend memory on application startup (`lifespan` handler); keep rule-based sequencing available when artifacts are absent.
+  2. Create endpoint `/api/v1/predict/next-task`: extract the student's real-time feature vector, compute predictions from both models, and log an auditable row in `ml_predictions`.
+  3. Keep model outputs in offline evaluation or non-interfering shadow mode. Do not activate the adaptive sequencing policy below until validation and research review support it:
+     - If Random Forest $P(\text{success}) < 0.40$: recommend remedial practice.
+     - If $0.40 \le P(\text{success}) < 0.60$: recommend a standard next task.
+     - If $P(\text{success}) \ge 0.60$: recommend advancing to the next level.
   4. Build Instructor Analytics & Model Comparison dashboard displaying model prediction accuracy and student performance trajectories.
-* **Verification**: Finishing an activity triggers live inference, logs predictions to `ml_predictions`, and returns an adaptively recommended next challenge.
+* **Verification**: Shadow predictions can be joined to subsequent observed outcomes without changing the rule-based recommendation; analytics reports accuracy only for labeled predictions.
 
 ### Phase 7: VPS Deployment, Classroom Study & Evaluation (Days 35–42)
 * **Goal**: Deploy production infrastructure, run classroom evaluation with NEMSU CS students, and gather research data for Chapter 4.
@@ -374,7 +421,7 @@ Phase 7: VPS Deployment, NEMSU Classroom Study & Evaluation (Days 35–42)
 | **SO-5** | Logistic Regression Predictive Modeling | Phase 5 | `ml_pipeline/train_compare.py` (LogReg) |
 | **SO-6** | Random Forest Predictive Modeling | Phase 5 | `ml_pipeline/train_compare.py` (RandomForest) |
 | **SO-7** | Empirical Model Performance Comparison | Phase 5 | `ml_pipeline/artifacts/metrics.json`, ROC-AUC |
-| **SO-8** | Adaptive Task Sequencing Integration | Phase 6 | `backend/app/api/v1/predict.py`, Adaptive Sequencer |
+| **SO-8** | Adaptive Task Sequencing Integration | Phase 6 | `backend/app/api/ml_analytics.py`, `backend/app/services/ml_predictor/` |
 | **SO-9** | Platform Deployment & Usability Evaluation | Phase 7 | Vercel + VPS Caddy Stack, NEMSU CS Study |
 
 ---

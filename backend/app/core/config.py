@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import List
 from pydantic_settings import BaseSettings
 
@@ -31,6 +32,11 @@ class Settings(BaseSettings):
     JUDGE0_BASE_URL: str = "http://localhost:2358"
     JUDGE0_API_KEY: str = ""
     JUDGE0_TIMEOUT_SECONDS: int = 15
+
+    # ML model artifacts (can be overridden by the container mount path).
+    ML_ARTIFACTS_DIR: Path = (
+        Path(__file__).resolve().parents[3] / "ml_pipeline" / "artifacts"
+    )
     
     # CORS
     CORS_ORIGINS: List[str] = [
@@ -40,7 +46,8 @@ class Settings(BaseSettings):
     ]
 
     class Config:
-        env_file = [".env", "backend/.env"]
+        # Local Supabase settings intentionally override any cloud values in .env.
+        env_file = [".env", "backend/.env", ".env.local", "backend/.env.local"]
         extra = "ignore"
         case_sensitive = True
 

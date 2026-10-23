@@ -1,5 +1,6 @@
-version: "3.8"
-
+# Later Linux VPS deployment template. Local development uses Supabase CLI plus
+# the private Ubuntu Judge0 VM configured by configure-judge0-vm.ps1.
+# This file's Judge0 image is standard CE, not the VM's Extra CE release.
 x-judge0-logging: &default-logging
   driver: json-file
   options:
@@ -11,6 +12,7 @@ services:
   # 1. Caddy API Gateway (Automatic HTTPS Reverse Proxy)
   # ==========================================================================
   caddy:
+    profiles: ["vps"]
     image: caddy:2.8-alpine
     container_name: bytequest-caddy
     restart: unless-stopped
@@ -31,6 +33,7 @@ services:
   # 2. FastAPI Backend Service
   # ==========================================================================
   fastapi:
+    profiles: ["vps"]
     build:
       context: ../backend
       dockerfile: Dockerfile
@@ -40,6 +43,9 @@ services:
       - ../backend/.env
     environment:
       - JUDGE0_BASE_URL=http://judge0-server:2358
+      - ML_ARTIFACTS_DIR=/app/ml_artifacts
+    volumes:
+      - ../ml_pipeline/artifacts:/app/ml_artifacts:ro
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -52,6 +58,7 @@ services:
   # 3. Judge0 CE Server (Isolated Code Execution API - Rule 3)
   # ==========================================================================
   judge0-server:
+    profiles: ["vps"]
     image: judge0/judge0:1.13.1
     container_name: judge0-server
     restart: unless-stopped
@@ -74,6 +81,7 @@ services:
   # 4. Judge0 CE Background Workers (Resque Compilation Queue)
   # ==========================================================================
   judge0-workers:
+    profiles: ["vps"]
     image: judge0/judge0:1.13.1
     container_name: judge0-workers
     command: ["./scripts/workers"]
@@ -94,6 +102,7 @@ services:
   # 5. Judge0 Internal PostgreSQL (Sandbox Metadata Only)
   # ==========================================================================
   judge0-db:
+    profiles: ["vps"]
     image: postgres:16-alpine
     container_name: judge0-db
     restart: unless-stopped
@@ -109,6 +118,7 @@ services:
   # 6. Judge0 Internal Redis (Message Queue for Code Submissions)
   # ==========================================================================
   judge0-redis:
+    profiles: ["vps"]
     image: redis:7-alpine
     container_name: judge0-redis
     restart: unless-stopped

@@ -1,57 +1,81 @@
+"""PDF text extraction and bounded, overlapping chunking for RAG."""
+
 import logging
-from typing import Any, Dict, List
-import fitz  # PyMuPDF
+import math
+from typing import Any
+
+import pymupdf
 
 logger = logging.getLogger(__name__)
 
+CHARS_PER_TOKEN_ESTIMATE = 4
+
 
 def extract_chunks_from_pdf(
-    pdf_bytes: bytes, target_chunk_tokens: int = 750, overlap_ratio: float = 0.15
-) -> List[Dict[str, Any]]:
-    """
-    Extracts text from PDF bytes using PyMuPDF and splits into sliding-window chunks
-    targeting 500-1000 tokens (approx 4 chars per token -> 2000-4000 characters) with 15% overlap.
-    """
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    full_text_pages = []
+    pdf_bytes: bytes,
+    target_chunk_tokens: int = 750,
+    overlap_ratio: float = 0.15,
+) -> list[dict[str, Any]]:
+    """Extract readable text and split each page into overlapping chunks.
 
-    for page_num in range(len(doc)):
-        page = doc.load_page(page_num)
-        text = page.get_text("text")
-        if text.strip():
-            full_text_pages.append({"page": page_num + 1, "text": text})
+    The token count is an estimate based on four characters per token. At most
+    one page is held in memory at a time, and a final fragment that contains
+    only text already covered by the previous chunk is skipped.
+    """
+    if not isinstance(pdf_bytes, bytes) or not pdf_bytes:
+        raise ValueError("The uploaded PDF is empty or invalid.")
+    if (
+        isinstance(target_chunk_tokens, bool)
+        or not isinstance(target_chunk_tokens, int)
+        or target_chunk_tokens <= 0
+    ):
+        raise ValueError("target_chunk_tokens must be a positive integer.")
+    if not isinstance(overlap_ratio, (int, float)) or not math.isfinite(overlap_ratio):
+        raise ValueError("overlap_ratio must be a finite number between 0 and 1.")
+    if not 0 <= overlap_ratio < 1:
+        raise ValueError("overlap_ratio must be between 0 (inclusive) and 1 (exclusive).")
 
-    target_chars = target_chunk_tokens * 4
+    target_chars = target_chunk_tokens * CHARS_PER_TOKEN_ESTIMATE
     overlap_chars = int(target_chars * overlap_ratio)
-    step_chars = target_chars - overlap_chars
+    step_chars = max(1, target_chars - overlap_chars)
+    chunks: list[dict[str, Any]] = []
+    pages_with_text = 0
 
-    chunks = []
-    chunk_index = 0
+    try:
+        document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as exc:
+        raise ValueError("The uploaded file is not a readable PDF.") from exc
 
-    for page_info in full_text_pages:
-        page_num = page_info["page"]
-        page_text = page_info["text"]
+    with document:
+        for page_index in range(document.page_count):
+            page_text = document.load_page(page_index).get_text("text").strip()
+            if not page_text:
+                continue
+            pages_with_text += 1
 
-        start_idx = 0
-        while start_idx < len(page_text):
-            end_idx = min(start_idx + target_chars, len(page_text))
-            chunk_content = page_text[start_idx:end_idx].strip()
+            start = 0
+            while start < len(page_text):
+                end = min(start + target_chars, len(page_text))
+                content = page_text[start:end].strip()
+                contains_new_content = start == 0 or len(content) > overlap_chars
+                if content and contains_new_content:
+                    chunks.append(
+                        {
+                            "chunk_index": len(chunks),
+                            "page_number": page_index + 1,
+                            "content_text": content,
+                            "token_count": max(
+                                1,
+                                math.ceil(len(content) / CHARS_PER_TOKEN_ESTIMATE),
+                            ),
+                        }
+                    )
 
-            if len(chunk_content) > 100:  # Ignore tiny trailing fragments
-                token_count = len(chunk_content) // 4
-                chunks.append(
-                    {
-                        "chunk_index": chunk_index,
-                        "page_number": page_num,
-                        "content_text": chunk_content,
-                        "token_count": token_count,
-                    }
-                )
-                chunk_index += 1
+                if end >= len(page_text):
+                    break
+                start += step_chars
 
-            if end_idx >= len(page_text):
-                break
-            start_idx += step_chars
-
-    logger.info(f"Extracted {len(chunks)} chunks across {len(full_text_pages)} pages.")
+    logger.info(
+        "Extracted %d chunks across %d text pages.", len(chunks), pages_with_text
+    )
     return chunks

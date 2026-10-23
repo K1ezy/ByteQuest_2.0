@@ -20,12 +20,13 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # ============================================================================
-# Judge0 CE v1.13.1 Official Language ID Mapping
+# Resolve runtimes by name instead of fixed IDs: CE and Extra CE expose
+# different language IDs, and those IDs can vary between Judge0 releases.
 # ============================================================================
-JUDGE0_LANGUAGE_IDS: Dict[ProgrammingLang, int] = {
-    ProgrammingLang.cpp: 54,     # C++ (GCC 9.2.0)
-    ProgrammingLang.python: 71,  # Python (3.8.1)
-    ProgrammingLang.java: 62,    # Java (OpenJDK 13.0.1)
+JUDGE0_LANGUAGE_PREFIXES: Dict[ProgrammingLang, Tuple[str, ...]] = {
+    ProgrammingLang.cpp: ("c++",),
+    ProgrammingLang.python: ("python",),
+    ProgrammingLang.java: ("java",),
 }
 
 
@@ -171,6 +172,59 @@ class Judge0Client:
     def __init__(self, base_url: Optional[str] = None, timeout: Optional[int] = None):
         self.base_url = (base_url or settings.JUDGE0_BASE_URL).rstrip("/")
         self.timeout = timeout or settings.JUDGE0_TIMEOUT_SECONDS
+        api_key = settings.JUDGE0_API_KEY.strip()
+        self.headers = {"X-Auth-Token": api_key} if api_key else {}
+        self._language_ids: Optional[Dict[ProgrammingLang, int]] = None
+
+    async def _get_language_ids(self) -> Dict[ProgrammingLang, int]:
+        """Fetch and cache compatible language IDs for this Judge0 instance."""
+        if self._language_ids is not None:
+            return self._language_ids
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout,
+                headers=self.headers,
+            ) as client:
+                response = await client.get(f"{self.base_url}/languages")
+                if response.status_code >= 500:
+                    raise Judge0UnavailableError(
+                        f"Judge0 language lookup failed: HTTP {response.status_code}"
+                    )
+                response.raise_for_status()
+                languages = response.json()
+        except (httpx.RequestError, httpx.TimeoutException) as exc:
+            raise Judge0UnavailableError(
+                f"Failed to load languages from Judge0 at {self.base_url}: {exc}"
+            ) from exc
+
+        if not isinstance(languages, list):
+            raise Judge0UnavailableError("Judge0 returned an invalid language list.")
+
+        resolved: Dict[ProgrammingLang, int] = {}
+        for language, prefixes in JUDGE0_LANGUAGE_PREFIXES.items():
+            for entry in languages:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name", "")).strip().casefold()
+                language_id = entry.get("id")
+                if (
+                    name.startswith(prefixes)
+                    and "test" not in name
+                    and isinstance(language_id, int)
+                ):
+                    resolved[language] = language_id
+                    break
+
+        missing = set(JUDGE0_LANGUAGE_PREFIXES) - set(resolved)
+        if missing:
+            names = ", ".join(sorted(language.value for language in missing))
+            raise Judge0UnavailableError(
+                f"Judge0 does not offer compatible runtimes for: {names}."
+            )
+
+        self._language_ids = resolved
+        return resolved
 
     @retry(
         retry=retry_if_exception_type(Judge0UnavailableError),
@@ -182,7 +236,10 @@ class Judge0Client:
         """Submits a batch of test cases to Judge0 and returns their tracking tokens."""
         url = f"{self.base_url}/submissions/batch?base64_encoded=true"
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=self.timeout,
+                headers=self.headers,
+            ) as client:
                 response = await client.post(url, json={"submissions": submissions_payload})
                 if response.status_code >= 500:
                     raise Judge0UnavailableError(f"Judge0 server error: HTTP {response.status_code}")
@@ -200,7 +257,10 @@ class Judge0Client:
         fields = "token,stdout,stderr,status_id,status,compile_output,time,memory"
         url = f"{self.base_url}/submissions/batch?tokens={token_csv}&base64_encoded=true&fields={fields}"
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(
+            timeout=self.timeout,
+            headers=self.headers,
+        ) as client:
             for _ in range(max_polls):
                 try:
                     resp = await client.get(url)
@@ -235,7 +295,11 @@ class Judge0Client:
         # 1. Check Circuit Breaker state before making network calls
         judge0_circuit_breaker.before_request()
 
-        language_id = JUDGE0_LANGUAGE_IDS[language]
+        language_ids = await self._get_language_ids()
+        try:
+            language_id = language_ids[language]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported programming language: {language}") from exc
         encoded_source = _b64_encode(source_code)
 
         submissions_payload = []

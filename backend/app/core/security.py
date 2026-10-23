@@ -87,11 +87,18 @@ async def get_current_user(
     Fetches the authenticated user Profile from the database.
     Automatically initializes a default student profile if not already present.
     """
-    user_uuid = uuid.UUID(payload.sub)
+    try:
+        user_uuid = uuid.UUID(payload.sub)
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user identity in access token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
     profile = db.query(Profile).filter(Profile.id == user_uuid).first()
     if not profile:
         # Create initial profile
-        pseudonym = f"stu_{str(user_uuid)[:8]}"
+        pseudonym = f"stu_{user_uuid.hex}"
         profile = Profile(
             id=user_uuid,
             pseudonym_id=pseudonym,

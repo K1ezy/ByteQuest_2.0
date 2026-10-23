@@ -16,6 +16,7 @@ from app.models.entities import (
     Profile,
     ReviewState,
     TestCase,
+    UserRole,
 )
 from app.services.judge0.client import (
     Judge0CircuitOpenError,
@@ -23,6 +24,10 @@ from app.services.judge0.client import (
     Judge0UnavailableError,
     TestCaseInput,
 )
+from app.services.gamification.badges import evaluate_and_award_badges
+from app.services.gamification.progression import grant_xp
+from app.services.gamification.sequencer import determine_next_task_rule_based
+from app.services.ml_predictor.audit import record_prediction_outcome
 
 router = APIRouter(prefix="/api/v1/submissions", tags=["Code Submissions"])
 limiter = Limiter(key_func=get_remote_address)
@@ -51,10 +56,17 @@ async def execute_code_submission(
     Executes a student's C++, Python, or Java code against Judge0 test cases.
     Enforces Rule 5 (append-only logging on official submissions) and Rule 7 (5 runs/min rate limit).
     """
+    if current_user.role != UserRole.student:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Student code submission access is required.",
+        )
+
     activity = (
         db.query(LearningActivity)
         .filter(
             LearningActivity.id == payload.activity_id,
+            LearningActivity.language == current_user.enrolled_language,
             LearningActivity.activity_type == ActivityKind.challenge,
             LearningActivity.review_status == ReviewState.published,
         )
@@ -110,11 +122,21 @@ async def execute_code_submission(
     if payload.dry_run_only:
         return {"mode": "dry_run", "evaluation": summary}
 
+    # Lock the profile while computing attempt number, XP, and badge changes. This
+    # serializes simultaneous official submissions for this student.
+    student = (
+        db.query(Profile)
+        .filter(Profile.id == current_user.id)
+        .with_for_update()
+        .populate_existing()
+        .one()
+    )
+
     # Official submission: compute next sequential attempt_number (Rule 5: Append-Only)
     prior_attempts_count = (
         db.query(func.count(ActivityAttempt.id))
         .filter(
-            ActivityAttempt.student_id == current_user.id,
+            ActivityAttempt.student_id == student.id,
             ActivityAttempt.activity_id == activity.id,
         )
         .scalar()
@@ -123,7 +145,7 @@ async def execute_code_submission(
     prior_success_exists = (
         db.query(ActivityAttempt.id)
         .filter(
-            ActivityAttempt.student_id == current_user.id,
+            ActivityAttempt.student_id == student.id,
             ActivityAttempt.activity_id == activity.id,
             ActivityAttempt.is_successful.is_(True),
         )
@@ -132,10 +154,14 @@ async def execute_code_submission(
     )
 
     # Award XP only on the first successful completion to prevent XP farming
-    xp_earned = activity.xp_reward if (summary.is_successful and not prior_success_exists) else 0
+    xp_earned = (
+        max(0, int(activity.xp_reward or 0))
+        if summary.is_successful and not prior_success_exists
+        else 0
+    )
 
     new_attempt = ActivityAttempt(
-        student_id=current_user.id,
+        student_id=student.id,
         activity_id=activity.id,
         attempt_number=prior_attempts_count + 1,
         submitted_code=payload.source_code,
@@ -152,20 +178,34 @@ async def execute_code_submission(
     )
     db.add(new_attempt)
 
-    if xp_earned > 0:
-        current_user.xp_points += xp_earned
-        # Level progression formula: 1 level per 250 XP
-        current_user.current_level = (current_user.xp_points // 250) + 1
+    grant_xp(student, xp_earned)
+    db.flush()
+    record_prediction_outcome(
+        db,
+        student_id=student.id,
+        activity_id=activity.id,
+        attempt_created_at=new_attempt.created_at,
+        is_successful=new_attempt.is_successful,
+    )
+
+    # Phase 4 awards apply to both quizzes and programming challenges.
+    new_badges = evaluate_and_award_badges(db, student)
+    recommendation = determine_next_task_rule_based(
+        db, student, activity, new_attempt
+    )
 
     db.commit()
     db.refresh(new_attempt)
+    db.refresh(student)
 
     return {
         "mode": "official_submit",
         "attempt_id": new_attempt.id,
         "attempt_number": new_attempt.attempt_number,
         "xp_awarded": xp_earned,
-        "new_total_xp": current_user.xp_points,
-        "new_level": current_user.current_level,
+        "new_total_xp": student.xp_points,
+        "new_level": student.current_level,
+        "new_badges_unlocked": new_badges,
+        "next_step_recommendation": recommendation,
         "evaluation": summary,
     }

@@ -65,6 +65,7 @@ next-env.d.ts
 
 # Machine Learning & Large Artifacts
 ml_pipeline/artifacts/*.joblib
+ml_pipeline/artifacts/*.json
 !ml_pipeline/artifacts/.gitkeep
 ml_pipeline/data/raw/
 *.h5

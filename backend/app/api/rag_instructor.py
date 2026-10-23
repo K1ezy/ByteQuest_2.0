@@ -1,5 +1,7 @@
-import uuid
+import asyncio
 import logging
+import uuid
+from pathlib import PurePath
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
@@ -21,37 +23,42 @@ from app.models.entities import (
 from app.services.ai_rag.embeddings import generate_embedding
 from app.services.ai_rag.llm import GeminiLLMService
 from app.services.ai_rag.pdf_processor import extract_chunks_from_pdf
+from app.services.gamification.quiz_content import parse_quiz_questions
 from app.services.judge0.client import Judge0Client, TestCaseInput
 
 logger = logging.getLogger(__name__)
+MAX_PDF_BYTES = 10 * 1024 * 1024
 
 router = APIRouter(prefix="/api/v1/instructor", tags=["Instructor RAG & Content Generation"])
 judge0_client = Judge0Client()
 
 
 class TestCaseSchema(BaseModel):
-    order_index: int
+    order_index: int = Field(ge=0)
     stdin: str = ""
     expected_stdout: str
-    time_limit_ms: int = 2000
-    memory_limit_kb: int = 256000
+    time_limit_ms: int = Field(default=2000, ge=250, le=15_000)
+    memory_limit_kb: int = Field(default=256_000, ge=32_000, le=1_048_576)
     is_hidden: bool = False
-    weight: float = 1.0
+    weight: float = Field(default=1.0, gt=0, le=100)
 
 
 class GeneratedChallengeSchema(BaseModel):
-    title: str = Field(..., description="Clear title for the programming challenge.")
+    title: str = Field(..., min_length=3, max_length=255, description="Clear title for the programming challenge.")
     problem_statement: str = Field(
-        ..., description="Detailed description with input/output format and constraints."
+        ..., min_length=20, max_length=20_000,
+        description="Detailed description with input/output format and constraints."
     )
-    starter_code: str = Field(..., description="Boilerplate starter code template for the student.")
+    starter_code: str = Field(..., max_length=50_000, description="Boilerplate starter code template for the student.")
     reference_solution_code: str = Field(
-        ..., description="Fully working reference solution in the target language."
+        ..., min_length=1, max_length=50_000,
+        description="Fully working reference solution in the target language."
     )
     difficulty_level: int = Field(..., ge=1, le=5)
-    xp_reward: int = Field(50, ge=10)
+    xp_reward: int = Field(50, ge=10, le=10_000)
     test_cases: List[TestCaseSchema] = Field(
-        ..., description="At least 3 test cases including sample and hidden cases."
+        ..., min_length=3, max_length=20,
+        description="At least 3 test cases including sample and hidden cases."
     )
 
 
@@ -69,10 +76,26 @@ async def upload_and_process_pdf(
     Uploads an instructional PDF, processes it with PyMuPDF, computes 768-dim embeddings
     via gemini-embedding-2, and saves chunks into Supabase pgvector.
     """
-    if not file.filename.endswith(".pdf"):
+    filename = file.filename or ""
+    if PurePath(filename).suffix.casefold() != ".pdf":
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
-    pdf_bytes = await file.read()
+    pdf_bytes = await file.read(MAX_PDF_BYTES + 1)
+    if len(pdf_bytes) > MAX_PDF_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="PDF files must be 10 MiB or smaller.",
+        )
+
+    try:
+        raw_chunks = await asyncio.to_thread(extract_chunks_from_pdf, pdf_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not raw_chunks:
+        raise HTTPException(
+            status_code=422,
+            detail="The PDF contains no extractable instructional text.",
+        )
 
     doc_record = InstructionalDocument(
         uploaded_by=current_user.id,
@@ -80,18 +103,18 @@ async def upload_and_process_pdf(
         description=description,
         language_tag=language_tag,
         topic_concept=topic_concept,
-        storage_path=f"instructor_uploads/{uuid.uuid4()}_{file.filename}",
+        storage_path=f"instructor_uploads/{uuid.uuid4()}.pdf",
         processing_status="processing",
     )
     db.add(doc_record)
-    db.commit()
-    db.refresh(doc_record)
-
     try:
-        raw_chunks = extract_chunks_from_pdf(pdf_bytes)
+        db.commit()
+        db.refresh(doc_record)
 
         for item in raw_chunks:
-            embedding_vector = generate_embedding(item["content_text"], is_query=False)
+            embedding_vector = await asyncio.to_thread(
+                generate_embedding, item["content_text"], False
+            )
 
             chunk_row = DocumentChunk(
                 document_id=doc_record.id,
@@ -105,14 +128,21 @@ async def upload_and_process_pdf(
 
         doc_record.total_chunks = len(raw_chunks)
         doc_record.processing_status = "completed"
+        doc_record.status = "ready"
         db.commit()
 
     except Exception as exc:
-        doc_record.processing_status = "failed"
-        db.commit()
+        db.rollback()
+        failed_document = db.get(InstructionalDocument, doc_record.id)
+        if failed_document is not None:
+            failed_document.processing_status = "failed"
+            failed_document.status = "failed"
+            db.commit()
+        logger.exception("Failed to process uploaded instructional PDF.")
         raise HTTPException(
-            status_code=500, detail=f"PDF embedding pipeline failed: {str(exc)}"
-        )
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="PDF processing or embedding failed. The document is marked as failed.",
+        ) from exc
 
     return {
         "document_id": doc_record.id,
@@ -125,9 +155,9 @@ async def upload_and_process_pdf(
 @router.post("/documents/{doc_id}/generate-challenge")
 async def generate_ai_coding_challenge(
     doc_id: uuid.UUID,
-    topic_query: str = Form(...),
+    topic_query: str = Form(..., min_length=2, max_length=100),
     language: ProgrammingLang = Form(...),
-    difficulty: int = Form(2),
+    difficulty: int = Form(2, ge=1, le=5),
     current_user: Profile = Depends(require_instructor),
     db: Session = Depends(get_db),
 ):
@@ -138,8 +168,13 @@ async def generate_ai_coding_challenge(
     doc = db.query(InstructionalDocument).filter(InstructionalDocument.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Instructional document not found.")
+    if doc.uploaded_by != current_user.id and current_user.role.value != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You may only generate activities from documents you uploaded.",
+        )
 
-    query_vector = generate_embedding(topic_query, is_query=True)
+    query_vector = await asyncio.to_thread(generate_embedding, topic_query, True)
     vector_str = "[" + ",".join(map(str, query_vector)) + "]"
 
     retrieved_texts: List[str] = []
@@ -147,12 +182,20 @@ async def generate_ai_coding_challenge(
         result = db.execute(
             text(
                 """
-                SELECT content_text 
-                FROM public.match_document_chunks(:q_vec::vector, 0.35, 5, :lang, :doc_id)
+                SELECT content_text
+                FROM public.match_document_chunks(
+                    CAST(:q_vec AS extensions.vector),
+                    :match_threshold,
+                    :match_count,
+                    :lang,
+                    CAST(:doc_id AS uuid)
+                )
                 """
             ),
             {
                 "q_vec": vector_str,
+                "match_threshold": 0.35,
+                "match_count": 5,
                 "lang": language.value,
                 "doc_id": str(doc.id),
             },
@@ -191,7 +234,8 @@ async def generate_ai_coding_challenge(
     - Provide at least 3 test cases (including hidden grading test cases).
     """
 
-    ai_challenge = GeminiLLMService.generate_structured(
+    ai_challenge = await asyncio.to_thread(
+        GeminiLLMService.generate_structured,
         prompt=prompt,
         response_schema=GeneratedChallengeSchema,
         system_instruction="You are an expert automated instructional designer for university Computer Science labs.",
@@ -241,9 +285,7 @@ async def generate_ai_coding_challenge(
         review_status=ReviewState.draft,
     )
     db.add(new_activity)
-    db.commit()
-    db.refresh(new_activity)
-
+    db.flush()
     for tc in ai_challenge.test_cases:
         tc_row = TestCase(
             activity_id=new_activity.id,
@@ -257,6 +299,7 @@ async def generate_ai_coding_challenge(
         )
         db.add(tc_row)
     db.commit()
+    db.refresh(new_activity)
 
     return {
         "activity_id": new_activity.id,
@@ -281,12 +324,29 @@ async def publish_learning_activity(
     activity = db.query(LearningActivity).filter(LearningActivity.id == activity_id).first()
     if not activity:
         raise HTTPException(status_code=404, detail="Activity not found.")
+    if activity.created_by != current_user.id and current_user.role.value != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You may only publish activities you created.",
+        )
 
-    if not activity.judge0_verified:
+    if (
+        activity.activity_type == ActivityKind.challenge
+        and not activity.judge0_verified
+    ):
         raise HTTPException(
             status_code=400,
             detail="Cannot publish challenge: reference solution failed Judge0 automated pre-validation.",
         )
+
+    if activity.activity_type == ActivityKind.quiz:
+        try:
+            parse_quiz_questions(activity.quiz_questions_json)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot publish quiz: question content is incomplete or invalid.",
+            ) from exc
 
     activity.review_status = ReviewState.published
     activity.reviewed_by = current_user.id
