@@ -27,27 +27,49 @@ async def get_current_user_payload(
         )
 
     token = credentials.credentials
-    try:
-        payload = jwt.decode(
-            token,
-            settings.SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token payload: missing sub",
+    
+    # 1. Attempt local JWT HMAC verification if JWT Secret is configured
+    if settings.SUPABASE_JWT_SECRET and settings.SUPABASE_JWT_SECRET != "super-secret-jwt-token-replace-in-env":
+        try:
+            payload = jwt.decode(
+                token,
+                settings.SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                audience="authenticated",
             )
-        return TokenPayload(
-            sub=user_id,
-            email=payload.get("email"),
-            role=payload.get("role", "authenticated"),
-        )
-    except JWTError as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid or expired credentials: {str(e)}",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+            user_id: str = payload.get("sub")
+            if user_id:
+                return TokenPayload(
+                    sub=user_id,
+                    email=payload.get("email"),
+                    role=payload.get("role", "authenticated"),
+                )
+        except JWTError:
+            pass  # Fallback to Supabase Auth API
+
+    # 2. Fallback: Verify directly against Supabase Auth API
+    if settings.SUPABASE_URL:
+        import httpx
+        url = f"{settings.SUPABASE_URL}/auth/v1/user"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "apikey": settings.SUPABASE_ANON_KEY or settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_SECRET_KEY,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return TokenPayload(
+                        sub=data.get("id"),
+                        email=data.get("email"),
+                        role=data.get("role", "authenticated"),
+                    )
+        except Exception:
+            pass
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
