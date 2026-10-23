@@ -1,8 +1,18 @@
+version: "3.8"
+
+x-judge0-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: 50m
+    max-file: "3"
+
 services:
-  # Caddy Reverse Proxy (Auto-HTTPS)
+  # ==========================================================================
+  # 1. Caddy API Gateway (Automatic HTTPS Reverse Proxy)
+  # ==========================================================================
   caddy:
-    image: caddy:2-alpine
-    container_name: bytequest_caddy
+    image: caddy:2.8-alpine
+    container_name: bytequest-caddy
     restart: unless-stopped
     ports:
       - "80:80"
@@ -11,85 +21,106 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    depends_on:
+      - fastapi
     networks:
       - bytequest_net
-    depends_on:
-      - backend
+    logging: *default-logging
 
-  # FastAPI Backend Service
-  backend:
+  # ==========================================================================
+  # 2. FastAPI Backend Service
+  # ==========================================================================
+  fastapi:
     build:
       context: ../backend
       dockerfile: Dockerfile
-    container_name: bytequest_backend
+    container_name: bytequest-fastapi
     restart: unless-stopped
-    expose:
-      - "8000"
+    env_file:
+      - ../backend/.env
     environment:
-      - ENVIRONMENT=production
       - JUDGE0_BASE_URL=http://judge0-server:2358
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_MODEL_ID=gemini-2.5-flash
-    networks:
-      - bytequest_net
+    ports:
+      - "127.0.0.1:8000:8000"
     depends_on:
       - judge0-server
-
-  # Judge0 CE Server (Code Execution Sandbox)
-  # Internal network only: ports not exposed to public host (Rule 3)
-  judge0-server:
-    image: judge0/judge0:latest
-    container_name: bytequest_judge0_server
-    restart: unless-stopped
-    volumes:
-      - ./judge0.conf:/judge0.conf:ro
-    expose:
-      - "2358"
-    environment:
-      - REDIS_HOST=judge0-redis
-      - REDIS_PORT=6379
-      - POSTGRES_HOST=judge0-db
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=judge0
-      - POSTGRES_USER=judge0
-      - POSTGRES_PASSWORD=judge0_secure_db_pass
     networks:
       - bytequest_net
+    logging: *default-logging
+
+  # ==========================================================================
+  # 3. Judge0 CE Server (Isolated Code Execution API - Rule 3)
+  # ==========================================================================
+  judge0-server:
+    image: judge0/judge0:1.13.1
+    container_name: judge0-server
+    restart: unless-stopped
+    # Bind ONLY to 127.0.0.1 so Judge0 is never exposed to the public internet
+    ports:
+      - "127.0.0.1:2358:2358"
+    privileged: true
+    env_file:
+      - ./judge0.conf
+    volumes:
+      - ./judge0.conf:/judge0.conf:ro
     depends_on:
       - judge0-db
       - judge0-redis
+    networks:
+      - bytequest_net
+    logging: *default-logging
 
-  # Judge0 Redis Queue
+  # ==========================================================================
+  # 4. Judge0 CE Background Workers (Resque Compilation Queue)
+  # ==========================================================================
+  judge0-workers:
+    image: judge0/judge0:1.13.1
+    container_name: judge0-workers
+    command: ["./scripts/workers"]
+    restart: unless-stopped
+    privileged: true
+    env_file:
+      - ./judge0.conf
+    volumes:
+      - ./judge0.conf:/judge0.conf:ro
+    depends_on:
+      - judge0-db
+      - judge0-redis
+    networks:
+      - bytequest_net
+    logging: *default-logging
+
+  # ==========================================================================
+  # 5. Judge0 Internal PostgreSQL (Sandbox Metadata Only)
+  # ==========================================================================
+  judge0-db:
+    image: postgres:16-alpine
+    container_name: judge0-db
+    restart: unless-stopped
+    env_file:
+      - ./judge0.conf
+    volumes:
+      - judge0_postgres_data:/var/lib/postgresql/data
+    networks:
+      - bytequest_net
+    logging: *default-logging
+
+  # ==========================================================================
+  # 6. Judge0 Internal Redis (Message Queue for Code Submissions)
+  # ==========================================================================
   judge0-redis:
     image: redis:7-alpine
-    container_name: bytequest_judge0_redis
+    container_name: judge0-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
-    expose:
-      - "6379"
-    volumes:
-      - judge0_redis_data:/data
+    command:
+      - bash
+      - -c
+      - docker-entrypoint.sh --appendonly no --requirepass "$$REDIS_PASSWORD"
+    env_file:
+      - ./judge0.conf
     networks:
       - bytequest_net
-
-  # Judge0 Internal PostgreSQL
-  judge0-db:
-    image: postgres:15-alpine
-    container_name: bytequest_judge0_db
-    restart: unless-stopped
-    environment:
-      - POSTGRES_DB=judge0
-      - POSTGRES_USER=judge0
-      - POSTGRES_PASSWORD=judge0_secure_db_pass
-    expose:
-      - "5432"
-    volumes:
-      - judge0_pg_data:/var/lib/postgresql/data
-    networks:
-      - bytequest_net
+    logging: *default-logging
 
 networks:
   bytequest_net:
@@ -98,5 +129,4 @@ networks:
 volumes:
   caddy_data:
   caddy_config:
-  judge0_redis_data:
-  judge0_pg_data:
+  judge0_postgres_data:

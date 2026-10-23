@@ -1,0 +1,31 @@
+from app.models.entities import (
+    ActivityAttempt,
+    ActivityKind,
+    Badge,
+    DocumentChunk,
+    InstructionalDocument,
+    LearningActivity,
+    MLPrediction,
+    Profile,
+    ProgrammingLang,
+    ReviewState,
+    StudentBadge,
+    TestCase,
+    UserRole,
+)
+
+__all__ = [
+    "ActivityAttempt",
+    "ActivityKind",
+    "Badge",
+    "DocumentChunk",
+    "InstructionalDocument",
+    "LearningActivity",
+    "MLPrediction",
+    "Profile",
+    "ProgrammingLang",
+    "ReviewState",
+    "StudentBadge",
+    "TestCase",
+    "UserRole",
+]

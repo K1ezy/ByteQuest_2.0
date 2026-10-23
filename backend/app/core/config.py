@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # Judge0 CE (Rule 3)
     JUDGE0_BASE_URL: str = "http://localhost:2358"
     JUDGE0_API_KEY: str = ""
+    JUDGE0_TIMEOUT_SECONDS: int = 15
     
     # CORS
     CORS_ORIGINS: List[str] = [
@@ -44,3 +45,8 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    return settings
+

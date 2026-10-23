@@ -1,10 +1,14 @@
+import uuid
 from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.database import get_db
+from app.models.entities import Profile, ProgrammingLang, UserRole
 
 security = HTTPBearer(auto_error=False)
 
@@ -73,3 +77,33 @@ async def get_current_user_payload(
         detail="Invalid or expired credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+async def get_current_user(
+    payload: TokenPayload = Depends(get_current_user_payload),
+    db: Session = Depends(get_db),
+) -> Profile:
+    """
+    Fetches the authenticated user Profile from the database.
+    Automatically initializes a default student profile if not already present.
+    """
+    user_uuid = uuid.UUID(payload.sub)
+    profile = db.query(Profile).filter(Profile.id == user_uuid).first()
+    if not profile:
+        # Create initial profile
+        pseudonym = f"stu_{str(user_uuid)[:8]}"
+        profile = Profile(
+            id=user_uuid,
+            pseudonym_id=pseudonym,
+            role=UserRole.student,
+            year_level=1,
+            semester=1,
+            enrolled_language=ProgrammingLang.cpp,
+            xp_points=0,
+            current_level=1,
+        )
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+
+    return profile

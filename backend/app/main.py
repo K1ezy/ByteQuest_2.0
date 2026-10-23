@@ -5,6 +5,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from app.api.submissions import router as submissions_router
 from app.core.config import settings
 
 # Rate Limiter (Rule 7)
@@ -40,6 +41,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register API Routers
+app.include_router(submissions_router)
+
 
 @app.get("/health", tags=["Health"])
 async def health_check():
@@ -58,3 +62,4 @@ async def api_health_check():
         "gemini_model": settings.GEMINI_MODEL_ID,
         "judge0_url": settings.JUDGE0_BASE_URL,
     }
+
