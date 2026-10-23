@@ -75,6 +75,7 @@ logs/
 *.log
 tmp/
 temp/
+supabase/.temp/
 
 # IDE & Editor Settings (Optional, allow user custom settings)
 .idea/
