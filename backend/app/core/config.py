@@ -16,11 +16,13 @@ class Settings(BaseSettings):
     # Supabase Auth
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
+    SUPABASE_SECRET_KEY: str = ""
+    SUPABASE_ANON_KEY: str = ""
     SUPABASE_JWT_SECRET: str = "super-secret-jwt-token-replace-in-env"
     
     # Gemini AI (Rule 1 & Rule 2)
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL_ID: str = "gemini-2.5-flash"
+    GEMINI_MODEL_ID: str = "gemini-3.5-flash-lite"
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
     GEMINI_EMBEDDING_DIM: int = 768
     
@@ -36,7 +38,8 @@ class Settings(BaseSettings):
     ]
 
     class Config:
-        env_file = ".env"
+        env_file = [".env", "backend/.env"]
+        extra = "ignore"
         case_sensitive = True
 
 
