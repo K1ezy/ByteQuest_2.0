@@ -4,7 +4,7 @@
 
 **Thesis system — North Eastern Mindanao State University (NEMSU)**
 
-[Architecture and roadmap](docs/MASTER_PLAN.md) · [Local setup and end-to-end guide](docs/LOCAL_E2E.md) · [Milestone 1A–1B verification log](docs/verification/milestone-1a-1b-2026-10-24.md)
+[Architecture and roadmap](docs/MASTER_PLAN.md) · [Local setup and end-to-end guide](docs/LOCAL_E2E.md) · [Milestones 1A–1C status and verification log](docs/verification/milestone-1a-1b-2026-10-24.md)
 
 ## Project overview
 
@@ -25,7 +25,7 @@ RAG content generation and ML recommendations are not prerequisites for the init
 | Local database schema | Verified: 9 public tables in local Supabase. |
 | Judge0 integration | Verified: ByteQuest's client received `Accepted` for two reference-solution cases in each of C++, Python, and Java against Judge0 Extra CE 1.13.1. |
 | Coding fixtures | Verified: one published, verified seed challenge and two test cases per language. |
-| Browser-to-database student flow | Pending: onboarding is reachable, but the current profile schema and UI do not yet implement the approved consent step needed for the requested walkthrough. No browser submission walkthrough is claimed complete. |
+| Milestone 1C — Browser-to-database student flow | **Pending:** waiting for the project owner to supply the institution-approved consent text and its label/version. No browser submission walkthrough is claimed complete. |
 | RAG and Gemini generation | Implemented in part; separate configuration and end-to-end verification remain. |
 | ML training and serving | Offline pipeline and serving components are present; real-data evaluation and any shadow deployment remain pending. |
 | Production deployment and classroom pilot | Planned; hosting and deployment choices remain to be completed. |

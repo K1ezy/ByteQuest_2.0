@@ -1,7 +1,17 @@
-# Milestone 1A–1B Verification Log
+# Milestones 1A–1C Status and Verification Log
 
 **Date:** 2026-10-24 (Asia/Manila)
 **Scope:** ByteQuest Judge0 client multi-language smoke check and local Supabase schema/seed check.
+
+## Official milestone disposition
+
+| Milestone | Status | Basis |
+|---|---|---|
+| 1A — Judge0 execution | **Complete — verified** | All three languages passed both recorded reference-solution cases through ByteQuest's Judge0 client. |
+| 1B — Local database and fixtures | **Complete — verified** | The live local database query returned nine public tables and one published, verified challenge with two test cases per language. |
+| 1C — Browser-to-database walkthrough | **Pending** | Institution-approved consent wording and its label/version have not yet been supplied. The walkthrough and its database evidence are not claimed complete. |
+
+Milestone 1C will remain pending until the project owner supplies the exact approved consent text and its label or version. No consent text or acceptance has been invented or recorded. After the approved wording is supplied, implement the consent step and capture the onboarding, dry-run, official-submission, attempt-persistence, and XP evidence.
 
 ## Environment
 
@@ -46,6 +56,6 @@ The challenge query returned one published, `judge0_verified = true` challenge p
 | Python | Double an Integer (Python) | Published, verified | 2 |
 | Java | Double an Integer (Java) | Published, verified | 2 |
 
-## Milestone 1C: Browser-to-database walkthrough
+## Milestone 1C: Browser-to-database walkthrough — Pending
 
-**Pending.** The frontend onboarding page and API health endpoint responded with HTTP 200, which verifies availability only. The local database currently has two profile rows, but the `profiles` table has no `consent_accepted` column and onboarding has no consent flow. No test account was created, no consent value was fabricated, and no browser walkthrough is claimed complete. The requested profile, dry-run/no-attempt, official-submission/attempt, and XP database evidence still needs to be captured after the project supplies an institutionally approved consent step and wording.
+The frontend onboarding page and API health endpoint responded with HTTP 200, which verifies availability only. The local database currently has two profile rows, but the `profiles` table has no `consent_accepted` column and onboarding has no consent flow. No test account was created, no consent value was fabricated, and no browser walkthrough is claimed complete. The requested profile, dry-run/no-attempt, official-submission/attempt, and XP database evidence remains outstanding until the project owner supplies the institution-approved consent wording and version/label.
