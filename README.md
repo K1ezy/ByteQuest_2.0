@@ -25,12 +25,12 @@ RAG content generation and ML recommendations are not prerequisites for the init
 | Local database schema | Verified: 9 public tables in local Supabase. |
 | Judge0 integration | Verified: ByteQuest's client received `Accepted` for two reference-solution cases in each of C++, Python, and Java against Judge0 Extra CE 1.13.1. |
 | Coding fixtures | Verified: one published, verified seed challenge and two test cases per language. |
-| Milestone 1C — Browser-to-database student flow | **Pending:** waiting for the project owner to supply the institution-approved consent text and its label/version. No browser submission walkthrough is claimed complete. |
+| Milestone 1C — Browser-to-database student flow | **Partially verified; pending completion:** synthetic onboarding, profile persistence, quest map, and leaderboard worked. Submission checks await restored connectivity to the private Judge0 VM. Consent UI is skipped for synthetic local testing; institutional consent remains required before classroom research data collection. |
 | RAG and Gemini generation | Implemented in part; separate configuration and end-to-end verification remain. |
 | ML training and serving | Offline pipeline and serving components are present; real-data evaluation and any shadow deployment remain pending. |
 | Production deployment and classroom pilot | Planned; hosting and deployment choices remain to be completed. |
 
-The Judge0 and database evidence is recorded in the [verification log](docs/verification/milestone-1a-1b-2026-10-24.md). The next end-to-end gate is to add the institutionally approved consent step and wording, then verify onboarding, dry-run behavior, official submissions, attempt persistence, and XP through the browser and database.
+The Judge0 and database evidence is recorded in the [verification log](docs/verification/milestone-1a-1b-2026-10-24.md). The remaining local end-to-end checks are a successful sample run, an official submission, and database verification of its attempt and XP effects. Classroom research still requires institutional consent.
 
 ## Development architecture
 

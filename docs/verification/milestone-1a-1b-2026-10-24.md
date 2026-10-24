@@ -9,9 +9,9 @@
 |---|---|---|
 | 1A — Judge0 execution | **Complete — verified** | All three languages passed both recorded reference-solution cases through ByteQuest's Judge0 client. |
 | 1B — Local database and fixtures | **Complete — verified** | The live local database query returned nine public tables and one published, verified challenge with two test cases per language. |
-| 1C — Browser-to-database walkthrough | **Pending** | Institution-approved consent wording and its label/version have not yet been supplied. The walkthrough and its database evidence are not claimed complete. |
+| 1C — Browser-to-database walkthrough | **Partially verified; pending completion** | A synthetic local student completed onboarding and loaded quests/leaderboard. The sample run and official submission checks are blocked because the configured private Judge0 VM endpoint timed out. |
 
-Milestone 1C will remain pending until the project owner supplies the exact approved consent text and its label or version. No consent text or acceptance has been invented or recorded. After the approved wording is supplied, implement the consent step and capture the onboarding, dry-run, official-submission, attempt-persistence, and XP evidence.
+Per the project owner's direction, no consent UI is being added for synthetic local software testing. This is not research consent or approval to collect classroom data; institutional consent is still required before a classroom pilot or research data collection. Continue the local technical walkthrough with synthetic accounts.
 
 ## Environment
 
@@ -56,6 +56,10 @@ The challenge query returned one published, `judge0_verified = true` challenge p
 | Python | Double an Integer (Python) | Published, verified | 2 |
 | Java | Double an Integer (Java) | Published, verified | 2 |
 
-## Milestone 1C: Browser-to-database walkthrough — Pending
+## Milestone 1C: Browser-to-database walkthrough — Partially verified; pending completion
 
-The frontend onboarding page and API health endpoint responded with HTTP 200, which verifies availability only. The local database currently has two profile rows, but the `profiles` table has no `consent_accepted` column and onboarding has no consent flow. No test account was created, no consent value was fabricated, and no browser walkthrough is claimed complete. The requested profile, dry-run/no-attempt, official-submission/attempt, and XP database evidence remains outstanding until the project owner supplies the institution-approved consent wording and version/label.
+On 2026-10-24, a synthetic local account completed the browser onboarding flow with the C++ track. The quest map displayed the seeded C++ challenge and leaderboard. A direct database query confirmed the profile's C++ / Year 1 / Semester 1 settings, 0 XP, level 1, and zero attempts.
+
+The arena loaded the seeded challenge. Clicking **Run sample** reached FastAPI, but execution failed before Judge0 returned a result: the backend logged HTTP 502, and a direct Judge0 language-list request timed out at the configured private VM endpoint. The attempt count remained zero. This does not verify a successful sample run. An official submission, successful attempt persistence, and XP award have not yet been verified.
+
+The remaining 1C work is to restore connectivity to the private Judge0 VM, then verify a successful sample run creates no attempt and an official passing submission creates one attempt and awards XP. The consent UI is intentionally omitted for this synthetic local software check. Institutional consent remains a prerequisite for classroom research data collection.
