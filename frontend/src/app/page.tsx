@@ -1,8 +1,11 @@
 import Link from "next/link";
+import { FeaturedQuestWindow } from "@/components/featured-quest-window";
+import { HomeRedirect } from "@/components/home-redirect";
 
 export default function HomePage() {
   return (
     <div className="home-shell">
+      <HomeRedirect />
       <section className="hero">
         <div className="hero-copy">
           <p className="eyebrow"><span className="status-dot" /> YOUR NEXT LEVEL STARTS HERE</p>
@@ -17,15 +20,7 @@ export default function HomePage() {
           </div>
           <p className="hero-note">A focused workspace for students and the instructors who guide them.</p>
         </div>
-        <div className="quest-preview" aria-label="Example quest preview">
-          <div className="preview-topline"><span className="preview-badge">QUEST 01</span><span className="preview-xp">✦ 50 XP</span></div>
-          <div className="preview-icon" aria-hidden="true">&lt;/&gt;</div>
-          <p className="preview-kicker">PYTHON · FOUNDATIONS</p>
-          <h2>Make the loop count</h2>
-          <p className="preview-copy">Use repetition to solve a small problem. Run your sample, then send it for grading.</p>
-          <div className="preview-progress"><span /><span /><span /><span className="muted" /><span className="muted" /></div>
-          <div className="preview-footer"><span>YOUR LEARNING PATH</span><span>01 / 05</span></div>
-        </div>
+        <FeaturedQuestWindow />
       </section>
       <section className="home-features" aria-label="Platform features">
         <article><span className="feature-number">01</span><h2>Built from your lessons</h2><p>Instructors turn course PDFs into reviewed coding challenges.</p></article>

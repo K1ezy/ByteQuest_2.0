@@ -12,12 +12,19 @@ database_url = make_url(settings.DATABASE_URL)
 if database_url.drivername == "postgresql":
     database_url = database_url.set(drivername="postgresql+psycopg2")
 
+connect_args: dict[str, int] = {}
+if database_url.get_backend_name() == "postgresql":
+    connect_args["connect_timeout"] = settings.DB_CONNECT_TIMEOUT_SECONDS
+
 # Use pool_pre_ping=True to reconnect gracefully on stale connections from pooler.
 engine = create_engine(
     database_url,
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
+    pool_timeout=settings.DB_POOL_TIMEOUT_SECONDS,
+    pool_recycle=settings.DB_POOL_RECYCLE_SECONDS,
+    connect_args=connect_args,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -30,5 +37,8 @@ def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

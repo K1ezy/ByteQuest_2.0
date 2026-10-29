@@ -190,6 +190,8 @@ password_requirements = ""
 # rp_origins = ["http://127.0.0.1:3000"]
 
 [auth.rate_limit]
+# These are Supabase Auth's own limits. FastAPI's account-based learning/AI
+# quotas are separate; review these Auth settings before any hosted rollout.
 # Number of emails that can be sent per hour. Requires auth.email.smtp to be enabled.
 email_sent = 2
 # Number of SMS messages that can be sent per hour. Requires auth.sms to be enabled.

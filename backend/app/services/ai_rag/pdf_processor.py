@@ -9,6 +9,8 @@ import pymupdf
 logger = logging.getLogger(__name__)
 
 CHARS_PER_TOKEN_ESTIMATE = 4
+MAX_PDF_PAGES = 100
+MAX_EXTRACTED_CHARACTERS = 200_000
 
 
 def extract_chunks_from_pdf(
@@ -47,8 +49,14 @@ def extract_chunks_from_pdf(
         raise ValueError("The uploaded file is not a readable PDF.") from exc
 
     with document:
+        if document.page_count > MAX_PDF_PAGES:
+            raise ValueError(f"PDFs may contain at most {MAX_PDF_PAGES} pages.")
+        extracted_chars = 0
         for page_index in range(document.page_count):
             page_text = document.load_page(page_index).get_text("text").strip()
+            extracted_chars += len(page_text)
+            if extracted_chars > MAX_EXTRACTED_CHARACTERS:
+                raise ValueError(f"PDFs may contain at most {MAX_EXTRACTED_CHARACTERS:,} extracted characters.")
             if not page_text:
                 continue
             pages_with_text += 1

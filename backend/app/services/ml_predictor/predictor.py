@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -77,6 +78,14 @@ def _validate_model(model: Any, model_name: str) -> None:
         )
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as model_file:
+        for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def load_ml_models() -> ModelBundle:
     """Load and cache the model pair; missing files remain retryable."""
     global _model_bundle, _model_load_error
@@ -92,17 +101,49 @@ def load_ml_models() -> ModelBundle:
             raise ModelArtifactError(_model_load_error)
 
         artifacts_dir = Path(settings.ML_ARTIFACTS_DIR).expanduser().resolve()
-        logreg_path = artifacts_dir / "logreg_pipeline.joblib"
-        rf_path = artifacts_dir / "rf_pipeline.joblib"
-        missing_paths = [str(path) for path in (logreg_path, rf_path) if not path.is_file()]
-        if missing_paths:
+        activation_path = artifacts_dir / "active_model.json"
+        if not activation_path.is_file():
             raise ModelArtifactsUnavailable(
-                "Trained ML artifacts are unavailable. Expected: " + ", ".join(missing_paths)
+                "No reviewed model is active. Expected an explicit "
+                f"activation manifest at {activation_path}."
             )
 
         try:
-            with (artifacts_dir / "model_metadata.json").open(encoding="utf-8") as metadata_file:
+            with activation_path.open(encoding="utf-8") as manifest_file:
+                manifest = json.load(manifest_file)
+            if not isinstance(manifest, dict):
+                raise ModelArtifactError("Active model manifest must be a JSON object.")
+            relative_directory = manifest.get("artifact_directory")
+            if not isinstance(relative_directory, str) or not relative_directory.strip():
+                raise ModelArtifactError("Active model manifest has no artifact_directory.")
+            version_root = (artifacts_dir / "runs").resolve()
+            model_directory = (artifacts_dir / relative_directory).resolve()
+            if model_directory.parent != version_root:
+                raise ModelArtifactError(
+                    "Active model artifact_directory must select one direct child of the reviewed runs directory."
+                )
+            manifest_version = manifest.get("model_version")
+            if not isinstance(manifest_version, str) or not manifest_version.strip():
+                raise ModelArtifactError("Active model manifest has no valid model_version.")
+
+            metadata_path = model_directory / "model_metadata.json"
+            if not metadata_path.is_file():
+                raise ModelArtifactError("Selected model run is missing model_metadata.json.")
+            with metadata_path.open(encoding="utf-8") as metadata_file:
                 metadata = json.load(metadata_file)
+            if not isinstance(metadata, dict):
+                raise ModelArtifactError("Model metadata must be a JSON object.")
+            model_version = str(metadata.get("model_version") or "")
+            if model_version != manifest_version:
+                raise ModelArtifactError(
+                    "Active model manifest version does not match the selected artifact metadata."
+                )
+            if model_directory.name != model_version:
+                raise ModelArtifactError(
+                    "Active model directory name does not match its recorded model version."
+                )
+            if metadata.get("schema_version") != 1:
+                raise ModelArtifactError("Model artifact metadata schema is unsupported.")
             if metadata.get("features") != list(FEATURE_NAMES):
                 raise ModelArtifactError("Model metadata feature schema does not match this backend version.")
             if metadata.get("scikit_learn_version") != sklearn.__version__:
@@ -110,13 +151,50 @@ def load_ml_models() -> ModelBundle:
                     "Model artifacts were trained with a different scikit-learn version; retrain "
                     "them in the backend's current environment."
                 )
+            metrics_path = model_directory / "metrics_summary.json"
+            if not metrics_path.is_file():
+                raise ModelArtifactError("Selected model run is missing metrics_summary.json.")
+            with metrics_path.open(encoding="utf-8") as metrics_file:
+                metrics = json.load(metrics_file)
+            if not isinstance(metrics, dict):
+                raise ModelArtifactError("Metrics summary must be a JSON object.")
             if (
-                settings.ENVIRONMENT.strip().casefold() in {"production", "prod"}
-                and metadata.get("is_synthetic_data") is True
+                metrics.get("model_version") != model_version
+                or metrics.get("dataset_source") != metadata.get("dataset_source")
+                or metrics.get("features") != list(FEATURE_NAMES)
+                or metrics.get("research_approved") is not metadata.get("research_approved")
             ):
                 raise ModelArtifactError(
-                    "Synthetic bootstrap models cannot be activated in production."
+                    "Metrics summary does not match the selected model metadata."
                 )
+            if metadata.get("is_synthetic_data") is not False:
+                raise ModelArtifactError(
+                    "Synthetic bootstrap models are for development evaluation and cannot be served."
+                )
+            if (
+                metadata.get("dataset_source") != "approved_deidentified_csv"
+                or metadata.get("research_approved") is not True
+            ):
+                raise ModelArtifactError(
+                    "Only institution-approved, deidentified training artifacts may be served."
+                )
+            artifact_hashes = metadata.get("sha256")
+            if not isinstance(artifact_hashes, dict):
+                raise ModelArtifactError("Model metadata is missing artifact integrity hashes.")
+            artifact_paths = {
+                "logreg_pipeline.joblib": model_directory / "logreg_pipeline.joblib",
+                "rf_pipeline.joblib": model_directory / "rf_pipeline.joblib",
+                "metrics_summary.json": model_directory / "metrics_summary.json",
+            }
+            for name, path in artifact_paths.items():
+                if not path.is_file():
+                    raise ModelArtifactError(f"Required versioned artifact is missing: {name}.")
+                expected_hash = artifact_hashes.get(name)
+                if not isinstance(expected_hash, str) or _sha256_file(path) != expected_hash:
+                    raise ModelArtifactError(f"Artifact integrity check failed for {name}.")
+
+            logreg_path = artifact_paths["logreg_pipeline.joblib"]
+            rf_path = artifact_paths["rf_pipeline.joblib"]
             logreg_model = joblib.load(logreg_path)
             rf_model = joblib.load(rf_path)
             _validate_model(logreg_model, "logistic regression")
@@ -124,7 +202,7 @@ def load_ml_models() -> ModelBundle:
             bundle = ModelBundle(
                 logistic_regression=logreg_model,
                 random_forest=rf_model,
-                model_version=str(metadata.get("model_version") or "unknown"),
+                model_version=model_version,
             )
         except ModelArtifactsUnavailable:
             raise

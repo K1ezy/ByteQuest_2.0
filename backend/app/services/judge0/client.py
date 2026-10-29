@@ -1,17 +1,14 @@
 import asyncio
 import base64
 import logging
+import math
 import time
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
+from contextlib import asynccontextmanager
 
 import httpx
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 
 from app.core.config import get_settings
 from app.models.entities import ProgrammingLang
@@ -48,34 +45,53 @@ class CircuitBreaker:
     failure_count: int = 0
     last_failure_time: Optional[float] = None
     state: str = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+    half_open_probe_active: bool = False
+    _lock: Lock = field(default_factory=Lock, repr=False, compare=False)
 
     def before_request(self) -> None:
-        if self.state == "OPEN":
-            elapsed = time.monotonic() - (self.last_failure_time or 0.0)
-            if elapsed >= self.recovery_timeout_seconds:
+        with self._lock:
+            if self.state == "OPEN":
+                elapsed = time.monotonic() - (self.last_failure_time or 0.0)
+                if elapsed < self.recovery_timeout_seconds:
+                    remaining = max(1, int(self.recovery_timeout_seconds - elapsed))
+                    raise Judge0CircuitOpenError(
+                        f"Code execution sandbox is temporarily busy. Please retry in {remaining} seconds."
+                    )
                 logger.info("Judge0 Circuit Breaker entering HALF_OPEN state.")
                 self.state = "HALF_OPEN"
-            else:
-                remaining = int(self.recovery_timeout_seconds - elapsed)
-                raise Judge0CircuitOpenError(
-                    f"Code execution sandbox is temporarily busy. Please retry in {remaining} seconds."
-                )
+
+            if self.state == "HALF_OPEN":
+                if self.half_open_probe_active:
+                    raise Judge0CircuitOpenError(
+                        "Code execution sandbox is recovering. Please retry shortly."
+                    )
+                self.half_open_probe_active = True
 
     def record_success(self) -> None:
-        if self.state != "CLOSED":
-            logger.info("Judge0 Circuit Breaker reset to CLOSED state.")
-        self.failure_count = 0
-        self.last_failure_time = None
-        self.state = "CLOSED"
+        with self._lock:
+            if self.state != "CLOSED":
+                logger.info("Judge0 Circuit Breaker reset to CLOSED state.")
+            self.failure_count = 0
+            self.last_failure_time = None
+            self.half_open_probe_active = False
+            self.state = "CLOSED"
 
     def record_failure(self) -> None:
-        self.failure_count += 1
-        self.last_failure_time = time.monotonic()
-        if self.failure_count >= self.failure_threshold:
-            self.state = "OPEN"
-            logger.error(
-                f"Judge0 Circuit Breaker tripped to OPEN after {self.failure_count} failures."
-            )
+        with self._lock:
+            self.failure_count += 1
+            self.last_failure_time = time.monotonic()
+            self.half_open_probe_active = False
+            if self.failure_count >= self.failure_threshold:
+                self.state = "OPEN"
+                logger.error(
+                    "Judge0 Circuit Breaker tripped to OPEN after %s failures.",
+                    self.failure_count,
+                )
+
+    def record_neutral(self) -> None:
+        """Release a half-open probe after a non-service/internal error."""
+        with self._lock:
+            self.half_open_probe_active = False
 
 
 # Singleton circuit breaker instance across FastAPI worker requests
@@ -111,6 +127,8 @@ class SingleTestResult:
     execution_time_ms: float
     memory_used_kb: float
     is_hidden: bool
+    stdin: str = ""
+    expected_stdout: str = ""
 
 
 @dataclass
@@ -165,38 +183,118 @@ def classify_judge0_status(status_id: int) -> str:
         return "runtime_error"
 
 
+def _parse_completed_result(raw: Any) -> Tuple[int, str, float, float]:
+    """Validate the fields used for grading and metrics in a completed Judge0 result."""
+    if not isinstance(raw, dict):
+        raise Judge0UnavailableError("Judge0 returned an invalid result item.")
+
+    status = raw.get("status")
+    status_id = status.get("id") if isinstance(status, dict) else None
+    if isinstance(status_id, bool) or not isinstance(status_id, int) or status_id < 3:
+        raise Judge0UnavailableError("Judge0 returned an invalid completed status.")
+
+    description = status.get("description")
+    if not isinstance(description, str) or not description.strip():
+        description = "Unknown"
+
+    def metric(name: str) -> float:
+        value = raw.get(name)
+        if value is None or value == "":
+            return 0.0
+        if isinstance(value, bool):
+            raise Judge0UnavailableError(f"Judge0 returned an invalid {name} metric.")
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise Judge0UnavailableError(f"Judge0 returned an invalid {name} metric.") from exc
+        if not math.isfinite(number) or number < 0:
+            raise Judge0UnavailableError(f"Judge0 returned an invalid {name} metric.")
+        return number
+
+    time_seconds = metric("time")
+    # Judge0 execution is limited to seconds, so a value this large indicates a
+    # corrupt response and would overflow when converted to milliseconds.
+    if time_seconds > 86_400:
+        raise Judge0UnavailableError("Judge0 returned an out-of-range time metric.")
+
+    return status_id, description, time_seconds, metric("memory")
+
+
 # ============================================================================
 # Judge0 Client Service
 # ============================================================================
 class Judge0Client:
     def __init__(self, base_url: Optional[str] = None, timeout: Optional[int] = None):
         self.base_url = (base_url or settings.JUDGE0_BASE_URL).rstrip("/")
-        self.timeout = timeout or settings.JUDGE0_TIMEOUT_SECONDS
+        self.timeout = timeout if timeout is not None else settings.JUDGE0_TIMEOUT_SECONDS
         api_key = settings.JUDGE0_API_KEY.strip()
         self.headers = {"X-Auth-Token": api_key} if api_key else {}
         self._language_ids: Optional[Dict[ProgrammingLang, int]] = None
+        self._language_ids_lock = asyncio.Lock()
+        self._http_client: Optional[httpx.AsyncClient] = None
 
-    async def _get_language_ids(self) -> Dict[ProgrammingLang, int]:
+    def set_http_client(self, client: Optional[httpx.AsyncClient]) -> None:
+        """Use the application-lifespan client so requests reuse keep-alive connections."""
+        self._http_client = client
+
+    @asynccontextmanager
+    async def _client(self):
+        client = self._http_client
+        if client is not None and not client.is_closed:
+            yield client
+            return
+
+        # Keep direct service use (for CLI jobs and isolated callers) functional;
+        # normal FastAPI requests use the pooled lifespan client above.
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(float(self.timeout), connect=min(3.0, float(self.timeout))),
+            headers=self.headers,
+        ) as temporary_client:
+            yield temporary_client
+
+    @staticmethod
+    def _request_timeout(deadline: Optional[float] = None, default_timeout: float = 15.0) -> httpx.Timeout:
+        remaining = default_timeout if deadline is None else deadline - time.monotonic()
+        if remaining <= 0:
+            raise Judge0UnavailableError("Judge0 execution exceeded its time limit.")
+        bounded = min(default_timeout, remaining)
+        return httpx.Timeout(bounded, connect=min(3.0, bounded))
+
+    async def _get_language_ids(self, deadline: Optional[float] = None) -> Dict[ProgrammingLang, int]:
         """Fetch and cache compatible language IDs for this Judge0 instance."""
         if self._language_ids is not None:
             return self._language_ids
 
+        async with self._language_ids_lock:
+            if self._language_ids is not None:
+                return self._language_ids
+            return await self._load_language_ids(deadline)
+
+    async def _load_language_ids(self, deadline: Optional[float] = None) -> Dict[ProgrammingLang, int]:
+        """Load language IDs while the caller holds the cache lock."""
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout,
-                headers=self.headers,
-            ) as client:
-                response = await client.get(f"{self.base_url}/languages")
+            async with self._client() as client:
+                response = await client.get(
+                    f"{self.base_url}/languages",
+                    headers=self.headers,
+                    timeout=self._request_timeout(deadline, float(self.timeout)),
+                )
                 if response.status_code >= 500:
                     raise Judge0UnavailableError(
                         f"Judge0 language lookup failed: HTTP {response.status_code}"
                     )
                 response.raise_for_status()
                 languages = response.json()
-        except (httpx.RequestError, httpx.TimeoutException) as exc:
+        except httpx.RequestError as exc:
             raise Judge0UnavailableError(
                 f"Failed to load languages from Judge0 at {self.base_url}: {exc}"
             ) from exc
+        except httpx.HTTPStatusError as exc:
+            raise Judge0UnavailableError(
+                f"Judge0 language lookup failed: HTTP {exc.response.status_code}"
+            ) from exc
+        except ValueError as exc:
+            raise Judge0UnavailableError("Judge0 returned invalid language data.") from exc
 
         if not isinstance(languages, list):
             raise Judge0UnavailableError("Judge0 returned an invalid language list.")
@@ -226,56 +324,126 @@ class Judge0Client:
         self._language_ids = resolved
         return resolved
 
-    @retry(
-        retry=retry_if_exception_type(Judge0UnavailableError),
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=0.5, min=0.5, max=2.0),
-        reraise=True,
-    )
-    async def _submit_batch_tokens(self, submissions_payload: List[Dict[str, Any]]) -> List[str]:
-        """Submits a batch of test cases to Judge0 and returns their tracking tokens."""
+    async def _submit_batch_tokens(
+        self,
+        submissions_payload: List[Dict[str, Any]],
+        deadline: Optional[float] = None,
+    ) -> List[str]:
+        """Submit once; retrying a timed-out POST could execute code twice."""
+        if not submissions_payload:
+            raise ValueError("At least one Judge0 submission is required.")
         url = f"{self.base_url}/submissions/batch?base64_encoded=true"
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout,
-                headers=self.headers,
-            ) as client:
-                response = await client.post(url, json={"submissions": submissions_payload})
+            async with self._client() as client:
+                response = await client.post(
+                    url,
+                    json={"submissions": submissions_payload},
+                    headers=self.headers,
+                    timeout=self._request_timeout(deadline, float(self.timeout)),
+                )
                 if response.status_code >= 500:
                     raise Judge0UnavailableError(f"Judge0 server error: HTTP {response.status_code}")
                 response.raise_for_status()
                 data = response.json()
-                return [item["token"] for item in data if "token" in item]
-        except (httpx.RequestError, httpx.TimeoutException) as exc:
+                if not isinstance(data, list) or len(data) != len(submissions_payload):
+                    raise Judge0UnavailableError("Judge0 returned an incomplete batch token list.")
+                tokens = [item.get("token") if isinstance(item, dict) else None for item in data]
+                if (
+                    any(not isinstance(token, str) or not token.strip() for token in tokens)
+                    or len(set(tokens)) != len(tokens)
+                ):
+                    raise Judge0UnavailableError("Judge0 returned invalid batch tracking tokens.")
+                return tokens
+        except httpx.RequestError as exc:
             raise Judge0UnavailableError(f"Failed to connect to Judge0 at {self.base_url}: {exc}") from exc
+        except httpx.HTTPStatusError as exc:
+            raise Judge0UnavailableError(
+                f"Judge0 submission request failed: HTTP {exc.response.status_code}"
+            ) from exc
+        except ValueError as exc:
+            raise Judge0UnavailableError("Judge0 returned invalid submission data.") from exc
 
     async def _poll_batch_results(
-        self, tokens: List[str], max_polls: int = 20, poll_interval: float = 0.6
+        self,
+        tokens: List[str],
+        max_polls: int = 100,
+        poll_interval: float = 0.6,
+        deadline: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
-        """Polls Judge0 until all batch tokens finish processing (status_id >= 3)."""
-        token_csv = ",".join(tokens)
-        fields = "token,stdout,stderr,status_id,status,compile_output,time,memory"
-        url = f"{self.base_url}/submissions/batch?tokens={token_csv}&base64_encoded=true&fields={fields}"
+        """Poll to a bounded deadline and return results in submitted-token order."""
+        if not tokens or len(set(tokens)) != len(tokens):
+            raise Judge0UnavailableError("Judge0 returned an invalid set of batch tokens.")
 
-        async with httpx.AsyncClient(
-            timeout=self.timeout,
-            headers=self.headers,
-        ) as client:
-            for _ in range(max_polls):
+        fields = "token,stdout,stderr,status_id,status,compile_output,time,memory"
+        url = f"{self.base_url}/submissions/batch"
+        deadline = deadline or (
+            time.monotonic() + max(1.0, float(settings.JUDGE0_EXECUTION_TIMEOUT_SECONDS))
+        )
+
+        async with self._client() as client:
+            for _ in range(max(1, max_polls)):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
                 try:
-                    resp = await client.get(url)
+                    resp = await client.get(
+                        url,
+                        params={
+                            "tokens": ",".join(tokens),
+                            "base64_encoded": "true",
+                            "fields": fields,
+                        },
+                        headers=self.headers,
+                        timeout=self._request_timeout(deadline, float(self.timeout)),
+                    )
                     if resp.status_code >= 500:
                         raise Judge0UnavailableError(f"Judge0 poll error: HTTP {resp.status_code}")
                     resp.raise_for_status()
-                    submissions = resp.json().get("submissions", [])
+                    payload = resp.json()
+                    submissions = payload.get("submissions") if isinstance(payload, dict) else None
+                    if not isinstance(submissions, list):
+                        raise Judge0UnavailableError("Judge0 returned an invalid batch result payload.")
 
-                    # Status IDs 1 (In Queue) and 2 (Processing) mean still running
-                    if all(sub.get("status", {}).get("id", 1) >= 3 for sub in submissions):
-                        return submissions
-                except (httpx.RequestError, httpx.TimeoutException) as exc:
+                    results_by_token = {
+                        item.get("token"): item
+                        for item in submissions
+                        if isinstance(item, dict) and isinstance(item.get("token"), str)
+                    }
+                    if (
+                        len(submissions) == len(tokens)
+                        and len(results_by_token) == len(tokens)
+                        and set(results_by_token) == set(tokens)
+                    ):
+                        ordered = [results_by_token[token] for token in tokens]
+                        # Judge0 statuses 1 and 2 are pending. Reject malformed status
+                        # data immediately instead of polling until the execution deadline.
+                        status_ids = []
+                        for item in ordered:
+                            status = item.get("status")
+                            status_id = status.get("id") if isinstance(status, dict) else None
+                            if isinstance(status_id, bool) or not isinstance(status_id, int):
+                                raise Judge0UnavailableError(
+                                    "Judge0 returned an invalid batch result status."
+                                )
+                            if status_id not in (1, 2) and status_id < 3:
+                                raise Judge0UnavailableError(
+                                    "Judge0 returned an unsupported batch result status."
+                                )
+                            status_ids.append(status_id)
+                        if all(status_id >= 3 for status_id in status_ids):
+                            return ordered
+                except httpx.RequestError as exc:
                     raise Judge0UnavailableError(f"Judge0 polling interrupted: {exc}") from exc
+                except httpx.HTTPStatusError as exc:
+                    raise Judge0UnavailableError(
+                        f"Judge0 polling failed: HTTP {exc.response.status_code}"
+                    ) from exc
+                except ValueError as exc:
+                    raise Judge0UnavailableError("Judge0 returned invalid batch result data.") from exc
 
-                await asyncio.sleep(poll_interval)
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    await asyncio.sleep(min(max(0.05, poll_interval), remaining))
 
         raise Judge0UnavailableError("Judge0 batch execution timed out waiting for worker queue.")
 
@@ -292,41 +460,56 @@ class Judge0Client:
         if not test_cases:
             raise ValueError("At least one test case is required for evaluation.")
 
+        # Bound language lookup, batch submission, and worker polling as one operation.
+        deadline = time.monotonic() + max(
+            1.0, float(settings.JUDGE0_EXECUTION_TIMEOUT_SECONDS)
+        )
+
         # 1. Check Circuit Breaker state before making network calls
         judge0_circuit_breaker.before_request()
 
-        language_ids = await self._get_language_ids()
         try:
-            language_id = language_ids[language]
-        except KeyError as exc:
-            raise ValueError(f"Unsupported programming language: {language}") from exc
-        encoded_source = _b64_encode(source_code)
+            language_ids = await self._get_language_ids(deadline)
+            try:
+                language_id = language_ids[language]
+            except KeyError as exc:
+                raise ValueError(f"Unsupported programming language: {language}") from exc
+            encoded_source = _b64_encode(source_code)
 
-        submissions_payload = []
-        for tc in test_cases:
-            # Convert milliseconds to seconds for Judge0 (bounded between 0.5s and 15.0s)
-            cpu_limit_sec = max(0.5, min(15.0, round(tc.time_limit_ms / 1000.0, 2)))
-            # Ensure Java has at least 256MB memory ceiling so JVM startup succeeds
-            mem_limit_kb = max(tc.memory_limit_kb, 256000) if language == ProgrammingLang.java else tc.memory_limit_kb
+            submissions_payload = []
+            for tc in test_cases:
+                # Convert milliseconds to seconds for Judge0 (bounded between 0.5s and 15.0s)
+                cpu_limit_sec = max(0.5, min(15.0, round(tc.time_limit_ms / 1000.0, 2)))
+                # Ensure Java has at least 256MB memory ceiling so JVM startup succeeds
+                mem_limit_kb = max(tc.memory_limit_kb, 256000) if language == ProgrammingLang.java else tc.memory_limit_kb
 
-            submissions_payload.append(
-                {
-                    "language_id": language_id,
-                    "source_code": encoded_source,
-                    "stdin": _b64_encode(tc.stdin),
-                    "expected_output": _b64_encode(tc.expected_stdout.strip()),
-                    "cpu_time_limit": cpu_limit_sec,
-                    "memory_limit": mem_limit_kb,
-                }
-            )
+                submissions_payload.append(
+                    {
+                        "language_id": language_id,
+                        "source_code": encoded_source,
+                        "stdin": _b64_encode(tc.stdin),
+                        "expected_output": _b64_encode(tc.expected_stdout.strip()),
+                        "cpu_time_limit": cpu_limit_sec,
+                        "memory_limit": mem_limit_kb,
+                    }
+                )
 
-        try:
-            tokens = await self._submit_batch_tokens(submissions_payload)
-            raw_results = await self._poll_batch_results(tokens)
+            tokens = await self._submit_batch_tokens(submissions_payload, deadline)
+            if len(tokens) != len(test_cases):
+                raise Judge0UnavailableError("Judge0 returned a result count that does not match the test cases.")
+            raw_results = await self._poll_batch_results(tokens, deadline=deadline)
+            if len(raw_results) != len(test_cases):
+                raise Judge0UnavailableError("Judge0 returned a result count that does not match the test cases.")
+            parsed_results = [_parse_completed_result(raw) for raw in raw_results]
             judge0_circuit_breaker.record_success()
-        except Exception as exc:
+        except Judge0UnavailableError:
             judge0_circuit_breaker.record_failure()
-            raise exc
+            raise
+        except Exception:
+            # Input/programming errors must not make a healthy sandbox appear
+            # unavailable; still release a half-open probe so future calls work.
+            judge0_circuit_breaker.record_neutral()
+            raise
 
         # 2. Parse and aggregate metrics across all test cases
         detailed_results: List[SingleTestResult] = []
@@ -337,10 +520,8 @@ class Judge0Client:
         memories: List[float] = []
         first_failure_status_id: Optional[int] = None
 
-        for tc, raw in zip(test_cases, raw_results):
-            status_obj = raw.get("status", {})
-            status_id = int(status_obj.get("id", 13))
-            status_desc = status_obj.get("description", "Unknown")
+        for tc, raw, parsed in zip(test_cases, raw_results, parsed_results, strict=True):
+            status_id, status_desc, time_sec, mem_kb = parsed
             error_cat = classify_judge0_status(status_id)
 
             passed = status_id == 3
@@ -352,30 +533,34 @@ class Judge0Client:
 
             total_weight += tc.weight
 
-            # Judge0 returns 'time' in seconds (str) and 'memory' in KB (int/float)
-            time_sec = float(raw.get("time") or 0.0)
+            # Judge0 returns 'time' in seconds and 'memory' in KB.
             time_ms = round(time_sec * 1000.0, 3)
-            mem_kb = float(raw.get("memory") or 0.0)
 
             exec_times.append(time_ms)
             memories.append(mem_kb)
 
-            detailed_results.append(
-                SingleTestResult(
-                    test_case_id=tc.test_case_id,
-                    order_index=tc.order_index,
-                    passed=passed,
-                    status_id=status_id,
-                    status_description=status_desc,
-                    error_category=error_cat,
-                    stdout="" if tc.is_hidden else _b64_decode(raw.get("stdout")),
-                    stderr="" if tc.is_hidden else _b64_decode(raw.get("stderr")),
-                    compile_output=_b64_decode(raw.get("compile_output")),
-                    execution_time_ms=time_ms,
-                    memory_used_kb=mem_kb,
-                    is_hidden=tc.is_hidden,
+            # Keep hidden cases in the aggregate score and persisted attempt, but
+            # never serialize their per-case metadata or compiler/runtime output
+            # into the student-facing API response.
+            if not tc.is_hidden:
+                detailed_results.append(
+                    SingleTestResult(
+                        test_case_id=tc.test_case_id,
+                        order_index=tc.order_index,
+                        passed=passed,
+                        status_id=status_id,
+                        status_description=status_desc,
+                        error_category=error_cat,
+                        stdout=_b64_decode(raw.get("stdout")),
+                        stderr=_b64_decode(raw.get("stderr")),
+                        compile_output=_b64_decode(raw.get("compile_output")),
+                        execution_time_ms=time_ms,
+                        memory_used_kb=mem_kb,
+                        is_hidden=False,
+                        stdin=tc.stdin or "",
+                        expected_stdout=tc.expected_stdout or "",
+                    )
                 )
-            )
 
         total_cases = len(test_cases)
         score_pct = round((earned_weight / total_weight) * 100.0, 2) if total_weight > 0 else 0.0
@@ -449,3 +634,7 @@ class Judge0Client:
         }
 
         return summary.is_successful, verification_log
+
+
+# One instance per API process shares runtime IDs and pooled connections.
+judge0_client = Judge0Client()

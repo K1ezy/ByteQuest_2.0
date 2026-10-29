@@ -1,13 +1,17 @@
-# Replace 'localhost' with 'api.<YOUR_VPS_IP>.nip.io' or your custom domain on the VPS
-localhost {
-    # Security headers
+{$BYTEQUEST_API_DOMAIN} {
+    # PDF uploads are limited to 10 MiB by FastAPI. Allow multipart framing
+    # overhead while rejecting oversized requests at the public edge.
+    request_body {
+        max_size 12MB
+    }
+
     header {
         X-Content-Type-Options "nosniff"
         X-Frame-Options "DENY"
         Referrer-Policy "strict-origin-when-cross-origin"
+        Strict-Transport-Security "max-age=31536000"
     }
 
-    # Route all API and health traffic to the internal FastAPI container
-    # Notice: Judge0 (port 2358) is NEVER exposed here (Rule 3)
+    encode zstd gzip
     reverse_proxy fastapi:8000
 }

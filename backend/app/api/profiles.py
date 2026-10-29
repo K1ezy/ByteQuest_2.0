@@ -32,6 +32,7 @@ class ProfileResponse(BaseModel):
     semester: int
     xp_points: int
     current_level: int
+    display_name: str | None = None
 
 
 def _require_student(profile: Profile) -> None:

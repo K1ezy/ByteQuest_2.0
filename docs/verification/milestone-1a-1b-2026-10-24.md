@@ -1,7 +1,7 @@
 # Milestones 1A–1C Status and Verification Log
 
 **Date:** 2026-10-24 (Asia/Manila)
-**Scope:** ByteQuest Judge0 client multi-language smoke check and local Supabase schema/seed check.
+**Scope:** ByteQuest Judge0 client checks, local Supabase schema/seed checks, and authenticated browser-to-database student submission flow.
 
 ## Official milestone disposition
 
@@ -9,7 +9,7 @@
 |---|---|---|
 | 1A — Judge0 execution | **Complete — verified** | All three languages passed both recorded reference-solution cases through ByteQuest's Judge0 client. |
 | 1B — Local database and fixtures | **Complete — verified** | The live local database query returned nine public tables and one published, verified challenge with two test cases per language. |
-| 1C — Browser-to-database walkthrough | **Partially verified; pending completion** | A synthetic local student completed onboarding and loaded quests/leaderboard. The sample run and official submission checks are blocked because the configured private Judge0 VM endpoint timed out. |
+| 1C — Browser-to-database walkthrough | **Complete — verified** | Synthetic student browser runs in C++, Python, and Java; sample/official behavior, attempt history, XP, badge, authorization, language-track isolation, and hidden-test privacy were verified against the local API and database. |
 
 Per the project owner's direction, no consent UI is being added for synthetic local software testing. This is not research consent or approval to collect classroom data; institutional consent is still required before a classroom pilot or research data collection. Continue the local technical walkthrough with synthetic accounts.
 
@@ -56,10 +56,48 @@ The challenge query returned one published, `judge0_verified = true` challenge p
 | Python | Double an Integer (Python) | Published, verified | 2 |
 | Java | Double an Integer (Java) | Published, verified | 2 |
 
-## Milestone 1C: Browser-to-database walkthrough — Partially verified; pending completion
+## Milestone 1C: Browser-to-database walkthrough — Complete, verified
 
-On 2026-10-24, a synthetic local account completed the browser onboarding flow with the C++ track. The quest map displayed the seeded C++ challenge and leaderboard. A direct database query confirmed the profile's C++ / Year 1 / Semester 1 settings, 0 XP, level 1, and zero attempts.
+The earlier Judge0 timeout was a real blocker at that point in the troubleshooting timeline. The working `ByteQuest-Judge0-Install` VM was later recovered, the current private address was configured, and connectivity was verified on port 2358. The original `ByteQuest-Judge0` Azure-image boot issue remains unresolved; it was left separate and its disk/checkpoint chain was preserved. The recovered Install VM is the active local Judge0 service. See [the Hyper-V recovery report](../troubleshooting/judge0-hyperv-boot-recovery-2026-10-24.md) for the incident and recovery history.
 
-The arena loaded the seeded challenge. Clicking **Run sample** reached FastAPI, but execution failed before Judge0 returned a result: the backend logged HTTP 502, and a direct Judge0 language-list request timed out at the configured private VM endpoint. The attempt count remained zero. This does not verify a successful sample run. An official submission, successful attempt persistence, and XP award have not yet been verified.
+Using a synthetic student account and the existing published seed activities, the student opened each challenge in the browser, ran samples, and submitted official solutions. The same profile's language track was switched between C++, Python, and Java for this local technical check. The local database was not reset, and no classroom research data was used.
 
-The remaining 1C work is to restore connectivity to the private Judge0 VM, then verify a successful sample run creates no attempt and an official passing submission creates one attempt and awards XP. The consent UI is intentionally omitted for this synthetic local software check. Institutional consent remains a prerequisite for classroom research data collection.
+| Check | Observed browser/API result | Database evidence |
+|---|---|---|
+| C++ sample run | Visible samples evaluated successfully; UI confirmed no attempt was created. | Immediately after sample run: 0 attempts and 0 XP. |
+| C++ failing official submission | 0/2 passed; failure feedback shown; attempt 1 saved. | Attempt 1 unsuccessful, 0/2, 0 XP awarded. |
+| C++ first passing official submission | 2/2 passed; +25 completion XP; “First Steps” badge unlocked. | Attempt 2 successful, 2/2, 25 XP awarded; profile reached 50 XP including the badge bonus. |
+| C++ repeat passing submission | 2/2 passed; attempt saved with no duplicate completion XP. | Attempt 3 successful, 2/2, 0 XP awarded; XP remained 50. |
+| Python official submission | Browser run accepted all 2/2 cases. | Attempt 1 successful; 25 XP awarded. |
+| Java official submission | Browser run accepted all 2/2 cases. | Attempt 1 successful; 25 XP awarded. |
+| Final synthetic profile | Browser reflected updated completion/progression. | 100 XP, level 1; one attempt per language plus the C++ failure/retry history. |
+| Authorization | Unauthenticated profile request rejected. | HTTP 401; no attempt created. |
+| Language isolation | A Python-track synthetic account could not submit the C++ challenge. | HTTP 404; no attempt created. |
+| Hidden-test privacy | Official scoring included hidden cases, but the student response/rendered results showed visible cases only and a general privacy note. | Hidden cases remained part of the aggregate attempt score; no hidden case output was needed in the student view. |
+
+### Submission-flow corrections made
+
+- The Judge0 client now returns per-case detail only for visible cases. Hidden cases still contribute to aggregate score, execution-time/memory summaries, and the saved attempt, but their IDs, ordering, status, and compiler/runtime output are not sent as per-case results.
+- The arena renders readable sample results instead of serializing the raw evaluation object, gives distinct sample/failure/first-pass/repeat-pass feedback, refreshes XP and level after official grading, marks a passed quest complete, and shows newly unlocked badges.
+- The request and response contract and database schema were preserved.
+
+### Validation commands and results
+
+From `backend/`:
+
+```powershell
+.\.venv\Scripts\python.exe -m compileall -q app
+.\.venv\Scripts\python.exe scripts\verify_all_languages.py
+```
+
+Both completed successfully. The Judge0 script returned Accepted for both cases in C++, Python, and Java. From `frontend/`, `npm run lint` and `npm run typecheck` both completed successfully. The full automated test suite was not run.
+
+The earlier Judge0 timeout wording in the initial recovery notes describes the prior failed state, not the state after recovery. The final checks above establish the local student submission flow end to end. The consent UI remains intentionally omitted for synthetic software testing; institutional consent is still required before classroom research data collection.
+
+### Follow-up verification — 2026-10-25
+
+The initial timeout against the Judge0 VM's old private IP was resolved. The recovered `ByteQuest-Judge0-Install` VM was reachable at its then-current address, `172.23.175.189`, on port 2358. FastAPI ran on `127.0.0.1:8001`; its health endpoint confirmed that same Judge0 URL. The VM address is dynamic and must be rechecked after a VM restart.
+
+This follow-up used the existing authenticated synthetic Python student and the published **Greeting and Score Calculator Functions** challenge generated from corrected Py4E Lesson 4 material. The sample run passed 2/2 visible cases and created no attempt. The official submission passed 3/3 cases, including hidden cases, saved attempt 1, and awarded 150 XP once. Read-only database evidence confirmed the attempt's successful status, 100% score, 3/3 passed, and 150 XP awarded; the profile increased from 75 to 225 XP and remained level 1. The student quest map then showed 1 of 3 activities complete and the attempt in progress history. No database reset was performed. Detailed browser, API, and database observations are recorded in [the corrected-lesson workflow report](corrected-lesson-workflow-2026-10-25.md).
+
+At startup, the backend logged that trained ML artifacts were unavailable. This was nonfatal: the API reported healthy and rule-based sequencing remained active. No Judge0 credentials or student source code are included in this report.

@@ -72,15 +72,18 @@ def _prepare_frame(prior_attempts: Any) -> pd.DataFrame:
 def _ordered_history(frame: pd.DataFrame) -> pd.DataFrame:
     if "created_at" in frame.columns:
         timestamps = pd.to_datetime(frame["created_at"], errors="coerce", utc=True)
-        if timestamps.notna().all():
-            ordered = frame.assign(_feature_order_timestamp=timestamps)
-            sort_columns = ["_feature_order_timestamp"]
-            sort_columns.extend(
-                column for column in ("attempt_number", "id") if column in frame.columns
+        if timestamps.isna().any():
+            raise ValueError(
+                "created_at must contain valid timestamps when chronological history is supplied."
             )
-            return ordered.sort_values(sort_columns, kind="stable").drop(
-                columns="_feature_order_timestamp"
-            )
+        ordered = frame.assign(_feature_order_timestamp=timestamps)
+        sort_columns = ["_feature_order_timestamp"]
+        sort_columns.extend(
+            column for column in ("attempt_number", "id") if column in frame.columns
+        )
+        return ordered.sort_values(sort_columns, kind="stable").drop(
+            columns="_feature_order_timestamp"
+        )
     return frame
 
 

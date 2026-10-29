@@ -1,14 +1,18 @@
+import asyncio
 import logging
-from typing import List
-from google import genai
+import math
+from typing import Callable, List, Sequence
+
 from google.genai import types
 
 from app.core.config import get_settings
+from app.services.ai_rag.gemini_client import get_gemini_client
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-client = genai.Client(api_key=settings.GEMINI_API_KEY)
+EMBEDDING_BATCH_CONCURRENCY = 3
+EMBEDDING_DIMENSIONS = 768
 
 
 def generate_embedding(text: str, is_query: bool = False) -> List[float]:
@@ -18,7 +22,7 @@ def generate_embedding(text: str, is_query: bool = False) -> List[float]:
     """
     task_type = "RETRIEVAL_QUERY" if is_query else "RETRIEVAL_DOCUMENT"
 
-    response = client.models.embed_content(
+    response = get_gemini_client().models.embed_content(
         model=settings.GEMINI_EMBEDDING_MODEL_ID,
         contents=text,
         config=types.EmbedContentConfig(
@@ -31,6 +35,47 @@ def generate_embedding(text: str, is_query: bool = False) -> List[float]:
         raise ValueError("Failed to generate embedding vector from Gemini API.")
 
     return list(response.embeddings[0].values)
+
+
+async def embed_chunks_bounded(
+    chunks: Sequence[dict],
+    *,
+    on_chunk: Callable[[], None] | None = None,
+) -> list[list[float]]:
+    """Embed document chunks in bounded batches while preserving chunk order.
+
+    The Gemini SDK call is synchronous, so each call runs off the event loop. A
+    fixed concurrency keeps upload latency reasonable without unbounded fan-out.
+    """
+    embeddings: list[list[float]] = []
+    for start in range(0, len(chunks), EMBEDDING_BATCH_CONCURRENCY):
+        batch = chunks[start : start + EMBEDDING_BATCH_CONCURRENCY]
+
+        def embed_one(chunk: dict) -> list[float]:
+            if on_chunk is not None:
+                on_chunk()
+            return generate_embedding(chunk["content_text"], False)
+
+        results = await asyncio.gather(
+            *(asyncio.to_thread(embed_one, chunk) for chunk in batch),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+            if (
+                not isinstance(result, list)
+                or len(result) != EMBEDDING_DIMENSIONS
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    for value in result
+                )
+            ):
+                raise ValueError("Embedding service returned an invalid vector.")
+            embeddings.append(result)
+    return embeddings
 
 
 # Class wrapper for backward compatibility
