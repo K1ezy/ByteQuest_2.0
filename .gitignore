@@ -8,6 +8,10 @@ desktop.ini
 .env.local
 .env.*.local
 *.env
+/infra/.env
+/infra/backend.prod.env
+/infra/judge0.prod.conf
+/frontend/.vercel/
 *.pem
 *.key
 *.cert
@@ -30,8 +34,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -66,6 +70,8 @@ next-env.d.ts
 # Machine Learning & Large Artifacts
 ml_pipeline/artifacts/*.joblib
 ml_pipeline/artifacts/*.json
+ml_pipeline/artifacts/development/
+ml_pipeline/artifacts/runs/
 !ml_pipeline/artifacts/.gitkeep
 ml_pipeline/data/raw/
 *.h5

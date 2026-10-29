@@ -121,3 +121,91 @@ def determine_next_task_rule_based(
         ),
         "rationale": "More practice is recommended to reinforce mastery of this concept.",
     }
+
+
+def determine_track_recommendation(
+    db: Session,
+    student: Profile,
+) -> dict[str, Any]:
+    """Recommend the next action for the student's currently selected language.
+
+    Attempt history and XP are account-wide, but a quest-map recommendation must
+    be based only on the student's enrolled language. This keeps attempts made
+    while exploring another language from incorrectly marking this track done.
+    """
+    successful_activity = (
+        db.query(ActivityAttempt.id)
+        .filter(
+            ActivityAttempt.student_id == student.id,
+            ActivityAttempt.activity_id == LearningActivity.id,
+            ActivityAttempt.is_successful.is_(True),
+        )
+        .exists()
+    )
+    track_activities = db.query(LearningActivity).filter(
+        LearningActivity.language == student.enrolled_language,
+        LearningActivity.review_status == ReviewState.published,
+    )
+    first_uncompleted = (
+        track_activities.filter(~successful_activity)
+        .order_by(
+            LearningActivity.sequence_order.asc(),
+            LearningActivity.difficulty_level.asc(),
+            LearningActivity.id.asc(),
+        )
+        .first()
+    )
+
+    latest_attempt_row = (
+        db.query(ActivityAttempt, LearningActivity)
+        .join(LearningActivity, LearningActivity.id == ActivityAttempt.activity_id)
+        .filter(
+            ActivityAttempt.student_id == student.id,
+            LearningActivity.language == student.enrolled_language,
+            LearningActivity.review_status == ReviewState.published,
+        )
+        .order_by(ActivityAttempt.created_at.desc(), ActivityAttempt.id.desc())
+        .first()
+    )
+
+    if latest_attempt_row is None:
+        if first_uncompleted is not None:
+            return {
+                "sequencer_mode": "rule_based",
+                "recommended_action": "start_track",
+                "target_activity_id": first_uncompleted.id,
+                "rationale": "Start this language track with its first uncompleted published activity.",
+            }
+        if track_activities.first() is None:
+            return {
+                "sequencer_mode": "rule_based",
+                "recommended_action": "no_published_activities",
+                "target_activity_id": None,
+                "rationale": "There are no published activities in your selected language track yet.",
+            }
+        return {
+            "sequencer_mode": "rule_based",
+            "recommended_action": "completed_track",
+            "target_activity_id": None,
+            "rationale": "You completed all published activities in this language track.",
+        }
+
+    latest_attempt, latest_activity = latest_attempt_row
+    recommendation = determine_next_task_rule_based(
+        db, student, latest_activity, latest_attempt
+    )
+
+    # A student may start with a later activity. If the normal forward sequencer
+    # has no higher item, make sure it does not call the track complete while an
+    # earlier published activity remains unfinished.
+    if (
+        recommendation["recommended_action"] == "completed_track"
+        and first_uncompleted is not None
+    ):
+        return {
+            "sequencer_mode": "rule_based",
+            "recommended_action": "advance_next_level",
+            "target_activity_id": first_uncompleted.id,
+            "rationale": "Continue with the remaining published activity in this language track.",
+        }
+    return recommendation

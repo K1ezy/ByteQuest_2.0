@@ -4,14 +4,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 
 class QuizOption(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     key: str = Field(min_length=1, max_length=32)
     text: str = Field(min_length=1, max_length=500)
 
 
 class StoredQuizQuestion(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     id: str = Field(min_length=1, max_length=100)
     prompt: str = Field(min_length=1, max_length=2_000)
@@ -30,6 +30,8 @@ class StoredQuizQuestion(BaseModel):
 
 def parse_quiz_questions(content: object) -> list[StoredQuizQuestion]:
     """Validate question IDs, options, and answer keys without exposing answers."""
+    if not isinstance(content, dict) or set(content) != {"questions"}:
+        raise ValueError("Quiz content contains unknown fields.")
     raw_questions = content.get("questions") if isinstance(content, dict) else None
     if not isinstance(raw_questions, list) or not raw_questions:
         raise ValueError("Quiz content must contain at least one question.")

@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Development and local verification only; excluded from the runtime image.
+pytest>=8.0.0

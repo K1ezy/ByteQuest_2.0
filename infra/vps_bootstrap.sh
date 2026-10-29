@@ -72,39 +72,97 @@ if ((UPGRADE_SYSTEM)); then
 fi
 apt-get install -y ca-certificates curl gnupg lsb-release ufw util-linux
 
-configure_swap() {
-  local swap_is_active=0
+configure_swap() (
+  local amount unit requested_bytes available_bytes swap_is_active=0
+  local minimum_file_bytes swap_file_bytes active_swap_bytes temporary_swap_file=""
+
+  cleanup_temporary_swap_file() {
+    if [[ -n "${temporary_swap_file}" && -e "${temporary_swap_file}" ]]; then
+      rm -f -- "${temporary_swap_file}"
+    fi
+  }
+  trap cleanup_temporary_swap_file EXIT
+
+  amount="${SWAP_SIZE%[GM]}"
+  unit="${SWAP_SIZE: -1}"
+  if [[ "${unit}" == "G" ]]; then
+    requested_bytes=$((10#${amount} * 1024 * 1024 * 1024))
+  else
+    requested_bytes=$((10#${amount} * 1024 * 1024))
+  fi
+  # Leave 1 MiB beyond the requested active swap size for the swap header and
+  # page alignment, so a nominal 4 GiB file satisfies the 4 GiB host preflight.
+  minimum_file_bytes=$((requested_bytes + 1048576))
+
   if swapon --noheadings --show=NAME | awk '{print $1}' | grep -Fxq "${SWAP_FILE}"; then
     swap_is_active=1
   fi
 
-  if (( ! swap_is_active )); then
-    if [[ -e "${SWAP_FILE}" ]]; then
-      [[ -f "${SWAP_FILE}" ]] || die "${SWAP_FILE} exists and is not a regular file."
-      swaplabel "${SWAP_FILE}" >/dev/null 2>&1 \
-        || die "${SWAP_FILE} exists but is not an initialized swap file; refusing to overwrite it."
-    else
-      local requested_bytes available_bytes amount unit
-      amount="${SWAP_SIZE%[GM]}"
-      unit="${SWAP_SIZE: -1}"
-      if [[ "${unit}" == "G" ]]; then
-        requested_bytes=$((10#${amount} * 1024 * 1024 * 1024))
-      else
-        requested_bytes=$((10#${amount} * 1024 * 1024))
-      fi
-      available_bytes=$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')
-      ((available_bytes > requested_bytes + 1073741824)) \
-        || die "Not enough free disk space to allocate ${SWAP_SIZE} swap plus 1 GiB headroom."
-      log "Allocating ${SWAP_SIZE} swap at ${SWAP_FILE}."
-      if ! fallocate -l "${requested_bytes}" "${SWAP_FILE}"; then
-        rm -f -- "${SWAP_FILE}"
-        dd if=/dev/zero of="${SWAP_FILE}" bs=1M count="$((requested_bytes / 1048576))" status=progress
-      fi
-      chmod 600 "${SWAP_FILE}"
-      mkswap "${SWAP_FILE}"
+  if [[ -e "${SWAP_FILE}" ]]; then
+    [[ -f "${SWAP_FILE}" ]] || die "${SWAP_FILE} exists and is not a regular file."
+    swaplabel "${SWAP_FILE}" >/dev/null 2>&1 \
+      || die "${SWAP_FILE} exists but is not an initialized swap file; refusing to overwrite it."
+
+    swap_file_bytes=$(stat -c '%s' -- "${SWAP_FILE}")
+    [[ "${swap_file_bytes}" =~ ^[0-9]+$ ]] \
+      || die "Could not determine the size of the existing ${SWAP_FILE}."
+    ((swap_file_bytes >= minimum_file_bytes)) \
+      || die "Existing ${SWAP_FILE} is too small to provide ${SWAP_SIZE} of active swap; refusing to resize or replace it. Resolve it manually, then rerun bootstrap."
+
+    if ((swap_is_active)); then
+      active_swap_bytes=$(swapon --noheadings --show=NAME,SIZE --bytes \
+        | awk -v path="${SWAP_FILE}" '$1 == path {print $2; exit}')
+      [[ "${active_swap_bytes}" =~ ^[0-9]+$ ]] \
+        || die "Could not verify the active size of ${SWAP_FILE}."
+      ((active_swap_bytes >= requested_bytes)) \
+        || die "Active ${SWAP_FILE} is smaller than ${SWAP_SIZE}; refusing to continue."
     fi
+  else
+    if ((swap_is_active)); then
+      die "${SWAP_FILE} is reported active but does not exist; refusing to modify swap state."
+    fi
+
+    available_bytes=$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')
+    [[ "${available_bytes}" =~ ^[0-9]+$ ]] \
+      || die "Could not determine free space on the root filesystem."
+    ((available_bytes > minimum_file_bytes + 1073741824)) \
+      || die "Not enough free disk space to allocate ${SWAP_SIZE} swap plus 1 GiB headroom."
+
+    # Build the swap image under a unique temporary name. A failed allocation,
+    # dd, or mkswap must never leave a partial file at the canonical path.
+    temporary_swap_file=$(mktemp --tmpdir=/ .bytequest-swap.XXXXXXXXXX) \
+      || die "Could not create a temporary swap file on the root filesystem."
+    chmod 600 "${temporary_swap_file}"
+    if ! fallocate -l "${minimum_file_bytes}" "${temporary_swap_file}"; then
+      if ! dd if=/dev/zero of="${temporary_swap_file}" bs=1M \
+        count="$((minimum_file_bytes / 1048576))" status=progress; then
+        die "Could not allocate ${SWAP_SIZE} for swap."
+      fi
+    fi
+    if ! mkswap "${temporary_swap_file}"; then
+      die "Could not initialize the temporary swap file."
+    fi
+
+    # link(2) creates the canonical path atomically and fails if anything has
+    # appeared there since the earlier check. Both paths are on the same FS.
+    if ! ln -- "${temporary_swap_file}" "${SWAP_FILE}"; then
+      die "${SWAP_FILE} appeared during setup; it was left untouched."
+    fi
+    rm -f -- "${temporary_swap_file}"
+    temporary_swap_file=""
+    log "Created ${SWAP_SIZE} swap at ${SWAP_FILE}."
+  fi
+
+  if (( ! swap_is_active )); then
     swapon "${SWAP_FILE}"
   fi
+
+  active_swap_bytes=$(swapon --noheadings --show=NAME,SIZE --bytes \
+    | awk -v path="${SWAP_FILE}" '$1 == path {print $2; exit}')
+  [[ "${active_swap_bytes}" =~ ^[0-9]+$ ]] \
+    || die "Could not verify that ${SWAP_FILE} is active."
+  ((active_swap_bytes >= requested_bytes)) \
+    || die "Active ${SWAP_FILE} provides less than ${SWAP_SIZE}; refusing to report swap as configured."
 
   if ! grep -Eq '^[[:space:]]*/swapfile[[:space:]]' /etc/fstab; then
     printf '%s none swap sw 0 0\n' "${SWAP_FILE}" >> /etc/fstab
@@ -112,7 +170,7 @@ configure_swap() {
   printf 'vm.swappiness=10\n' > "${SWAP_SYSCTL_FILE}"
   sysctl --system >/dev/null
   log "Swap is active and configured persistently."
-}
+)
 
 configure_cgroup_v1() {
   local grub_file="/etc/default/grub"

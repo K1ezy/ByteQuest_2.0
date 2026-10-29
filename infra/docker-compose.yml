@@ -1,21 +1,28 @@
-# Later Linux VPS deployment template. Local development uses Supabase CLI plus
-# the private Ubuntu Judge0 VM configured by configure-judge0-vm.ps1.
-# This file's Judge0 image is standard CE, not the VM's Extra CE release.
-x-judge0-logging: &default-logging
+# Future VPS stack. Local development uses Supabase CLI and the private
+# Ubuntu Judge0 VM configured by configure-judge0-vm.ps1.
+x-logging: &default-logging
   driver: json-file
   options:
     max-size: 50m
     max-file: "3"
 
+x-judge0: &judge0
+  image: ${JUDGE0_IMAGE:?Set JUDGE0_IMAGE to the reviewed Judge0 variant pinned by digest in infra/.env}
+  restart: unless-stopped
+  privileged: true # Required by Judge0's sandbox runtime.
+  env_file:
+    - ./judge0.prod.conf
+  volumes:
+    - ./judge0.prod.conf:/judge0.conf:ro
+  logging: *default-logging
+
 services:
-  # ==========================================================================
-  # 1. Caddy API Gateway (Automatic HTTPS Reverse Proxy)
-  # ==========================================================================
   caddy:
     profiles: ["vps"]
-    image: caddy:2.8-alpine
-    container_name: bytequest-caddy
+    image: ${CADDY_IMAGE:?Set CADDY_IMAGE to a reviewed digest-pinned image in infra/.env}
     restart: unless-stopped
+    environment:
+      BYTEQUEST_API_DOMAIN: ${BYTEQUEST_API_DOMAIN:?Set BYTEQUEST_API_DOMAIN in infra/.env}
     ports:
       - "80:80"
       - "443:443"
@@ -24,117 +31,166 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - fastapi
+      fastapi:
+        condition: service_healthy
     networks:
-      - bytequest_net
+      - app
     logging: *default-logging
 
-  # ==========================================================================
-  # 2. FastAPI Backend Service
-  # ==========================================================================
   fastapi:
     profiles: ["vps"]
     build:
       context: ../backend
       dockerfile: Dockerfile
-    container_name: bytequest-fastapi
     restart: unless-stopped
     env_file:
-      - ../backend/.env
+      - ./backend.prod.env
     environment:
-      - JUDGE0_BASE_URL=http://judge0-server:2358
-      - ML_ARTIFACTS_DIR=/app/ml_artifacts
+      JUDGE0_BASE_URL: http://judge0-server:2358
+      ML_ARTIFACTS_DIR: /app/ml_artifacts
+      PYTHONDONTWRITEBYTECODE: "1"
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+    command:
+      - sh
+      - -ec
+      - exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers "$${UVICORN_WORKERS}"
     volumes:
       - ../ml_pipeline/artifacts:/app/ml_artifacts:ro
     ports:
       - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=38)"
+      interval: 30s
+      timeout: 45s
+      start_period: 30s
+      retries: 3
     depends_on:
-      - judge0-server
+      judge0-server:
+        condition: service_healthy
     networks:
-      - bytequest_net
+      - app
+      - judge0_api
     logging: *default-logging
 
-  # ==========================================================================
-  # 3. Judge0 CE Server (Isolated Code Execution API - Rule 3)
-  # ==========================================================================
+  submission-worker:
+    profiles: ["vps"]
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend.prod.env
+    environment:
+      JUDGE0_BASE_URL: http://judge0-server:2358
+      DB_POOL_SIZE: "1"
+      DB_MAX_OVERFLOW: "1"
+      ML_SHADOW_ENABLED: "false"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: ["python", "-m", "app.services.submission_worker"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    depends_on:
+      judge0-server:
+        condition: service_healthy
+    networks:
+      - app
+      - judge0_api
+    logging: *default-logging
+
   judge0-server:
     profiles: ["vps"]
-    image: judge0/judge0:1.13.1
-    container_name: judge0-server
-    restart: unless-stopped
-    # Bind ONLY to 127.0.0.1 so Judge0 is never exposed to the public internet
-    ports:
-      - "127.0.0.1:2358:2358"
-    privileged: true
-    env_file:
-      - ./judge0.conf
-    volumes:
-      - ./judge0.conf:/judge0.conf:ro
+    <<: *judge0
+    healthcheck:
+      test:
+        - CMD
+        - ruby
+        - -rsocket
+        - -e
+        - "TCPSocket.new('127.0.0.1', 2358).close"
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+      retries: 12
     depends_on:
-      - judge0-db
-      - judge0-redis
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
     networks:
-      - bytequest_net
-    logging: *default-logging
+      - judge0_api
+      - judge0_data
 
-  # ==========================================================================
-  # 4. Judge0 CE Background Workers (Resque Compilation Queue)
-  # ==========================================================================
   judge0-workers:
     profiles: ["vps"]
-    image: judge0/judge0:1.13.1
-    container_name: judge0-workers
+    <<: *judge0
     command: ["./scripts/workers"]
-    restart: unless-stopped
-    privileged: true
-    env_file:
-      - ./judge0.conf
-    volumes:
-      - ./judge0.conf:/judge0.conf:ro
     depends_on:
-      - judge0-db
-      - judge0-redis
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
     networks:
-      - bytequest_net
-    logging: *default-logging
+      - judge0_data
 
-  # ==========================================================================
-  # 5. Judge0 Internal PostgreSQL (Sandbox Metadata Only)
-  # ==========================================================================
   judge0-db:
     profiles: ["vps"]
-    image: postgres:16-alpine
-    container_name: judge0-db
+    image: ${JUDGE0_POSTGRES_IMAGE:?Set JUDGE0_POSTGRES_IMAGE to a reviewed digest-pinned image in infra/.env}
     restart: unless-stopped
     env_file:
-      - ./judge0.conf
+      - ./judge0.prod.conf
     volumes:
       - judge0_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks:
-      - bytequest_net
+      - judge0_data
     logging: *default-logging
 
-  # ==========================================================================
-  # 6. Judge0 Internal Redis (Message Queue for Code Submissions)
-  # ==========================================================================
   judge0-redis:
     profiles: ["vps"]
-    image: redis:7-alpine
-    container_name: judge0-redis
+    image: ${JUDGE0_REDIS_IMAGE:?Set JUDGE0_REDIS_IMAGE to a reviewed digest-pinned image in infra/.env}
     restart: unless-stopped
-    command:
-      - bash
-      - -c
-      - docker-entrypoint.sh --appendonly no --requirepass "$$REDIS_PASSWORD"
     env_file:
-      - ./judge0.conf
+      - ./judge0.prod.conf
+    command:
+      - sh
+      - -ec
+      - exec redis-server --appendonly no --requirepass "$$REDIS_PASSWORD"
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -qx PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks:
-      - bytequest_net
+      - judge0_data
     logging: *default-logging
 
 networks:
-  bytequest_net:
+  app:
     driver: bridge
+  judge0_api:
+    driver: bridge
+    internal: true
+  judge0_data:
+    driver: bridge
+    internal: true
 
 volumes:
   caddy_data:

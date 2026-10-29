@@ -1,34 +1,26 @@
-# Judge0 CE Configuration for ByteQuest 2.0 (4GB RAM VPS Profile)
-
-# Internal Docker Service Discovery Hostnames
+# Copy to judge0.prod.conf on the VPS and replace both passwords with fresh,
+# independently generated secrets. This example file contains no credentials.
 REDIS_HOST=judge0-redis
 REDIS_PORT=6379
-REDIS_PASSWORD=bytequest_redis_secret
-
+REDIS_PASSWORD=REPLACE_WITH_A_LONG_RANDOM_REDIS_PASSWORD
 POSTGRES_HOST=judge0-db
 POSTGRES_PORT=5432
 POSTGRES_DB=judge0
 POSTGRES_USER=judge0
-POSTGRES_PASSWORD=bytequest_pg_secret
+POSTGRES_PASSWORD=REPLACE_WITH_A_DIFFERENT_LONG_RANDOM_POSTGRES_PASSWORD
 
-# Worker Concurrency (2 workers prevent CPU thrashing on a 2-vCPU VPS)
-COUNT=2
-
-# Sandbox Execution & Resource Limits (Tuned for C++, Python, and Java JVM)
+# One worker is a conservative starting point for a 4 GiB VPS.
+COUNT=1
 MAX_QUEUE_SIZE=100
 CPU_TIME_LIMIT=5
 MAX_CPU_TIME_LIMIT=15
 CPU_EXTRA_TIME=1
 WALL_TIME_LIMIT=10
 MAX_WALL_TIME_LIMIT=20
-
-# Memory Limits (Java OpenJDK requires >= 128MB virtual address space to compile)
 MEMORY_LIMIT=256000
 MAX_MEMORY_LIMIT=512000
 STACK_LIMIT=64000
 MAX_PROCESSES_AND_OR_THREADS=60
-
-# Security & Sandbox Restrictions
 ENABLE_PER_PROCESS_AND_THREAD_TIME_LIMIT=false
 ENABLE_PER_PROCESS_AND_THREAD_MEMORY_LIMIT=false
 ENABLE_COMPILER_OPTIONS=true

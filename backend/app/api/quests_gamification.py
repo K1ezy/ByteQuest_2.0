@@ -2,21 +2,26 @@
 
 import logging
 import uuid
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.quotas import reserve
 from app.core.security import get_current_user
 from app.models.entities import (
     ActivityAttempt,
     ActivityKind,
+    Badge,
     LearningActivity,
     Profile,
+    ProgrammingLang,
     ReviewState,
+    StudentBadge,
     UserRole,
 )
 from app.services.gamification.badges import evaluate_and_award_badges
@@ -28,9 +33,11 @@ from app.services.gamification.quiz_content import (
 )
 from app.services.gamification.sequencer import (
     QUIZ_MASTERY_SCORE,
+    determine_track_recommendation,
     determine_next_task_rule_based,
 )
 from app.services.ml_predictor.audit import record_prediction_outcome
+from app.services.ml_predictor.shadow import record_shadow_prediction
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +67,7 @@ class QuestCard(BaseModel):
     id: uuid.UUID
     title: Optional[str] = None
     activity_type: ActivityKind
+    language: ProgrammingLang
     topic_concept: str
     difficulty_level: int
     sequence_order: int
@@ -67,6 +75,7 @@ class QuestCard(BaseModel):
     problem_statement: Optional[str] = None
     starter_code: Optional[str] = None
     is_completed: bool
+    is_closed: bool = False
     quiz_questions: Optional[list[PublicQuizQuestion]] = None
 
 
@@ -98,6 +107,34 @@ class LeaderboardEntry(BaseModel):
     is_me: bool
 
 
+class ProgressAttempt(BaseModel):
+    attempt_id: uuid.UUID
+    activity_id: uuid.UUID
+    title: Optional[str]
+    activity_type: ActivityKind
+    attempt_number: int
+    score_percentage: float
+    is_successful: bool
+    xp_awarded: int
+    time_spent_seconds: int
+    created_at: datetime
+
+
+class ProgressBadge(BaseModel):
+    code: Optional[str]
+    name: str
+    description: str
+    xp_bonus: int
+    awarded_at: datetime
+
+
+class StudentProgress(BaseModel):
+    total_attempts: int
+    attempts: list[ProgressAttempt]
+    badges: list[ProgressBadge]
+    next_recommendation: Optional[NextStepRecommendation]
+
+
 def _ensure_student(student: Profile) -> None:
     if student.role != UserRole.student:
         raise HTTPException(
@@ -119,18 +156,18 @@ def _public_question(question: StoredQuizQuestion) -> PublicQuizQuestion:
 
 
 @router.get("", response_model=list[QuestCard])
-def list_student_quests(
+def list_published_quests(
     current_user: Profile = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[QuestCard]:
-    """List published activities for the student's enrolled language."""
-    _ensure_student(current_user)
+    """List safe published quest details for every signed-in role."""
+    query = db.query(LearningActivity).filter(
+        LearningActivity.review_status == ReviewState.published,
+    )
+    if current_user.role == UserRole.student:
+        query = query.filter(LearningActivity.language == current_user.enrolled_language)
     activities = (
-        db.query(LearningActivity)
-        .filter(
-            LearningActivity.language == current_user.enrolled_language,
-            LearningActivity.review_status == ReviewState.published,
-        )
+        query
         .order_by(
             LearningActivity.sequence_order.asc(),
             LearningActivity.difficulty_level.asc(),
@@ -139,7 +176,7 @@ def list_student_quests(
         .all()
     )
     activity_ids = [activity.id for activity in activities]
-    if activity_ids:
+    if activity_ids and current_user.role == UserRole.student:
         completed_activity_ids = {
             activity_id
             for (activity_id,) in db.query(ActivityAttempt.activity_id)
@@ -175,6 +212,7 @@ def list_student_quests(
                 id=activity.id,
                 title=activity.title,
                 activity_type=activity.activity_type,
+                language=activity.language,
                 topic_concept=activity.topic_concept,
                 difficulty_level=activity.difficulty_level,
                 sequence_order=activity.sequence_order,
@@ -182,6 +220,7 @@ def list_student_quests(
                 problem_statement=activity.problem_statement,
                 starter_code=activity.starter_code,
                 is_completed=activity.id in completed_activity_ids,
+                is_closed=activity.closed_at is not None,
                 quiz_questions=public_questions,
             )
         )
@@ -190,6 +229,7 @@ def list_student_quests(
 
 @router.post("/submit-quiz", response_model=QuizSubmissionResponse)
 def submit_conceptual_quiz(
+    request: Request,
     payload: QuizSubmissionRequest,
     current_user: Profile = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -239,6 +279,8 @@ def submit_conceptual_quiz(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="An answer contains an invalid option key.",
             )
+
+    reserve("quiz_submit", current_user.id)
 
     correct_count = sum(
         1
@@ -314,8 +356,7 @@ def submit_conceptual_quiz(
     db.commit()
     db.refresh(new_attempt)
     db.refresh(student)
-
-    return QuizSubmissionResponse(
+    response_payload = QuizSubmissionResponse(
         attempt_id=new_attempt.id,
         attempt_number=new_attempt.attempt_number,
         score_percentage=score_pct,
@@ -328,6 +369,15 @@ def submit_conceptual_quiz(
         new_badges_unlocked=new_badges,
         next_step_recommendation=NextStepRecommendation(**recommendation),
     )
+    record_shadow_prediction(
+        db,
+        student=student,
+        target_activity_id=recommendation.get("target_activity_id"),
+        source_attempt=new_attempt,
+        shadow_ready=getattr(request.app.state, "ml_shadow_status", "disabled") == "ready",
+    )
+
+    return response_payload
 
 
 @router.get("/leaderboard", response_model=list[LeaderboardEntry])
@@ -336,7 +386,6 @@ def get_gamification_leaderboard(
     db: Session = Depends(get_db),
 ) -> list[LeaderboardEntry]:
     """Return the top ten students by XP in the current language track."""
-    _ensure_student(current_user)
     top_students = (
         db.query(Profile)
         .filter(
@@ -361,3 +410,69 @@ def get_gamification_leaderboard(
         )
         for student in top_students
     ]
+
+
+@router.get("/progress", response_model=StudentProgress)
+def get_student_progress(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: Profile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StudentProgress:
+    """Return a bounded, private attempt history and earned badges for this student."""
+    _ensure_student(current_user)
+    if limit < 1 or limit > 100 or offset < 0 or offset > 100_000:
+        raise HTTPException(status_code=422, detail="Progress pagination is outside the supported range.")
+
+    total_attempts = (
+        db.query(func.count(ActivityAttempt.id))
+        .filter(ActivityAttempt.student_id == current_user.id)
+        .scalar()
+        or 0
+    )
+    rows = (
+        db.query(ActivityAttempt, LearningActivity)
+        .join(LearningActivity, LearningActivity.id == ActivityAttempt.activity_id)
+        .filter(ActivityAttempt.student_id == current_user.id)
+        .order_by(ActivityAttempt.created_at.desc(), ActivityAttempt.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    attempts = [
+        ProgressAttempt(
+            attempt_id=attempt.id,
+            activity_id=activity.id,
+            title=activity.title,
+            activity_type=activity.activity_type,
+            attempt_number=attempt.attempt_number,
+            score_percentage=attempt.score_percentage,
+            is_successful=attempt.is_successful,
+            xp_awarded=attempt.xp_awarded,
+            time_spent_seconds=attempt.time_spent_seconds,
+            created_at=attempt.created_at,
+        )
+        for attempt, activity in rows
+    ]
+    badge_rows = (
+        db.query(Badge, StudentBadge.awarded_at)
+        .join(StudentBadge, StudentBadge.badge_id == Badge.id)
+        .filter(StudentBadge.student_id == current_user.id)
+        .order_by(StudentBadge.awarded_at.desc(), Badge.name.asc())
+        .all()
+    )
+    badges = [
+        ProgressBadge(
+            code=badge.code,
+            name=badge.name,
+            description=badge.description,
+            xp_bonus=badge.xp_bonus,
+            awarded_at=awarded_at,
+        )
+        for badge, awarded_at in badge_rows
+    ]
+
+    recommendation = NextStepRecommendation(
+        **determine_track_recommendation(db, current_user)
+    )
+    return StudentProgress(total_attempts=total_attempts, attempts=attempts, badges=badges, next_recommendation=recommendation)

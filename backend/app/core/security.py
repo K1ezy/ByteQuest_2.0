@@ -1,9 +1,12 @@
 import uuid
 from typing import Optional
-from fastapi import Depends, HTTPException, status
+import httpx
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -20,6 +23,7 @@ class TokenPayload(BaseModel):
 
 
 async def get_current_user_payload(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> TokenPayload:
     """Verifies the Supabase JWT token and extracts user claims (Rule 4)."""
@@ -48,28 +52,38 @@ async def get_current_user_payload(
                     email=payload.get("email"),
                     role=payload.get("role", "authenticated"),
                 )
-        except JWTError:
+        except PyJWTError:
             pass  # Fallback to Supabase Auth API
 
     # 2. Fallback: Verify directly against Supabase Auth API
     if settings.SUPABASE_URL:
-        import httpx
         url = f"{settings.SUPABASE_URL}/auth/v1/user"
         headers = {
             "Authorization": f"Bearer {token}",
             "apikey": settings.SUPABASE_ANON_KEY or settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_SECRET_KEY,
         }
+        timeout = httpx.Timeout(
+            settings.SUPABASE_AUTH_TIMEOUT_SECONDS,
+            connect=min(2.0, settings.SUPABASE_AUTH_TIMEOUT_SECONDS),
+        )
+        client = getattr(request.app.state, "http_client", None)
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
+            if client is not None and not client.is_closed:
+                response = await client.get(url, headers=headers, timeout=timeout)
+            else:
+                async with httpx.AsyncClient(timeout=timeout) as temporary_client:
+                    response = await temporary_client.get(url, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                user_id = data.get("id") if isinstance(data, dict) else None
+                if user_id:
                     return TokenPayload(
-                        sub=data.get("id"),
+                        sub=user_id,
                         email=data.get("email"),
                         role=data.get("role", "authenticated"),
                     )
-        except Exception:
+        except (httpx.HTTPError, ValueError, TypeError):
+            # Keep provider/network details and bearer tokens out of responses.
             pass
 
     raise HTTPException(
@@ -79,7 +93,7 @@ async def get_current_user_payload(
     )
 
 
-async def get_current_user(
+def get_current_user(
     payload: TokenPayload = Depends(get_current_user_payload),
     db: Session = Depends(get_db),
 ) -> Profile:
@@ -109,14 +123,35 @@ async def get_current_user(
             xp_points=0,
             current_level=1,
         )
-        db.add(profile)
-        db.commit()
-        db.refresh(profile)
+        try:
+            db.add(profile)
+            db.commit()
+            db.refresh(profile)
+        except IntegrityError:
+            # A parallel first request may have created this profile already.
+            db.rollback()
+            profile = db.query(Profile).filter(Profile.id == user_uuid).first()
+            if profile is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="The user profile could not be initialized. Please retry.",
+                ) from None
+
+    # Account status is checked on every protected request: a deactivated
+    # account loses access immediately even while its token is still valid.
+    if (profile.account_status or "active") != "active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "account_deactivated",
+                "message": "This account is deactivated. Contact an administrator to restore access.",
+            },
+        )
 
     return profile
 
 
-async def require_instructor(
+def require_instructor(
     current_user: Profile = Depends(get_current_user),
 ) -> Profile:
     """Dependency that restricts endpoints to instructors and admins."""

@@ -64,7 +64,7 @@ All developers and AI assistants working on ByteQuest 2.0 must adhere to the fol
 * **Rule 6: Automated Pre-Validation & Pedagogical Review Gate**  
   LLM-generated programming challenges (problem statement, reference solution, test cases) must be automatically pre-validated against Judge0 by the backend (`judge0_verified = True`). They must default to `review_status = "draft"` and cannot be surfaced to students until explicitly reviewed and published by an instructor.
 * **Rule 7: API Resilience & Rate Limiting**  
-  FastAPI must enforce rate limiting using `slowapi` on code execution and AI generation endpoints to prevent runaway compute costs and denial of service. External API calls must incorporate retry loops with jitter.
+  FastAPI must use shared, account-based PostgreSQL quotas for grading, AI, document indexing, and invite-code guessing. Costly actions fail closed when quota storage is unavailable; drafts and exam autosaves remain available. External API calls must incorporate retry loops with jitter.
 * **Rule 8: Ethical Compliance & Student Privacy**  
   All student data collected during NEMSU classroom evaluations must follow institutional informed consent protocols. Dataset exports for thesis Chapter 4 results must use surrogate `pseudonym_id` keys, stripping PII (names, emails, student IDs).
 * **Rule 9: Cold-Start Rule-Based Sequencing Fallback**  
@@ -83,7 +83,9 @@ ByteQuest_2.0/
 │   ├── start-local.ps1         # Starts local Supabase; keeps the configured VM Judge0 target
 │   ├── docker-compose.yml      # Later Linux VPS template; not used for local Judge0
 │   ├── Caddyfile               # Automatic HTTPS reverse proxy for Vercel -> VPS
-│   └── judge0.conf             # Judge0 sandbox resource limits & worker config
+│   ├── judge0.conf.example     # Credential-free future VPS Judge0 settings template
+│   ├── backend.prod.env.example # Credential-free future VPS backend settings template
+│   └── .env.example            # Future VPS hostname and image selection template
 ├── frontend/                   # Next.js (TypeScript), Tailwind CSS, shadcn/ui, Monaco, TanStack Query
 │   ├── src/
 │   │   ├── app/                # App Router (auth, student dashboard, instructor review, arena)
@@ -303,7 +305,7 @@ Next.js (localhost:3000) → FastAPI (localhost:8000) → Local Supabase (CLI, l
 
 - `infra/start-local.ps1` starts local Supabase and writes local connection settings. It preserves the VM Judge0 URL/token and does not start a local Judge0 container.
 - `infra/configure-judge0-vm.ps1` configures the private VM target; its token stays in ignored `backend/.env.local`.
-- `infra/docker-compose.yml` is reserved for later Linux VPS deployment. Every service requires the explicit `vps` Compose profile, so an ordinary `docker compose up` does not start this stack. It currently uses standard Judge0 CE, unlike the development VM's Extra CE, and must be reconciled before that deployment is selected.
+- `infra/docker-compose.yml` is reserved for later Linux VPS deployment. Every service requires the explicit `vps` Compose profile, so an ordinary `docker compose up` does not start this stack. It defaults to standard Judge0 CE, unlike the development VM's Extra CE; choose and verify the image variant and language versions before deployment. Its Compose syntax has been validated, but the VPS stack has not been started or runtime-verified.
 - The VM is development infrastructure. A classroom pilot needs a stable, managed host and an explicit network/security review.
 - The phase day ranges are planning estimates, not completion dates or evidence of completion.
 
@@ -320,10 +322,14 @@ Seed and verify one published programming challenge per language directly in loc
 | Nine-table schema and migrations | Implemented | Verified locally | Milestone 1 log records the live local table query. |
 | Python, C++, and Java Judge0 client execution | Implemented | Verified against the private VM | Milestone 1 log records Accepted results for two cases per language. |
 | Published seed challenges and linked test cases | Implemented | Verified locally | Milestone 1 log records one published challenge and two cases per language. |
-| Milestone 1C: browser onboarding, dry run, official submission, and persisted attempt effects | Implemented in part | **Partially verified; pending completion** | Synthetic local onboarding/profile persistence and quest/leaderboard rendering are verified. The configured private Judge0 VM timed out during sample execution; verify successful dry-run, official attempt persistence, and XP after restoring VM connectivity. The consent UI is intentionally omitted for local synthetic testing; institutional consent remains required before classroom research data collection. |
-| RAG ingestion and Gemini generation | Implemented in part | Pending verification; deferred from Milestone 1 | Requires a configured Gemini key and a separate end-to-end check. |
-| ML predictor and student-facing sequencing | Implemented in part | Pending verification; model activation pending | No trained model artifacts are available. The quest submission flow remains rule-based; verify shadow gating before loading any model artifacts. |
-| Production deployment and classroom pilot | Planned | Pending verification | Select a managed host, reconcile Judge0 CE variant, and complete readiness review. |
+| Milestone 1C: browser onboarding, dry run, official submission, and persisted attempt effects | Implemented | **Complete — verified locally** | Synthetic browser/API/database flow passed in C++, Python, and Java. Sample runs did not create attempts; failing and passing official attempts persisted; first-pass XP and repeat-pass no-duplicate XP were confirmed; auth, track isolation, and hidden-test privacy were checked. See `docs/verification/milestone-1a-1b-2026-10-24.md`. Institutional consent remains required before classroom research data collection. |
+| Corrected lesson to student challenge workflow | Implemented | **Verified locally (synthetic)** | Corrected Py4E Functions PDF was retained and indexed; quiz and challenge were generated from its version, reviewed, Judge0-validated, published, listed to a student, and submitted with attempt/XP persistence. See `docs/verification/corrected-lesson-workflow-2026-10-25.md`. |
+| Instructor document retention, version history, archive/restore, and reprocessing | Implemented | **Synthetic lifecycle API verified locally** | Upload/download hash matching, reprocessing, metadata update, second version, version retention, archive, and restore passed against a separate synthetic document family. Existing corrected Py4E source and activities were unchanged. Browser controls were reviewed but not individually clicked through. See `docs/verification/corrected-lesson-workflow-2026-10-25.md`. |
+| Student progress history, earned badges, XP, and next recommendation | Implemented | **Verified in API, database, and browser; reload and fresh sign-in passed** | The existing browser session retained its 225 XP / three-attempt snapshot after reload. A separate synthetic Python student passed a Judge0 challenge, earned 25 completion XP plus the configured 25 XP badge bonus, and retained its 50 XP, attempt history, and badge after a full sign-out/sign-in cycle. Earlier verification rows differ from the current database and are labeled historical in the verification log. |
+| RAG ingestion and Gemini generation | Implemented | **Corrected-PDF path verified locally; broader quality coverage pending** | One corrected lesson produced 25 searchable chunks, a five-question quiz, and a Judge0-validated Python challenge. Broader corpus coverage, adversarial content checks, and generation quality evaluation remain. |
+| Phase 5 feature engineering and comparative training | Implemented | **Synthetic run verified; empirical evaluation pending** | Canonical features are shared by training and inference. The synthetic bootstrap pipeline completed with five student-grouped outer folds per model; versioned artifact hashes were verified, and no model was activated. Synthetic metrics are not empirical evidence; the student quest flow remains rule-based. See `docs/verification/ml-pipeline-synthetic-2026-10-25.md`. |
+| Phase 6 ML shadow evaluation and adaptive sequencing | Shadow-only implementation present; disabled by default | Runtime verification, approved data, and research/consent gates pending | Code records optional shadow snapshots only after an official attempt is committed, keeps Rule 9 authoritative, and exposes instructor-only aggregates. No reviewed empirical model is active. Do not enable on learner data until institutional approval and participant consent are established. See `docs/verification/phase-6-shadow-rollout-implementation-2026-10-25.md`. |
+| Production deployment and classroom pilot | Local deployment templates, readiness checklist, database connection budget guard, production-mode API docs policy, database readiness probe, Linux x86_64 backend image, backup/restore runbook, Vercel Hobby project, production-like runtime checker, and local dependency security fixes implemented | **Local technical readiness slice verified; Phase 7 overall pending** | The current backend image passed a synthetic production-mode run against local Supabase: liveness, `SELECT 1` readiness, docs disabled, Docker health healthy, and non-root/read-only/no-capability settings. Startup also works without the optional Gemini key; AI handlers map missing Gemini configuration to a clear HTTP 503 response (the authenticated route response was not exercised in the runtime check). On 2026-10-26, local npm and Python runtime-lock audits reported no known vulnerabilities after dependency updates; see `docs/verification/phase7-dependency-security-2026-10-26.md`. No Vercel deployment, VPS Compose runtime, production database/backup restore, load test, or classroom study is claimed. Consent/ethics and participant data requirements remain external gates. See `docs/PHASE7_DEPLOYMENT_READINESS.md`, `docs/PHASE7_BACKUP_RESTORE_RUNBOOK.md`, `docs/verification/phase7-local-runtime-2026-10-26.md`, `docs/verification/phase7-vercel-setup-2026-10-26.md`, `docs/verification/phase7-backend-image-build-2026-10-25.md`, `docs/verification/phase7-database-pool-budget-2026-10-25.md`, and `docs/verification/phase7-readiness-hardening-2026-10-26.md`. |
 
 ### Phase 1: Core Infrastructure, Auth & Database Setup (Days 1–5)
 * **Goal**: Establish the foundational infrastructure, database tables, and authentication shell with role-based routing.
@@ -363,7 +369,7 @@ Seed and verify one published programming challenge per language directly in loc
   1. Build gamification service (`backend/app/services/gamification/`): calculate XP on attempt success, check level thresholds, and unlock achievement badges.
   2. Implement Frontend Gamification UI: Level badge, XP bar, quest map, and unlocked achievement modal.
   3. Implement Rule-Based Sequencing (Rule 9): Advance to next difficulty tier upon passing topic quiz and achieving $\ge 80\%$ test cases on current challenge; otherwise route to remedial challenge.
-  4. Enforce rate limiting with `slowapi` on code execution and generation endpoints.
+  4. Enforce shared PostgreSQL quotas on code jobs and AI generation endpoints.
 * **Verification**: Student completing a quest receives XP, levels up, unlocks badges, and is presented with the next rule-sequenced challenge.
 
 ### Phase 5: Feature Engineering & Comparative ML Pipeline (Days 24–30)
@@ -381,21 +387,21 @@ Seed and verify one published programming challenge per language directly in loc
   3. Implement `ml_pipeline/train_compare.py` with nested `GroupKFold` splits grouped by `student_id` to prevent data leakage during evaluation and tuning.
   4. Tune `LogisticRegression` and `RandomForestClassifier` inside each training fold; fit preprocessing only on that fold's training data.
   5. Generate Accuracy, Precision, Recall, F1-Score, ROC-AUC curves, confusion matrices, and versioned joblib/model metadata artifacts.
-* **Verification**: The script includes each student's first cold-start outcome. Its synthetic bootstrap fallback is labeled and must not be reported as empirical classroom or thesis evidence; production inference rejects synthetic model artifacts.
-  Run `python ml_pipeline/train_compare.py --data-csv <attempts.csv>` for training. The CSV must contain one joined attempt/activity row with `id`, `student_id`, `activity_id`, `attempt_number`, `created_at`, `language`, `topic_concept`, `activity_type`, `difficulty_level`, `is_successful`, `score_percentage`, `error_category`, `compiler_status_id`, `execution_time_ms`, and `time_spent_seconds`. Omitting `--data-csv` generates bootstrap artifacts for development only. Copy trained artifacts into `ml_pipeline/artifacts/` on the deployment host before starting the backend; Compose mounts that folder read-only.
+* **Verification**: The script includes each student's first cold-start outcome. Its synthetic bootstrap fallback is labeled and must not be reported as empirical classroom or thesis evidence; the backend rejects synthetic model artifacts. Input validation rejects common identifying fields, raw UUID or numeric student identifiers, malformed telemetry, duplicate attempts, and non-chronological attempts. These checks cannot establish that arbitrary identifiers are anonymous; institutional approval and de-identification remain required.
+  For approved data only, run `python ml_pipeline/train_compare.py --data-csv <attempts.csv> --research-approved`. The flag records an operator attestation; it does not replace institutional approval or consent. The CSV must contain one joined attempt/activity row with `id`, pseudonymous `student_id`, `activity_id`, `attempt_number`, `created_at`, `language`, `topic_concept`, `activity_type`, `difficulty_level`, `is_successful`, `score_percentage`, `error_category`, `compiler_status_id`, `execution_time_ms`, and `time_spent_seconds`. Omitting `--data-csv` generates labeled development-only artifacts. Every training run is written atomically to a versioned directory with metadata and SHA-256 hashes. Training never activates or replaces a model. Phase 6 must separately review a model and create an explicit activation manifest before serving it.
 
 ### Phase 6: Shadow ML Evaluation for Task Sequencing (Days 31–34)
 * **Goal**: Evaluate trained models without changing student recommendations; deterministic rules remain the active sequencer until real, consented data supports a reviewed activation decision.
 * **Specific Objective**: SO-8.
 * **Deliverables**:
-  1. Load compatible serialized `.joblib` pipelines into backend memory on application startup (`lifespan` handler); keep rule-based sequencing available when artifacts are absent.
-  2. Create endpoint `/api/v1/predict/next-task`: extract the student's real-time feature vector, compute predictions from both models, and log an auditable row in `ml_predictions`.
-  3. Keep model outputs in offline evaluation or non-interfering shadow mode. Do not activate the adaptive sequencing policy below until validation and research review support it:
+  1. Load compatible serialized `.joblib` pipelines into backend memory on startup only when shadow scoring and the research-approval attestation are both enabled. Keep rule-based sequencing available when scoring is disabled or artifacts are unavailable or invalid.
+  2. After a successful official code or quiz attempt commits, optionally capture the model's next-activity prediction in `ml_predictions`. Sample runs never create predictions. The prediction and candidate action are not returned to students, and model failures cannot undo the saved attempt.
+  3. Keep Rule 9 as the only active student sequencer. Shadow writes default off; an operator attestation does not replace institutional approval or participant consent. A versioned per-student consent gate now exists, but approved wording, policy, and runtime verification are pending. Do not enable learner-history scoring until approval, participant consent, and authorization for this data use are all in place:
      - If Random Forest $P(\text{success}) < 0.40$: recommend remedial practice.
      - If $0.40 \le P(\text{success}) < 0.60$: recommend a standard next task.
      - If $P(\text{success}) \ge 0.60$: recommend advancing to the next level.
-  4. Build Instructor Analytics & Model Comparison dashboard displaying model prediction accuracy and student performance trajectories.
-* **Verification**: Shadow predictions can be joined to subsequent observed outcomes without changing the rule-based recommendation; analytics reports accuracy only for labeled predictions.
+  4. Provide an instructor-only aggregate view of model versions, prediction counts, and accuracy for predictions with a subsequently observed outcome. Do not expose per-student predictions or trajectories in this view.
+* **Verification**: The implementation record documents static review of the gates and response separation. Browser/API/database runtime verification is still pending; no reviewed empirical model is active and shadow scoring remains disabled. A later verification must use approved synthetic fixtures or properly approved and consented data, then confirm outcome joins and aggregate-only reporting. Adaptive sequencing activation remains a separate research and product decision.
 
 ### Phase 7: VPS Deployment, Classroom Study & Evaluation (Days 35–42)
 * **Goal**: Deploy production infrastructure, run classroom evaluation with NEMSU CS students, and gather research data for Chapter 4.
@@ -406,7 +412,7 @@ Seed and verify one published programming challenge per language directly in loc
   3. Conduct controlled classroom sessions with NEMSU CS students across C++, Python, and Java cohorts.
   4. Administer post-intervention functionality and usability questionnaire (System Usability Scale - SUS).
   5. Export anonymized dataset and finalize Chapter 4 empirical results.
-* **Verification**: Full end-to-end platform stability during concurrent student classroom usage; SUS survey responses and model performance logs compiled into thesis documentation.
+* **Verification**: Full end-to-end platform stability during concurrent student classroom usage; SUS survey responses and model performance logs compiled into thesis documentation. The local technical readiness slice now has a production-mode backend container check against local Supabase, documented in `docs/verification/phase7-local-runtime-2026-10-26.md`. This is not production deployment evidence. Vercel has a free Hobby project but no deployment; no VPS Compose runtime, production Supabase, successful production backup/restore rehearsal, load test, or classroom study is claimed. Hosting/provider decisions, public API domain/DNS, production service setup, institutional approval, approved consent text/version, participant consent, and authorized study results remain outstanding. See `docs/PHASE7_DEPLOYMENT_READINESS.md` and `docs/PHASE7_BACKUP_RESTORE_RUNBOOK.md` for the complete gate list.
 
 ---
 
@@ -429,10 +435,12 @@ Seed and verify one published programming challenge per language directly in loc
 ## 8. Development Environment & Quickstart Commands
 
 ### Prerequisites
-- Node.js 20+ & npm / pnpm
+- Node.js 20.9+ & npm / pnpm
 - Python 3.11+
-- Docker Engine & Docker Compose
-- Supabase Account & Google Gemini API Key
+- Docker Desktop & Docker Compose
+- Supabase CLI
+- The private Judge0 VM configured for local code execution
+- Google Gemini API key (only for instructor challenge generation and embeddings)
 
 ### Backend Setup
 ```bash
@@ -440,7 +448,7 @@ cd backend
 python -m venv .venv
 # Windows PowerShell
 .\.venv\Scripts\Activate.ps1
-pip install fastapi uvicorn sqlalchemy psycopg2-binary google-genai pymupdf pydantic pydantic-settings tenacity slowapi scikit-learn joblib httpx pytest
+pip install -r requirements-dev.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -451,8 +459,15 @@ npm install
 npm run dev
 ```
 
-### Infrastructure Setup
-```bash
-cd infra
-docker compose up -d
+### Local Infrastructure Setup (Windows PowerShell)
+
+From the repository root, start local Supabase and configure the private Judge0 VM endpoint:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\infra\start-local.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\infra\configure-judge0-vm.ps1
 ```
+
+The local script preserves existing local data and the Judge0 token; it does not start a second Judge0 stack. Follow [`docs/LOCAL_E2E.md`](LOCAL_E2E.md) for the backend, frontend, and browser steps.
+
+`infra/docker-compose.yml` is reserved for a later Linux VPS deployment. Do not use plain `docker compose up` for local development. Only after the production values are configured and `infra/preflight-vps.sh` succeeds should an operator start the profile with `docker compose --profile vps up -d`, following [`docs/PHASE7_DEPLOYMENT_READINESS.md`](PHASE7_DEPLOYMENT_READINESS.md).
