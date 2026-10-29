@@ -3918,6 +3918,9 @@ input[type="password"]::-webkit-strong-password-auto-fill-button {
   border-radius: 18px;
   background: #fff;
   box-shadow: 0 24px 70px rgb(30 20 55 / 25%);
+  /* The inner .legal-dialog-inner is the single scroll region; keep the dialog
+     itself from adding a second scrollbar, and clip content to the rounded corners. */
+  overflow: hidden;
 }
 .legal-dialog::backdrop { background: rgb(20 14 37 / 62%); }
 .legal-dialog-inner { position: relative; max-height: min(82dvh, 800px); overflow-y: auto; padding: clamp(22px, 4vw, 36px); }
