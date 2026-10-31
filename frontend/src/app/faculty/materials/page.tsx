@@ -466,7 +466,12 @@ function FacultyMaterials() {
                 tabIndex={-1}
               >
                 <div className="ws-row-main">
-                  <strong>{material.title}</strong>
+                  <div className="ws-row-heading">
+                    <strong>{material.title}</strong>
+                    {material.topic_concept ? (
+                      <span className="ws-tag" data-tooltip="Topic this material covers">{material.topic_concept}</span>
+                    ) : null}
+                  </div>
                   <p>
                     {material.filename || "Stored PDF"} · version {material.version_number} ·{" "}
                     {material.file_size_bytes ? `${Math.ceil(material.file_size_bytes / 1024)} KB` : "size unknown"} ·{" "}
@@ -474,7 +479,7 @@ function FacultyMaterials() {
                   </p>
                   <span className="ws-row-meta">
                     Uploaded {formatDateTime(material.created_at)} · {material.draft_count} linked draft
-                    {material.draft_count === 1 ? "" : "s"} · {material.topic_concept || "No topic"}
+                    {material.draft_count === 1 ? "" : "s"}
                   </span>
                   {material.processing_error ? (
                     <p className="ws-row-note">
