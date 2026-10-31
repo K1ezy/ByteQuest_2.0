@@ -5,7 +5,9 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "reac
 import { useRouter } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
 import { getErrorMessage } from "@/lib/api";
-import { Button, Notice, StatCard, StatusChip, shortId } from "@/components/workspace/ui";
+import { Button, ConfirmDialog, Notice, StatCard, StatusChip, shortId } from "@/components/workspace/ui";
+import { useToast } from "@/components/toast";
+import { cropCompressImage } from "@/lib/image";
 import {
   deleteMyAvatar,
   formatDateTime,
@@ -40,30 +42,57 @@ const LANGUAGE_LABEL: Record<string, string> = {
   java: "Java",
 };
 
-function initialOf(name: string): string {
-  const trimmed = name.trim();
-  return (trimmed[0] || "?").toUpperCase();
-}
-
 function hueFromSeed(seed: string): number {
   let hash = 0;
   for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) % 360;
   return hash;
 }
 
-function ProfileAvatar({ name, seed, url }: { name: string; seed: string; url?: string | null }) {
-  const hue = hueFromSeed(seed);
-  if (url) {
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img className="profile-avatar" src={url} alt="" />;
+/** Deterministic left-right symmetric 5x5 identicon pattern from a seed. */
+function identiconCells(seed: string): boolean[] {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
+  let x = (h >>> 0) || 1;
+  const nextBit = () => {
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    x >>>= 0;
+    return (x & 1) === 1;
+  };
+  const cells = new Array<boolean>(25).fill(false);
+  for (let row = 0; row < 5; row += 1) {
+    for (let col = 0; col < 3; col += 1) {
+      const on = nextBit();
+      cells[row * 5 + col] = on;
+      cells[row * 5 + (4 - col)] = on;
+    }
+  }
+  return cells;
+}
+
+function ProfileAvatar({ seed, url, busy }: { seed: string; url?: string | null; busy?: boolean }) {
+  const hue = hueFromSeed(seed);
   return (
-    <span
-      className="profile-avatar profile-avatar-mono"
-      aria-hidden="true"
-      style={{ background: `hsl(${hue} 70% 92%)`, color: `hsl(${hue} 52% 32%)` }}
-    >
-      {initialOf(name)}
+    <span className={`profile-avatar-wrap${busy ? " is-busy" : ""}`}>
+      {url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img className="profile-avatar" src={url} alt="" />
+      ) : (
+        <span className="profile-avatar" aria-hidden="true" style={{ display: "inline-block", lineHeight: 0, overflow: "hidden", background: `hsl(${hue} 70% 94%)` }}>
+          <svg viewBox="0 0 5 5" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+            {identiconCells(seed).map((on, index) =>
+              on ? (
+                <rect key={index} x={index % 5} y={Math.floor(index / 5)} width="1" height="1" fill={`hsl(${hue} 52% 42%)`} />
+              ) : null,
+            )}
+          </svg>
+        </span>
+      )}
+      {busy ? <span className="profile-avatar-spinner" aria-hidden="true" /> : null}
     </span>
   );
 }
@@ -314,23 +343,33 @@ function AdminSections({ a }: { a: AdminAnalytics }) {
   );
 }
 
+const COMPLETE_STEPS = [
+  { key: "name", label: "Add your name" },
+  { key: "photo", label: "Add a photo" },
+  { key: "bio", label: "Add a bio" },
+] as const;
+
 export default function ProfilePage() {
   const router = useRouter();
+  const toast = useToast();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [analytics, setAnalytics] = useState<ProfileAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
-  const [name, setName] = useState("");
-  const [bio, setBio] = useState("");
+  const [editingField, setEditingField] = useState<"name" | "bio" | null>(null);
+  const editingRef = useRef<"name" | "bio" | null>(null);
+  const [draft, setDraft] = useState("");
+  const [savingField, setSavingField] = useState(false);
+
+  const [trackOpen, setTrackOpen] = useState(false);
   const [language, setLanguage] = useState<ProgrammingLanguage>("python");
   const [yearLevel, setYearLevel] = useState(1);
   const [semester, setSemester] = useState(1);
+  const [trackSaving, setTrackSaving] = useState(false);
+
   const [avatarBusy, setAvatarBusy] = useState(false);
-  const [avatarError, setAvatarError] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(async () => {
@@ -358,39 +397,103 @@ export default function ProfilePage() {
     void load();
   }, [load]);
 
-  const beginEdit = useCallback(() => {
-    if (!profile) return;
-    setName(profile.display_name || "");
-    setBio(profile.bio || "");
-    setLanguage((profile.enrolled_language as ProgrammingLanguage) || "python");
-    setYearLevel(profile.year_level || 1);
-    setSemester(profile.semester || 1);
-    setSaveError("");
-    setEditing(true);
-  }, [profile]);
+  const startEdit = (field: "name" | "bio", current: string) => {
+    editingRef.current = field;
+    setDraft(current);
+    setEditingField(field);
+  };
 
-  const save = useCallback(async () => {
-    if (!profile) return;
-    setSaving(true);
-    setSaveError("");
+  const cancelEdit = () => {
+    editingRef.current = null;
+    setEditingField(null);
+  };
+
+  // Claimed via editingRef so Enter + blur (which both fire) only save once,
+  // and Escape (which clears the ref) never saves.
+  const saveField = async () => {
+    const field = editingRef.current;
+    if (!profile || !field) return;
+    editingRef.current = null;
+    const value = draft.trim();
+    setSavingField(true);
     try {
-      await updateMyProfile({ display_name: name, bio });
-      if (profile.role === "student") {
-        await updateMyTrack({ enrolled_language: language, year_level: yearLevel, semester });
-      }
-      setEditing(false);
-      await load();
+      const updated = await updateMyProfile(field === "name" ? { display_name: value } : { bio: value });
+      setProfile(updated);
+      setEditingField(null);
+      toast.show(field === "name" ? "Name updated" : "Bio updated", "success");
     } catch (caught) {
-      setSaveError(getErrorMessage(caught));
+      editingRef.current = field;
+      toast.show(getErrorMessage(caught), "error");
     } finally {
-      setSaving(false);
+      setSavingField(false);
     }
-  }, [profile, name, bio, language, yearLevel, semester, load]);
+  };
+
+  const saveTrack = async () => {
+    setTrackSaving(true);
+    try {
+      const updated = await updateMyTrack({ enrolled_language: language, year_level: yearLevel, semester });
+      setProfile(updated);
+      setTrackOpen(false);
+      toast.show("Learning track updated", "success");
+    } catch (caught) {
+      toast.show(getErrorMessage(caught), "error");
+    } finally {
+      setTrackSaving(false);
+    }
+  };
+
+  const onAvatarPicked = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setAvatarBusy(true);
+    try {
+      const processed = await cropCompressImage(file);
+      const ext = processed.type === "image/webp" ? "webp" : "jpg";
+      const updated = await uploadMyAvatar(new File([processed], `avatar.${ext}`, { type: processed.type }));
+      setProfile(updated);
+      toast.show("Photo updated", "success");
+    } catch (caught) {
+      toast.show(getErrorMessage(caught), "error");
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  const removeAvatar = async () => {
+    setAvatarBusy(true);
+    try {
+      const updated = await deleteMyAvatar();
+      setProfile(updated);
+      toast.show("Photo removed", "success");
+    } catch (caught) {
+      toast.show(getErrorMessage(caught), "error");
+    } finally {
+      setAvatarBusy(false);
+      setConfirmRemove(false);
+    }
+  };
 
   if (loading) {
     return (
       <div className="page-shell profile-shell">
-        <p className="ws-muted">Loading your profile…</p>
+        <section className="profile-header ws-panel">
+          <span className="ws-skeleton ws-skeleton-avatar" />
+          <div className="profile-header-main" style={{ width: "100%" }}>
+            <span className="ws-skeleton ws-skeleton-line" style={{ width: "40%", height: 22 }} />
+            <span className="ws-skeleton ws-skeleton-line" style={{ width: "60%" }} />
+            <span className="ws-skeleton ws-skeleton-line" style={{ width: "30%" }} />
+          </div>
+        </section>
+        <section className="ws-panel">
+          <span className="ws-skeleton ws-skeleton-line" style={{ width: "25%", height: 16 }} />
+          <div className="ws-stat-grid" style={{ marginTop: 12 }}>
+            {[0, 1, 2, 3].map((index) => (
+              <span key={index} className="ws-skeleton" style={{ height: 96 }} />
+            ))}
+          </div>
+        </section>
       </div>
     );
   }
@@ -405,45 +508,23 @@ export default function ProfilePage() {
 
   const displayName = profile.display_name?.trim() || shortId(profile.pseudonym_id);
   const memberSince = profile.created_at ? formatDateTime(profile.created_at) : null;
-
-  const onAvatarPicked = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-    if (file.size > 1_048_576) {
-      setAvatarError("Image must be 1 MB or smaller.");
-      return;
-    }
-    setAvatarBusy(true);
-    setAvatarError("");
-    try {
-      const updated = await uploadMyAvatar(file);
-      setProfile(updated);
-    } catch (caught) {
-      setAvatarError(getErrorMessage(caught));
-    } finally {
-      setAvatarBusy(false);
-    }
+  const done: Record<string, boolean> = {
+    name: Boolean(profile.display_name?.trim()),
+    photo: Boolean(profile.avatar_url),
+    bio: Boolean(profile.bio?.trim()),
   };
-
-  const removeAvatar = async () => {
-    setAvatarBusy(true);
-    setAvatarError("");
-    try {
-      const updated = await deleteMyAvatar();
-      setProfile(updated);
-    } catch (caught) {
-      setAvatarError(getErrorMessage(caught));
-    } finally {
-      setAvatarBusy(false);
-    }
+  const completePercent = Math.round((Object.values(done).filter(Boolean).length / COMPLETE_STEPS.length) * 100);
+  const actOnStep = (key: string) => {
+    if (key === "name") startEdit("name", profile.display_name || "");
+    else if (key === "bio") startEdit("bio", profile.bio || "");
+    else fileInputRef.current?.click();
   };
 
   return (
     <div className="page-shell profile-shell">
       <section className="profile-header ws-panel">
         <div className="profile-avatar-col">
-          <ProfileAvatar name={displayName} seed={profile.pseudonym_id} url={profile.avatar_url} />
+          <ProfileAvatar seed={profile.pseudonym_id} url={profile.avatar_url} busy={avatarBusy} />
           <input
             ref={fileInputRef}
             type="file"
@@ -456,96 +537,176 @@ export default function ProfilePage() {
               type="button"
               className="ws-inline-link"
               disabled={avatarBusy}
-              data-tooltip="Upload a profile photo (PNG, JPEG or WebP, up to 1 MB)"
+              data-tooltip="Upload a photo — it is cropped to a square and compressed automatically"
               onClick={() => fileInputRef.current?.click()}
             >
-              {avatarBusy ? "Working…" : profile.avatar_url ? "Change photo" : "Add photo"}
+              {profile.avatar_url ? "Change photo" : "Add photo"}
             </button>
             {profile.avatar_url ? (
-              <button type="button" className="ws-inline-link" disabled={avatarBusy} onClick={() => void removeAvatar()}>
+              <button type="button" className="ws-inline-link" disabled={avatarBusy} onClick={() => setConfirmRemove(true)}>
                 Remove
               </button>
             ) : null}
           </div>
-          {avatarError ? <p className="profile-avatar-error" role="alert">{avatarError}</p> : null}
         </div>
+
         <div className="profile-header-main">
+          {completePercent < 100 ? (
+            <div className="profile-complete">
+              <div className="profile-complete-top">
+                <strong>Complete your profile</strong>
+                <span>{completePercent}%</span>
+              </div>
+              <div className="profile-complete-bar">
+                <div className="profile-complete-fill" style={{ width: `${completePercent}%` }} />
+              </div>
+              <ul className="profile-complete-list">
+                {COMPLETE_STEPS.filter((step) => !done[step.key]).map((step) => (
+                  <li key={step.key}>
+                    <button type="button" onClick={() => actOnStep(step.key)}>{step.label}</button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <div className="profile-header-top">
-            <h1>{displayName}</h1>
-            <StatusChip state={profile.role} label={ROLE_LABEL[profile.role]} tone={profile.role === "admin" ? "bad" : profile.role === "instructor" ? "info" : "good"} />
+            {editingField === "name" ? (
+              <span className="profile-inline-name" style={{ flex: 1 }}>
+                <input
+                  className="profile-inline-input"
+                  autoFocus
+                  maxLength={120}
+                  value={draft}
+                  disabled={savingField}
+                  placeholder="Your name"
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void saveField();
+                    if (event.key === "Escape") cancelEdit();
+                  }}
+                  onBlur={() => void saveField()}
+                />
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="profile-editable"
+                data-tooltip="Click to edit your name"
+                onClick={() => startEdit("name", profile.display_name || "")}
+              >
+                <h1 style={{ margin: 0 }}>{displayName}</h1>
+                <span className="profile-edit-pencil" aria-hidden="true">✎</span>
+              </button>
+            )}
+            <StatusChip
+              state={profile.role}
+              label={ROLE_LABEL[profile.role]}
+              tone={profile.role === "admin" ? "bad" : profile.role === "instructor" ? "info" : "good"}
+            />
           </div>
+
           <p className="profile-header-meta">
             <code>{shortId(profile.pseudonym_id)}</code>
             {profile.email ? <> · {profile.email}</> : null}
             {memberSince ? <> · Member since {memberSince}</> : null}
           </p>
+
           {profile.role === "student" ? (
             <p className="profile-header-meta">
-              {LANGUAGE_LABEL[profile.enrolled_language] || profile.enrolled_language} track · Year {profile.year_level} · Semester {profile.semester}
+              {LANGUAGE_LABEL[profile.enrolled_language] || profile.enrolled_language} track · Year {profile.year_level} · Semester {profile.semester}{" "}
+              <button
+                type="button"
+                className="ws-inline-link"
+                onClick={() => {
+                  if (!trackOpen) {
+                    setLanguage((profile.enrolled_language as ProgrammingLanguage) || "python");
+                    setYearLevel(profile.year_level || 1);
+                    setSemester(profile.semester || 1);
+                  }
+                  setTrackOpen((open) => !open);
+                }}
+              >
+                {trackOpen ? "Close" : "Edit track"}
+              </button>
             </p>
           ) : null}
-          {profile.bio ? <p className="profile-bio">{profile.bio}</p> : <p className="ws-muted profile-bio">No bio yet.</p>}
-        </div>
-        {!editing ? (
-          <Button variant="outline" data-tooltip="Edit your name, bio and details" onClick={beginEdit}>
-            Edit profile
-          </Button>
-        ) : null}
-      </section>
 
-      {editing ? (
-        <section className="ws-panel profile-edit" aria-label="Edit profile">
-          <div className="ws-panel-head">
-            <div>
-              <p className="eyebrow-label">EDIT</p>
-              <h2>Edit your profile</h2>
-            </div>
-          </div>
-          <label className="profile-field">
-            <span>Display name</span>
-            <input value={name} maxLength={120} onChange={(event) => setName(event.target.value)} placeholder="How your name appears" />
-          </label>
-          <label className="profile-field">
-            <span>Bio</span>
-            <textarea value={bio} maxLength={500} rows={3} onChange={(event) => setBio(event.target.value)} placeholder="A short line about you (optional)" />
-          </label>
-          {profile.role === "student" ? (
-            <div className="profile-field-row">
-              <label className="profile-field">
-                <span>Track</span>
+          {trackOpen && profile.role === "student" ? (
+            <div className="profile-track-edit">
+              <div className="profile-track-grid">
                 <select value={language} onChange={(event) => setLanguage(event.target.value as ProgrammingLanguage)}>
                   {LANGUAGES.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
-              </label>
-              <label className="profile-field">
-                <span>Year</span>
                 <select value={yearLevel} onChange={(event) => setYearLevel(Number(event.target.value))}>
                   {[1, 2, 3, 4].map((value) => <option key={value} value={value}>Year {value}</option>)}
                 </select>
-              </label>
-              <label className="profile-field">
-                <span>Semester</span>
                 <select value={semester} onChange={(event) => setSemester(Number(event.target.value))}>
                   {[1, 2].map((value) => <option key={value} value={value}>Semester {value}</option>)}
                 </select>
-              </label>
+              </div>
+              <div className="ws-inline-actions" style={{ marginTop: 10 }}>
+                <Button variant="primary" disabled={trackSaving} onClick={() => void saveTrack()}>
+                  {trackSaving ? "Saving…" : "Save track"}
+                </Button>
+                <Button variant="quiet" disabled={trackSaving} onClick={() => setTrackOpen(false)}>Cancel</Button>
+              </div>
             </div>
           ) : null}
-          {saveError ? <Notice tone="error">{saveError}</Notice> : null}
-          <div className="ws-inline-actions">
-            <Button variant="primary" disabled={saving} data-tooltip="Save your profile changes" onClick={() => void save()}>
-              {saving ? "Saving…" : "Save changes"}
-            </Button>
-            <Button variant="quiet" disabled={saving} onClick={() => setEditing(false)}>Cancel</Button>
-          </div>
-        </section>
-      ) : null}
+
+          {editingField === "bio" ? (
+            <div style={{ marginTop: 10 }}>
+              <textarea
+                className="profile-inline-textarea"
+                autoFocus
+                rows={3}
+                maxLength={500}
+                value={draft}
+                disabled={savingField}
+                placeholder="A short line about you"
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") cancelEdit();
+                }}
+              />
+              <div className="profile-inline-actions">
+                <Button variant="primary" disabled={savingField} onClick={() => void saveField()}>
+                  {savingField ? "Saving…" : "Save bio"}
+                </Button>
+                <Button variant="quiet" disabled={savingField} onClick={cancelEdit}>Cancel</Button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="profile-editable profile-bio"
+              data-tooltip="Click to edit your bio"
+              onClick={() => startEdit("bio", profile.bio || "")}
+            >
+              <span className={profile.bio ? "" : "ws-muted"}>{profile.bio || "Add a bio"}</span>
+              <span className="profile-edit-pencil" aria-hidden="true">✎</span>
+            </button>
+          )}
+        </div>
+      </section>
 
       {analytics?.student ? <StudentSections a={analytics.student} /> : null}
       {analytics?.instructor ? <InstructorSections a={analytics.instructor} /> : null}
       {analytics?.admin ? <AdminSections a={analytics.admin} /> : null}
+
+      <ConfirmDialog
+        open={confirmRemove}
+        title="Remove profile photo?"
+        confirmLabel="Remove photo"
+        tone="danger"
+        busy={avatarBusy}
+        onConfirm={() => void removeAvatar()}
+        onCancel={() => setConfirmRemove(false)}
+      >
+        Your avatar will fall back to the generated pattern. You can upload a new photo any time.
+      </ConfirmDialog>
     </div>
   );
 }

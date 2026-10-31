@@ -6,6 +6,7 @@ import { AppTooltips } from "@/components/app-tooltips";
 import { AccessibilityProvider } from "@/components/accessibility-provider";
 import { ChatProvider } from "@/components/chat/chat-provider";
 import { ChatShell } from "@/components/chat/chat-shell";
+import { ToastProvider } from "@/components/toast";
 import "./globals.css";
 
 const byteBounce = localFont({
@@ -25,17 +26,19 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="en" className={byteBounce.variable}>
       <body>
         <AccessibilityProvider>
-          <ChatProvider>
-            <a href="#main-content" className="skip-to-content">
-              Skip to main workspace
-            </a>
-            <SiteHeader />
-            <main id="main-content" tabIndex={-1}>{children}</main>
-            <AppTooltips />
-            <Suspense fallback={null}>
-              <ChatShell />
-            </Suspense>
-          </ChatProvider>
+          <ToastProvider>
+            <ChatProvider>
+              <a href="#main-content" className="skip-to-content">
+                Skip to main workspace
+              </a>
+              <SiteHeader />
+              <main id="main-content" tabIndex={-1}>{children}</main>
+              <AppTooltips />
+              <Suspense fallback={null}>
+                <ChatShell />
+              </Suspense>
+            </ChatProvider>
+          </ToastProvider>
         </AccessibilityProvider>
       </body>
     </html>
