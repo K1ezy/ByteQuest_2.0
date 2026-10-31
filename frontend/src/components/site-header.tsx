@@ -131,6 +131,7 @@ export function SiteHeader({ isAuthenticated }: SiteHeaderProps) {
                     <span>{profile.role === "admin" ? "Administrator" : profile.role === "instructor" ? "Faculty" : "Student"}</span>
                     {!profile.display_name ? <code className="ws-row-meta">{profile.pseudonym_id}</code> : null}
                   </div>
+                  <Link role="menuitem" href="/profile" onClick={() => setAccountOpen(false)}>Your profile</Link>
                   <Link role="menuitem" href="/quests?view=accessibility" onClick={() => setAccountOpen(false)}>Accessibility settings</Link>
                   <Link role="menuitem" href="/quests" onClick={() => setAccountOpen(false)}>Student Quest Map</Link>
                   <button role="menuitem" type="button" disabled={isSigningOut} onClick={() => void signOut()}>

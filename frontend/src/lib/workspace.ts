@@ -1,6 +1,7 @@
 "use client";
 
 import { apiRequest } from "@/lib/api";
+import type { Profile, ProgrammingLanguage, UserRole } from "@/lib/types";
 
 /** Typed calls for the faculty and administrator workspace. All of them use
  * the application's single API client so auth, errors and retries stay
@@ -900,4 +901,119 @@ export function fromDateTimeInput(value: string): string | null {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed.toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// Profile + self-service analytics (all roles)
+// ---------------------------------------------------------------------------
+
+export interface TypeBreakdown {
+  activity_type: string;
+  attempts: number;
+  average_score: number;
+  pass_rate: number;
+}
+
+export interface TopicBreakdown {
+  topic: string;
+  attempts: number;
+  average_score: number;
+}
+
+export interface TrendPoint {
+  created_at: string;
+  score_percentage: number;
+  title: string | null;
+}
+
+export interface ExamHistoryEntry {
+  exam_id: string;
+  title: string;
+  status: string;
+  score: number | null;
+  max_score: number | null;
+  submitted_at: string | null;
+}
+
+export interface BadgeEntry {
+  code: string;
+  name: string;
+  description: string | null;
+  xp_bonus: number;
+  awarded_at: string | null;
+}
+
+export interface StudentAnalytics {
+  total_attempts: number;
+  successful_attempts: number;
+  pass_rate: number;
+  average_score: number;
+  best_score: number;
+  total_time_seconds: number;
+  xp_points: number;
+  current_level: number;
+  badge_count: number;
+  by_type: TypeBreakdown[];
+  by_topic: TopicBreakdown[];
+  score_trend: TrendPoint[];
+  exam_history: ExamHistoryEntry[];
+  badges: BadgeEntry[];
+}
+
+export interface InstructorAnalytics {
+  courses: number;
+  activities_created: number;
+  activities_published: number;
+  drafts_reviewed: number;
+  materials_uploaded: number;
+  learners_taught: number;
+}
+
+export interface ProfileAuditEntry {
+  action: string;
+  entity_type: string;
+  summary: string;
+  created_at: string;
+}
+
+export interface AdminAnalytics {
+  total_accounts: number;
+  accounts_by_role: Record<string, number>;
+  total_courses: number;
+  total_activities: number;
+  total_materials: number;
+  recent_audit: ProfileAuditEntry[];
+}
+
+export interface ProfileAnalytics {
+  role: UserRole;
+  student?: StudentAnalytics | null;
+  instructor?: InstructorAnalytics | null;
+  admin?: AdminAnalytics | null;
+}
+
+export function getMyProfile() {
+  return apiRequest<Profile>("/profile/me");
+}
+
+export function updateMyProfile(body: { display_name?: string | null; bio?: string | null }) {
+  return apiRequest<Profile>("/profile/me", { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export function updateMyTrack(body: { enrolled_language: ProgrammingLanguage; year_level: number; semester: number }) {
+  return apiRequest<Profile>("/profile/onboarding", { method: "PUT", body: JSON.stringify(body) });
+}
+
+export function getMyAnalytics() {
+  return apiRequest<ProfileAnalytics>("/profile/me/analytics");
+}
+
+export function uploadMyAvatar(file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  return apiRequest<Profile>("/profile/me/avatar", { method: "POST", body: form });
+}
+
+export function deleteMyAvatar() {
+  return apiRequest<Profile>("/profile/me/avatar", { method: "DELETE" });
 }

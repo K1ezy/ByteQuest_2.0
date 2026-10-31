@@ -11,6 +11,10 @@ export interface Profile {
   xp_points: number;
   current_level: number;
   display_name?: string | null;
+  bio?: string | null;
+  avatar_url?: string | null;
+  email?: string | null;
+  created_at?: string | null;
 }
 
 export interface QuizOption {
