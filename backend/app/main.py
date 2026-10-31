@@ -27,7 +27,7 @@ from app.services.ml_predictor.predictor import (
     load_ml_models,
 )
 from app.services.judge0.client import judge0_client
-from app.services.storage.supabase_storage import pdf_storage
+from app.services.storage.supabase_storage import avatar_storage, pdf_storage
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,7 @@ async def lifespan(app: FastAPI):
         app.state.http_client = http_client
         judge0_client.set_http_client(http_client)
         pdf_storage.set_http_client(http_client)
+        avatar_storage.set_http_client(http_client)
         try:
             if not settings.ML_SHADOW_ENABLED:
                 app.state.ml_shadow_status = "disabled"
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
         finally:
             judge0_client.set_http_client(None)
             pdf_storage.set_http_client(None)
+            avatar_storage.set_http_client(None)
             app.state.http_client = None
     logger.info("Shutting down %s", settings.PROJECT_NAME)
 

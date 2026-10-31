@@ -437,6 +437,9 @@ export function WorkspaceProvider({ role, children }: { role: WorkspaceRole; chi
                     </span>
                     {!profile.display_name?.trim() ? <code className="ws-row-meta">{profile.pseudonym_id}</code> : null}
                   </div>
+                  <Link role="menuitem" href="/profile">
+                    Your profile
+                  </Link>
                   <Link role="menuitem" href={role === "faculty" ? "/faculty/accessibility" : "/admin/accessibility"}>
                     Accessibility settings
                   </Link>

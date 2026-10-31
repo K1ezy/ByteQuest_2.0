@@ -135,3 +135,70 @@ class SupabasePDFStorage:
 
 
 pdf_storage = SupabasePDFStorage()
+
+
+AVATAR_BUCKET = "bytequest-avatars"
+
+
+class SupabaseAvatarStorage:
+    """Public avatar bucket: objects are served over the public storage URL so a
+    plain <img> tag can render them. Writes use the service key (RLS bypass)."""
+
+    def __init__(self) -> None:
+        settings = get_settings()
+        self._base_url = settings.SUPABASE_URL.rstrip("/")
+        self._api_key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_SECRET_KEY
+        self._http_client: httpx.AsyncClient | None = None
+
+    def set_http_client(self, client: httpx.AsyncClient | None) -> None:
+        self._http_client = client
+
+    @asynccontextmanager
+    async def _client(self) -> AsyncIterator[httpx.AsyncClient]:
+        client = self._http_client
+        if client is not None and not client.is_closed:
+            yield client
+            return
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as temporary_client:
+            yield temporary_client
+
+    def _headers(self) -> dict[str, str]:
+        if not self._base_url or not self._api_key:
+            raise StorageError("Avatar storage is not configured.")
+        return {"apikey": self._api_key, "Authorization": f"Bearer {self._api_key}"}
+
+    def public_url(self, path: str) -> str:
+        encoded = quote(path, safe="/")
+        return f"{self._base_url}/storage/v1/object/public/{AVATAR_BUCKET}/{encoded}"
+
+    async def upload(self, path: str, content: bytes, content_type: str) -> str:
+        encoded = quote(path, safe="/")
+        try:
+            async with self._client() as client:
+                response = await client.post(
+                    f"{self._base_url}/storage/v1/object/{AVATAR_BUCKET}/{encoded}",
+                    headers={**self._headers(), "Content-Type": content_type, "x-upsert": "true"},
+                    content=content,
+                    timeout=_TIMEOUT,
+                )
+                response.raise_for_status()
+        except (httpx.HTTPError, StorageError) as exc:
+            raise StorageError("The avatar could not be saved to storage.") from exc
+        return self.public_url(path)
+
+    async def delete(self, path: str) -> None:
+        encoded = quote(path, safe="/")
+        try:
+            async with self._client() as client:
+                response = await client.request(
+                    "DELETE",
+                    f"{self._base_url}/storage/v1/object/{AVATAR_BUCKET}/{encoded}",
+                    headers=self._headers(),
+                    timeout=_TIMEOUT,
+                )
+                response.raise_for_status()
+        except (httpx.HTTPError, StorageError) as exc:
+            raise StorageError("The avatar could not be removed from storage.") from exc
+
+
+avatar_storage = SupabaseAvatarStorage()

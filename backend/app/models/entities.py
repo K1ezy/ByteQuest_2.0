@@ -91,6 +91,8 @@ class Profile(Base):
     deactivated_at = Column(DateTime(timezone=True), nullable=True)
     display_name = Column(String(120), nullable=True)
     email = Column(String(320), nullable=True)
+    avatar_url = Column(Text, nullable=True)
+    bio = Column(String(500), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
