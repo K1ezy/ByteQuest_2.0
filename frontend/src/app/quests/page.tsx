@@ -403,10 +403,10 @@ function QuestsPageContent() {
         </Link>
         <div className="qm-top-actions">
           <div className="qm-add-wrap">
-            <button className="qm-icon-button qm-add-button" type="button" aria-label="Quest actions" data-tooltip={canCreateQuest ? "Create a quest group or join one with a code." : "Preview quest creation or join one with a code."} aria-expanded={actionMenuOpen} onClick={() => setActionMenuOpen((open) => !open)}>+</button>
+            <button className="qm-icon-button qm-add-button" type="button" aria-label="Workshop actions" data-tooltip={canCreateQuest ? "Create a workshop or join one with a code, like Google Classroom." : "Preview workshop creation or join one with a code, like Google Classroom."} aria-expanded={actionMenuOpen} onClick={() => setActionMenuOpen((open) => !open)}>+</button>
             {actionMenuOpen && <div className="qm-action-menu">
-              <button type="button" onClick={() => openAction("create")}>Create Quest</button>
-              <button type="button" onClick={() => openAction("join")}>Join Quest</button>
+              <button type="button" data-tooltip="Like Google Classroom: create a workshop space that students join with a code." onClick={() => openAction("create")}>Create Workshop</button>
+              <button type="button" data-tooltip="Like Google Classroom: join a workshop using the code your instructor shared." onClick={() => openAction("join")}>Join Workshop</button>
             </div>}
           </div>
           {hasSession && profile ? (
@@ -670,10 +670,10 @@ function QuestsPageContent() {
           {!selectedGroup && groups.length === 0 && <div className="qm-empty-hero">
             <Image src="/illustrations/quest-scroll-purple.png" alt="Purple quest scroll and black feather" width={220} height={220} priority />
             <h2>Add a quest to get started</h2>
-            <p>{canCreateQuest ? "Create a quest space or join one with a code." : "Explore quest creation or join with a code from your faculty member."}</p>
+            <p>{canCreateQuest ? "Create a workshop or join one with a code." : "Explore workshop creation or join with a code from your faculty member."}</p>
             <div className="qm-empty-actions">
-              <button type="button" className="qm-empty-action" onClick={() => openAction("create")}>Create Quest</button>
-              <button type="button" className="qm-empty-action" onClick={() => openAction("join")}>Join Quest</button>
+              <button type="button" className="qm-empty-action" data-tooltip="Like Google Classroom: create a workshop space that students join with a code." onClick={() => openAction("create")}>Create Workshop</button>
+              <button type="button" className="qm-empty-action" data-tooltip="Like Google Classroom: join a workshop using the code your instructor shared." onClick={() => openAction("join")}>Join Workshop</button>
             </div>
           </div>}
           {message && (
@@ -910,19 +910,19 @@ function QuestsPageContent() {
       {actionMode && <div className="qm-dialog-backdrop" onMouseDown={() => setActionMode(null)}>
         <section className="qm-dialog" role="dialog" aria-modal="true" aria-labelledby="qm-dialog-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape") setActionMode(null); }}>
           <div className="qm-dialog-heading">
-            <h2 id="qm-dialog-title">{actionMode === "create" ? "Create Quest" : actionMode === "join" ? "Join Quest" : "Add activities"}</h2>
+            <h2 id="qm-dialog-title">{actionMode === "create" ? "Create Workshop" : actionMode === "join" ? "Join Workshop" : "Add activities"}</h2>
             <button type="button" className="qm-icon-button" aria-label="Close dialog" data-tooltip="Close this quest dialog." onClick={() => setActionMode(null)}>×</button>
           </div>
           <form onSubmit={(event) => void submitQuestAction(event)}>
-            {actionMode === "create" && !canCreateQuest && <p className="qm-dialog-note">You can preview quest creation here. Saving a quest currently requires faculty or admin access.</p>}
+            {actionMode === "create" && !canCreateQuest && <p className="qm-dialog-note">You can preview workshop creation here. Saving a workshop currently requires faculty or admin access.</p>}
             {actionMode === "create" && <>
-              <label>Quest name<input autoFocus required minLength={3} maxLength={80} value={newGroupName} onChange={(event) => setNewGroupName(event.target.value)} placeholder="e.g. Python Fundamentals" /></label>
+              <label>Workshop name<input autoFocus required minLength={3} maxLength={80} value={newGroupName} onChange={(event) => setNewGroupName(event.target.value)} placeholder="e.g. Python Fundamentals" /></label>
               <label>Description <span>(optional)</span><textarea maxLength={500} rows={2} value={newGroupDescription} onChange={(event) => setNewGroupDescription(event.target.value)} placeholder="What will members learn?" /></label>
               <label>Language<select value={newGroupLanguage} onChange={(event) => { setNewGroupLanguage(event.target.value as ProgrammingLanguage); setSelectedActivityIds([]); }}><option value="python">Python</option><option value="cpp">C++</option><option value="java">Java</option></select></label>
             </>}
             {actionMode === "join" && <>
-              <p>Enter the 8-character code shared by the quest creator.</p>
-              <label>Quest code<input autoFocus required minLength={8} maxLength={12} autoCapitalize="characters" value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder="ABCD2345" /></label>
+              <p>Enter the 8-character code shared by the workshop creator.</p>
+              <label>Workshop code<input autoFocus required minLength={8} maxLength={12} autoCapitalize="characters" value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder="ABCD2345" /></label>
             </>}
             {(actionMode === "create" || actionMode === "add") && <fieldset className="qm-activity-picker">
               <legend>Published activities {actionMode === "create" ? "(optional)" : "to add"}</legend>
@@ -934,7 +934,7 @@ function QuestsPageContent() {
             {actionError && <p className="qm-dialog-error" role="alert">{actionError}</p>}
             <div className="qm-dialog-actions">
               <button type="button" className="qm-text-action" onClick={() => setActionMode(null)}>Cancel</button>
-              <button type="submit" className="qm-primary-action" disabled={actionBusy || (actionMode === "create" && !canCreateQuest) || (actionMode === "add" && selectedActivityIds.length === 0)}>{actionBusy ? "Saving…" : actionMode === "create" ? "Create Quest" : actionMode === "join" ? "Join Quest" : "Add activities"}</button>
+              <button type="submit" className="qm-primary-action" disabled={actionBusy || (actionMode === "create" && !canCreateQuest) || (actionMode === "add" && selectedActivityIds.length === 0)}>{actionBusy ? "Saving…" : actionMode === "create" ? "Create Workshop" : actionMode === "join" ? "Join Workshop" : "Add activities"}</button>
             </div>
           </form>
         </section>
