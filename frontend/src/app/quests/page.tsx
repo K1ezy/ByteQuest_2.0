@@ -12,6 +12,8 @@ import { FacultyView } from "@/components/faculty-view";
 import { JourneyView } from "@/components/journey-view";
 import { useSignOut } from "@/hooks/use-sign-out";
 import { QuestNavIcon } from "@/components/workspace/quest-nav-icon";
+import { UserAvatar } from "@/components/user-avatar";
+import { shortId } from "@/components/workspace/ui";
 import type { Profile, ProgrammingLanguage, Quest, QuestGroup } from "@/lib/types";
 
 interface LeaderboardEntry {
@@ -411,20 +413,28 @@ function QuestsPageContent() {
             <div className="ws-account" ref={accountRef}>
               <button
                 type="button"
-                className="qm-avatar ws-avatar-button"
+                className="ws-avatar-button"
                 aria-haspopup="menu"
                 aria-expanded={accountOpen}
-                aria-label={`Account menu for ${profile.display_name || profile.pseudonym_id}`}
+                aria-label={`Account menu for ${profile.display_name || shortId(profile.pseudonym_id)}`}
                 onClick={() => setAccountOpen((open) => !open)}
               >
-                {(profile.display_name || profile.pseudonym_id).slice(0, 1).toUpperCase()}
+                <UserAvatar
+                  seed={profile.pseudonym_id}
+                  name={profile.display_name || shortId(profile.pseudonym_id)}
+                  url={profile.avatar_url}
+                  size="nav"
+                />
               </button>
               {accountOpen && (
                 <div className="ws-account-menu" role="menu">
                   <div className="ws-account-identity">
-                    <strong>{profile.display_name || profile.pseudonym_id}</strong>
+                    <strong>{profile.display_name || shortId(profile.pseudonym_id)}</strong>
                     <span>{profile.role === "admin" ? "Administrator" : profile.role === "instructor" ? "Faculty" : "Student"}</span>
                   </div>
+                  <Link role="menuitem" href="/profile" onClick={() => setAccountOpen(false)}>
+                    Your profile
+                  </Link>
                   <Link role="menuitem" href="/quests?view=accessibility" onClick={() => setAccountOpen(false)}>
                     Accessibility settings
                   </Link>

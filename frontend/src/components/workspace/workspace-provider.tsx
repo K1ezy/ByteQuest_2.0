@@ -20,6 +20,7 @@ import type { Profile } from "@/lib/types";
 import { subscribeToProfileUpdates } from "@/lib/profile-events";
 import { getAdminCourses, getFacultyCourses, type CourseSummary, type WorkspaceRole } from "@/lib/workspace";
 import { Button, shortId } from "@/components/workspace/ui";
+import { UserAvatar } from "@/components/user-avatar";
 import { QuestNavIcon, type QuestNavIconName } from "@/components/workspace/quest-nav-icon";
 
 interface NavItem {
@@ -422,13 +423,18 @@ export function WorkspaceProvider({ role, children }: { role: WorkspaceRole; chi
             <div className="ws-account" ref={accountRef}>
               <button
                 type="button"
-                className="qm-avatar ws-avatar-button"
+                className="ws-avatar-button"
                 aria-haspopup="menu"
                 aria-expanded={accountOpen}
-                aria-label={`Account menu for ${profile.display_name || profile.pseudonym_id}`}
+                aria-label={`Account menu for ${profile.display_name || shortId(profile.pseudonym_id)}`}
                 onClick={() => setAccountOpen((open) => !open)}
               >
-                {(profile.display_name?.trim() || profile.pseudonym_id.replace(/^[a-z]+_/i, "") || "B").slice(0, 1).toUpperCase()}
+                <UserAvatar
+                  seed={profile.pseudonym_id}
+                  name={profile.display_name || shortId(profile.pseudonym_id)}
+                  url={profile.avatar_url}
+                  size="nav"
+                />
               </button>
               {accountOpen ? (
                 <div className="ws-account-menu" role="menu">

@@ -61,6 +61,7 @@ from app.services.monitoring import (
 )
 from app.services.settings_service import list_settings, update_setting
 from app.services.storage.supabase_storage import StorageError, pdf_storage
+from app.services.profile_attention import account_needs_action, membership_rows
 from app.services.workspace_common import (
     activity_state,
     as_aware,
@@ -219,32 +220,13 @@ def course_reference_brief(course: Course | None) -> dict | None:
 # Accounts
 # ---------------------------------------------------------------------------
 def _membership_rows(db: Session, profile_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[CourseMember]]:
-    if not profile_ids:
-        return {}
-    rows = (
-        db.query(CourseMember)
-        .filter(CourseMember.profile_id.in_(profile_ids), CourseMember.status != "removed")
-        .all()
-    )
-    result: dict[uuid.UUID, list[CourseMember]] = {}
-    for row in rows:
-        result.setdefault(row.profile_id, []).append(row)
-    return result
+    # Shared with the self-service profile so both surfaces agree.
+    return membership_rows(db, profile_ids)
 
 
 def _account_needs_action(profile: Profile, memberships: list[CourseMember]) -> tuple[bool, str | None]:
-    if profile.account_status != "active":
-        return False, None
-    # Administrators hold platform-wide access; course assignment is not required.
-    if _role_value(profile) == "admin":
-        return False, None
-    pending = [item for item in memberships if item.status == "pending"]
-    if pending:
-        return True, "A course assignment is waiting for confirmation."
-    active = [item for item in memberships if item.status == "active"]
-    if not active:
-        return True, "No active course access yet."
-    return False, None
+    # Shared with the self-service profile so both surfaces agree.
+    return account_needs_action(profile, memberships)
 
 
 def _serialize_account(
