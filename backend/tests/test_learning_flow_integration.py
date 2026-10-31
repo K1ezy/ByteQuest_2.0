@@ -722,8 +722,37 @@ def test_exam_snapshot_autosave_and_result_embargo(flow, monkeypatch):
         db.get(Exam, uuid.UUID(exam_id)).closes_at = now - timedelta(seconds=1)
         db.commit()
     assert client.get(f"/api/v1/exams/attempts/{attempt_id}", headers=student).json()["result"] is None
+    hidden_profile = client.get("/api/v1/profile/me/analytics", headers=student)
+    assert hidden_profile.status_code == 200, hidden_profile.text
+    hidden_student = hidden_profile.json()["student"]
+    assert hidden_student["total_attempts"] == 0
+    assert hidden_student["xp_points"] == 0
+    assert hidden_student["current_level"] == 1
+    assert hidden_student["active_days_30"] == 0
+    assert hidden_student["score_trend"] == []
+    assert hidden_student["exam_history"][0]["score"] is None
+    assert hidden_student["exam_history"][0]["results_released"] is False
+    hidden_progress = client.get("/api/v1/quests/progress", headers=student).json()
+    assert hidden_progress["total_attempts"] == 0
+    assert client.get("/api/v1/pilot/dashboard", headers=student).json()["completed"] == 0
+    assert not any(quest["is_completed"] for quest in client.get("/api/v1/quests", headers=student).json())
+    assert client.get(f"/api/v1/pilot/activities/{challenge_id}/solution", headers=student).status_code == 403
     assert client.post(f"/api/v1/exams/instructor/{exam_id}/release", headers=instructor).status_code == 200
     assert "PRINT_INPUT" in client.get(f"/api/v1/exams/attempts/{attempt_id}", headers=student).text
+    released_profile = client.get("/api/v1/profile/me/analytics", headers=student).json()["student"]
+    assert released_profile["total_attempts"] == 2
+    assert released_profile["xp_points"] > 0
+    assert released_profile["active_days_30"] == 1
+    assert sum(day["attempts"] for day in released_profile["activity_days"]) == 2
+    assert released_profile["exam_history"][0]["score"] == 100
+    assert released_profile["exam_history"][0]["results_released"] is True
+    assert client.get("/api/v1/quests/progress", headers=student).json()["total_attempts"] == 2
+    assert client.get("/api/v1/pilot/dashboard", headers=student).json()["completed"] == 2
+    released_quests = {
+        quest["id"]: quest["is_completed"] for quest in client.get("/api/v1/quests", headers=student).json()
+    }
+    assert released_quests[str(quiz_id)] is True
+    assert released_quests[str(challenge_id)] is True
     retake = client.post(f"/api/v1/exams/instructor/{exam_id}/retakes/{users['student']}",
         headers=instructor, json={"opens_at": (now + timedelta(minutes=5)).isoformat(),
                                   "closes_at": (now + timedelta(hours=1)).isoformat(),
@@ -745,12 +774,20 @@ def test_exam_snapshot_autosave_and_result_embargo(flow, monkeypatch):
     anyio.run(anyio.to_thread.run_sync, exam_worker.grade_exam, uuid.UUID(second_id))
     second_result = client.get(f"/api/v1/exams/attempts/{second_id}", headers=student).json()
     assert second_result["result"] is None and second_result["results_released"] is False
+    retake_profile = client.get("/api/v1/profile/me/analytics", headers=student).json()["student"]
+    assert retake_profile["total_attempts"] == 2
+    assert retake_profile["exam_history"][0]["score"] is None
+    assert retake_profile["exam_history"][0]["results_released"] is False
+    assert retake_profile["exam_history"][1]["score"] == 100
     with new_session() as db:
         grant = db.query(ExamRetakeGrant).filter(ExamRetakeGrant.exam_id == uuid.UUID(exam_id)).one()
         grant.closes_at = now - timedelta(seconds=1)
         db.commit()
     assert client.post(f"/api/v1/exams/instructor/{exam_id}/release", headers=instructor).status_code == 200
     assert client.get(f"/api/v1/exams/attempts/{second_id}", headers=student).json()["result"] is not None
+    rereleased_profile = client.get("/api/v1/profile/me/analytics", headers=student).json()["student"]
+    assert rereleased_profile["total_attempts"] == 4
+    assert all(item["results_released"] for item in rereleased_profile["exam_history"])
 
 
 def _published_activity(db: Session, activity_id: uuid.UUID) -> None:

@@ -933,14 +933,29 @@ export interface ExamHistoryEntry {
   score: number | null;
   max_score: number | null;
   submitted_at: string | null;
+  results_released: boolean;
 }
 
 export interface BadgeEntry {
   code: string;
   name: string;
   description: string | null;
+  icon_url: string;
   xp_bonus: number;
   awarded_at: string | null;
+}
+
+export interface ActivityDay {
+  date: string;
+  attempts: number;
+}
+
+export interface NextAction {
+  recommended_action: string;
+  rationale: string;
+  activity_id: string | null;
+  title: string | null;
+  kind: string | null;
 }
 
 export interface StudentAnalytics {
@@ -952,6 +967,15 @@ export interface StudentAnalytics {
   total_time_seconds: number;
   xp_points: number;
   current_level: number;
+  xp_per_level: number;
+  xp_into_level: number;
+  xp_to_next_level: number;
+  level_progress_percent: number;
+  active_days_30: number;
+  current_streak: number;
+  longest_streak: number;
+  activity_days: ActivityDay[];
+  next_action: NextAction;
   badge_count: number;
   by_type: TypeBreakdown[];
   by_topic: TopicBreakdown[];

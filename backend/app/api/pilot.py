@@ -23,6 +23,7 @@ from app.models.entities import (
 from app.services.ai_rag.error_explainer import explain_code_error
 from app.services.ai_rag.gemini_client import GeminiConfigurationError
 from app.services.gamification.sequencer import determine_track_recommendation
+from app.services.attempt_visibility import learner_visible_attempt_clause
 
 router = APIRouter(prefix="/api/v1/pilot", tags=["Classroom Pilot"])
 
@@ -58,6 +59,7 @@ def dashboard(user: Profile = Depends(get_current_user), db: Session = Depends(g
         LearningActivity, LearningActivity.id == ActivityAttempt.activity_id
     ).filter(
         ActivityAttempt.student_id == user.id, ActivityAttempt.is_successful.is_(True),
+        learner_visible_attempt_clause(),
         LearningActivity.language == user.enrolled_language,
         LearningActivity.review_status == ReviewState.published,
     ).scalar() or 0
@@ -261,7 +263,7 @@ def solution(activity_id: uuid.UUID, user: Profile = Depends(get_current_user), 
     activity = challenge(db, activity_id, user)
     passed = db.query(ActivityAttempt.id).filter(
         ActivityAttempt.student_id == user.id, ActivityAttempt.activity_id == activity_id,
-        ActivityAttempt.is_successful.is_(True)
+        ActivityAttempt.is_successful.is_(True), learner_visible_attempt_clause(),
     ).first()
     if not passed:
         if activity.closed_at is None:

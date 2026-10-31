@@ -1,16 +1,21 @@
 """Authenticated profile and student onboarding endpoints."""
 
 import uuid
-from datetime import datetime
+from collections import Counter
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import case, func
+from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.services.storage.supabase_storage import StorageError, avatar_storage
+from app.services.gamification.progression import XP_PER_LEVEL
+from app.services.gamification.sequencer import determine_track_recommendation
+from app.services.attempt_visibility import learner_visible_attempt_clause
 from app.models.entities import (
     ActivityAttempt,
     AuditEvent,
@@ -130,6 +135,23 @@ _AVATAR_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 _AVATAR_MAX_BYTES = 1_048_576  # 1 MiB; matches the storage bucket limit.
 
 
+def _detect_avatar_content_type(content: bytes) -> str | None:
+    """Recognize the formats accepted by the avatar decoder from file bytes.
+
+    Upload metadata is controlled by the client, so it cannot be the only
+    format check.  This lightweight signature validation avoids adding an
+    image-processing dependency to the API; the browser still performs the
+    resize and re-encode before upload.
+    """
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 @router.post("/me/avatar", response_model=ProfileResponse)
 async def upload_my_avatar(
     file: UploadFile = File(...),
@@ -143,7 +165,7 @@ async def upload_my_avatar(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="Avatar must be a PNG, JPEG or WebP image.",
         )
-    content = await file.read()
+    content = await file.read(_AVATAR_MAX_BYTES + 1)
     if not content:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="The image file is empty.")
     if len(content) > _AVATAR_MAX_BYTES:
@@ -151,12 +173,18 @@ async def upload_my_avatar(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Avatar images must be 1 MB or smaller.",
         )
+    detected_type = _detect_avatar_content_type(content)
+    if detected_type is None or detected_type != content_type:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="The file contents do not match a supported PNG, JPEG or WebP image.",
+        )
 
     # Fixed per-user object path (overwritten on re-upload); a cache-busting
     # query param on the stored URL keeps browsers from showing a stale image.
     object_path = str(current_user.id)
     try:
-        url = await avatar_storage.upload(object_path, content, content_type)
+        url = await avatar_storage.upload(object_path, content, detected_type)
     except StorageError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
@@ -218,14 +246,29 @@ class ExamHistoryEntry(BaseModel):
     score: float | None = None
     max_score: float | None = None
     submitted_at: datetime | None = None
+    results_released: bool
 
 
 class BadgeEntry(BaseModel):
     code: str
     name: str
     description: str | None = None
+    icon_url: str
     xp_bonus: int
     awarded_at: datetime | None = None
+
+
+class ActivityDay(BaseModel):
+    date: date
+    attempts: int
+
+
+class NextAction(BaseModel):
+    recommended_action: str
+    rationale: str
+    activity_id: uuid.UUID | None = None
+    title: str | None = None
+    kind: str | None = None
 
 
 class StudentAnalytics(BaseModel):
@@ -237,6 +280,15 @@ class StudentAnalytics(BaseModel):
     total_time_seconds: int
     xp_points: int
     current_level: int
+    xp_per_level: int
+    xp_into_level: int
+    xp_to_next_level: int
+    level_progress_percent: float
+    active_days_30: int
+    current_streak: int
+    longest_streak: int
+    activity_days: list[ActivityDay]
+    next_action: NextAction
     badge_count: int
     by_type: list[TypeBreakdown]
     by_topic: list[TopicBreakdown]
@@ -284,10 +336,19 @@ def _enum_value(value: object) -> str:
 def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
     student_filter = ActivityAttempt.student_id == user.id
 
-    total_attempts = db.query(func.count(ActivityAttempt.id)).filter(student_filter).scalar() or 0
+    # Exam item attempts use the same activity_attempts table as ordinary
+    # practice.  They must remain invisible everywhere in the profile until
+    # the instructor releases the specific exam attempt.  The submitted-at
+    # comparison also keeps a later retake embargoed after an earlier release.
+    visible_attempt_filter = and_(
+        student_filter,
+        learner_visible_attempt_clause(),
+    )
+
+    total_attempts = db.query(func.count(ActivityAttempt.id)).filter(visible_attempt_filter).scalar() or 0
     successful = (
         db.query(func.count(ActivityAttempt.id))
-        .filter(student_filter, ActivityAttempt.is_successful.is_(True))
+        .filter(visible_attempt_filter, ActivityAttempt.is_successful.is_(True))
         .scalar()
         or 0
     )
@@ -295,7 +356,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
         func.coalesce(func.avg(ActivityAttempt.score_percentage), 0.0),
         func.coalesce(func.max(ActivityAttempt.score_percentage), 0.0),
         func.coalesce(func.sum(ActivityAttempt.time_spent_seconds), 0),
-    ).filter(student_filter).one()
+    ).filter(visible_attempt_filter).one()
 
     type_rows = (
         db.query(
@@ -305,7 +366,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
             func.coalesce(func.sum(case((ActivityAttempt.is_successful, 1), else_=0)), 0),
         )
         .join(LearningActivity, LearningActivity.id == ActivityAttempt.activity_id)
-        .filter(student_filter)
+        .filter(visible_attempt_filter)
         .group_by(LearningActivity.activity_type)
         .all()
     )
@@ -326,7 +387,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
             func.coalesce(func.avg(ActivityAttempt.score_percentage), 0.0),
         )
         .join(LearningActivity, LearningActivity.id == ActivityAttempt.activity_id)
-        .filter(student_filter)
+        .filter(visible_attempt_filter)
         .group_by(LearningActivity.topic_concept)
         .order_by(func.count(ActivityAttempt.id).desc())
         .limit(8)
@@ -340,7 +401,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
     trend_rows = (
         db.query(ActivityAttempt.created_at, ActivityAttempt.score_percentage, LearningActivity.title)
         .join(LearningActivity, LearningActivity.id == ActivityAttempt.activity_id)
-        .filter(student_filter)
+        .filter(visible_attempt_filter)
         .order_by(ActivityAttempt.created_at.desc(), ActivityAttempt.id.desc())
         .limit(15)
         .all()
@@ -351,7 +412,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
     ]
 
     exam_rows = (
-        db.query(ExamAttempt, Exam.title)
+        db.query(ExamAttempt, Exam.title, Exam.results_released_at)
         .join(Exam, Exam.id == ExamAttempt.exam_id)
         .filter(ExamAttempt.student_id == user.id)
         .order_by(ExamAttempt.started_at.desc())
@@ -363,11 +424,13 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
             exam_id=attempt.exam_id,
             title=title,
             status=attempt.status,
-            score=attempt.score,
-            max_score=attempt.max_score,
+            score=attempt.score if released else None,
+            max_score=attempt.max_score if released else None,
             submitted_at=attempt.submitted_at,
+            results_released=released,
         )
-        for attempt, title in exam_rows
+        for attempt, title, released_at in exam_rows
+        for released in [bool(released_at and attempt.submitted_at and attempt.submitted_at <= released_at)]
     ]
 
     badge_rows = (
@@ -382,11 +445,41 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
             code=badge.code,
             name=badge.name,
             description=badge.description,
+            icon_url=badge.icon_url,
             xp_bonus=badge.xp_bonus,
             awarded_at=awarded_at,
         )
         for badge, awarded_at in badge_rows
     ]
+
+    manila = ZoneInfo("Asia/Manila")
+    attempt_datetimes = [
+        created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=timezone.utc)
+        for (created_at,) in db.query(ActivityAttempt.created_at).filter(visible_attempt_filter).all()
+    ]
+    activity_counts = Counter(value.astimezone(manila).date() for value in attempt_datetimes)
+    today = datetime.now(timezone.utc).astimezone(manila).date()
+    activity_days = [
+        ActivityDay(date=day, attempts=activity_counts.get(day, 0))
+        for day in (today - timedelta(days=offset) for offset in range(29, -1, -1))
+    ]
+    active_dates = sorted(activity_counts)
+    longest_streak = 0
+    run = 0
+    previous: date | None = None
+    for active_date in active_dates:
+        run = run + 1 if previous is not None and active_date == previous + timedelta(days=1) else 1
+        longest_streak = max(longest_streak, run)
+        previous = active_date
+    streak_cursor = today if today in activity_counts else today - timedelta(days=1)
+    current_streak = 0
+    while streak_cursor in activity_counts:
+        current_streak += 1
+        streak_cursor -= timedelta(days=1)
+
+    xp_into_level = max(0, int(user.xp_points or 0)) % XP_PER_LEVEL
+    recommendation = determine_track_recommendation(db, user)
+    target = db.get(LearningActivity, recommendation["target_activity_id"]) if recommendation["target_activity_id"] else None
 
     return StudentAnalytics(
         total_attempts=int(total_attempts),
@@ -397,6 +490,21 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
         total_time_seconds=int(total_time),
         xp_points=user.xp_points,
         current_level=user.current_level,
+        xp_per_level=XP_PER_LEVEL,
+        xp_into_level=xp_into_level,
+        xp_to_next_level=XP_PER_LEVEL - xp_into_level,
+        level_progress_percent=round(100.0 * xp_into_level / XP_PER_LEVEL, 1),
+        active_days_30=sum(1 for item in activity_days if item.attempts > 0),
+        current_streak=current_streak,
+        longest_streak=longest_streak,
+        activity_days=activity_days,
+        next_action=NextAction(
+            recommended_action=recommendation["recommended_action"],
+            rationale=recommendation["rationale"],
+            activity_id=target.id if target else None,
+            title=(target.title or target.topic_concept) if target else None,
+            kind=_enum_value(target.activity_type) if target else None,
+        ),
         badge_count=len(badges),
         by_type=by_type,
         by_topic=by_topic,
