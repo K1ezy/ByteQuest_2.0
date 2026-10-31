@@ -155,7 +155,7 @@ function FacultyActivities() {
         description="Create, schedule and preview review lessons, quizzes and coding challenges. Grading content locks once a student attempts an activity."
         status={data ? <StatusChip state="active" label={`${data.total} in this view`} /> : undefined}
         actions={
-          <Button variant="primary" onClick={() => setCreateOpen((open) => !open)}>
+          <Button variant="primary" data-tooltip="Create a new lesson, quiz or coding challenge" onClick={() => setCreateOpen((open) => !open)}>
             {createOpen ? "Close create form" : "Create activity"}
           </Button>
         }
@@ -245,6 +245,7 @@ function FacultyActivities() {
             type="button"
             className={`ws-filter-chip${status === option.value ? " is-selected" : ""}`}
             aria-pressed={status === option.value}
+            data-tooltip={option.value === "all" ? "Show all activities" : `Show only ${option.label.toLowerCase()} activities`}
             onClick={() => updateQuery({ status: option.value === "all" ? null : option.value })}
           >
             {option.label}
@@ -327,10 +328,21 @@ function FacultyActivities() {
                       state={activity.judge0_verified ? "ready" : "pending"}
                       label={activity.judge0_verified ? "Judge0 passed" : "Needs verification"}
                       tone={activity.judge0_verified ? "good" : "wait"}
+                      tooltip={activity.judge0_verified
+                        ? "Solution ran successfully against Judge0 test cases"
+                        : "Run this challenge through Judge0 before publishing"}
                     />
                   ) : null}
-                  {activity.grading_locked ? <StatusChip state="pending" label="Grading locked" tone="wait" /> : null}
-                  <Link className="button button-outline small" href={href}>
+                  {activity.grading_locked ? (
+                    <StatusChip state="pending" label="Grading locked" tone="wait" tooltip="A student has attempted this, so graded content is locked; edits open a new version" />
+                  ) : null}
+                  <Link
+                    className="button button-outline small"
+                    href={href}
+                    data-tooltip={activity.grading_locked
+                      ? "Open a new editable version of this activity"
+                      : "Open this activity in the editor"}
+                  >
                     {activity.grading_locked ? "Open / new version" : "Open editor"}
                   </Link>
                 </div>

@@ -64,7 +64,12 @@ export function AccessibilitySettings() {
           const descriptionId = `${setting.id}-description`;
 
           return (
-            <label className="a11y-setting-card" htmlFor={setting.id} key={setting.key}>
+            <label
+              className="a11y-setting-card"
+              htmlFor={setting.id}
+              key={setting.key}
+              data-tooltip={`${preferences[setting.key] ? "Turn off" : "Turn on"} ${setting.title}`}
+            >
               <span className="a11y-setting-copy">
                 <span className="a11y-setting-title" id={titleId}>
                   {setting.title}

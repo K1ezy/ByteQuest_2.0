@@ -4389,13 +4389,39 @@ select:focus-visible, textarea:focus-visible {
   line-height: 1.45;
 }
 
+/* Rendered as a toggle switch: clearer on/off affordance and a larger hit area
+   than a bare checkbox, while staying a real <input type="checkbox"> for a11y. */
 .a11y-setting-checkbox {
   flex: 0 0 auto;
-  width: 1.5rem;
-  height: 1.5rem;
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 44px;
+  height: 26px;
   margin: 0;
-  accent-color: #047857;
+  border-radius: 999px;
+  background: #cbd5e1;
   cursor: pointer;
+  transition: background 0.18s ease;
+}
+.a11y-setting-checkbox::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 25%);
+  transition: transform 0.18s ease;
+}
+.a11y-setting-checkbox:checked { background: #047857; }
+.a11y-setting-checkbox:checked::after { transform: translateX(18px); }
+.a11y-setting-checkbox:focus-visible { outline: 2px solid var(--purple, #5b25b0); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .a11y-setting-checkbox,
+  .a11y-setting-checkbox::after { transition: none; }
 }
 
 .a11y-keyboard-reference {
@@ -5588,6 +5614,7 @@ html[data-contrast="high"] .chat-context-note {
 .ws-account-identity { display: grid; gap: 2px; padding: 10px 12px 12px; border-bottom: 1px solid var(--line); }
 .ws-account-identity strong { font-size: 14px; }
 .ws-account-identity span { color: var(--muted); font-size: 12px; }
+.ws-account-identity code { margin-top: 2px; font-size: 10.5px; color: var(--muted-soft); word-break: break-all; }
 .ws-account-menu a, .ws-account-menu button {
   display: block;
   width: 100%;
@@ -5679,6 +5706,8 @@ html[data-contrast="high"] .chat-context-note {
   border-radius: 12px;
   background: #fff;
   color: inherit;
+  /* Soft resting shadow lifts cards off the white page so groups read apart. */
+  box-shadow: 0 1px 2px rgb(17 12 40 / 5%), 0 6px 16px rgb(17 12 40 / 3%);
   transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
 }
 a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 120 / 8%); transform: translateY(-1px); }
@@ -5713,6 +5742,7 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
   border: 1px solid var(--line);
   border-radius: 12px;
   background: #fff;
+  box-shadow: 0 1px 2px rgb(17 12 40 / 4%), 0 6px 18px rgb(17 12 40 / 3%);
   margin-bottom: 16px;
 }
 .ws-panel:last-child { margin-bottom: 0; }
@@ -5773,15 +5803,27 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
 .ws-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   min-height: 24px;
-  padding: 2px 9px;
+  padding: 2px 10px;
   border-radius: 999px;
   background: #f1eef6;
   color: #4d4560;
   font-size: 11.5px;
   font-weight: 750;
   white-space: nowrap;
+  /* Border derived from the tone colour keeps every chip reading as a defined
+     badge on white panels, instead of looking like loose coloured text. */
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+}
+/* A leading status dot gives each badge a scannable anchor at a glance. */
+.ws-chip::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
 }
 .ws-chip.good { background: #e6fbf1; color: #027856; }
 .ws-chip.wait { background: #fff4e2; color: #8b580d; }
@@ -5789,6 +5831,30 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
 .ws-chip.info { background: #f0eaff; color: #5b25b0; }
 .ws-chip.muted { background: #f1eef6; color: var(--muted-soft); }
 .ws-chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+/* ---------------------------------------------------------- identity cells */
+.ws-identity { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.ws-identity-text { display: inline-flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.ws-identity-text strong { font-weight: 700; }
+.ws-identity-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 750;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+.ws-identity-sm .ws-identity-avatar { width: 26px; height: 26px; font-size: 11px; }
+.ws-identity .ws-row-meta code {
+  font-size: 11px;
+  background: var(--surface-sunk, #f4f1fa);
+  padding: 0 5px;
+  border-radius: 5px;
+}
 .ws-chip-count {
   margin-left: 5px;
   padding: 0 5px;
@@ -6280,6 +6346,9 @@ html[data-contrast="high"] .ws-row-meta { color: #252337; }
   justify-content: end;
 }
 .ws-material-actions .ws-action-grid .button { width: 100%; }
+/* The primary action leads the group full-width; secondary actions sit in the
+   grid beneath it, giving each card one clear call to action. */
+.ws-material-actions .ws-action-grid .button-primary { grid-column: 1 / -1; }
 @media (max-width: 1024px) {
   .ws-material-actions .ws-action-grid { width: 100%; }
 }

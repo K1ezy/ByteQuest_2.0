@@ -8,9 +8,11 @@ import {
   Button,
   ConfirmDialog,
   EmptyState,
+  Identity,
   LoadingPanel,
   Notice,
   PageHeading,
+  personName,
   SearchField,
   SelectField,
   StatCard,
@@ -112,7 +114,7 @@ function FacultyPerformance() {
         description="Course results, attempt history and saved next-task predictions. Predictions are advisory and never change grades or access."
         status={data ? <StatusChip state="active" label={`${data.summary.active_learners} learners`} /> : undefined}
         actions={
-          <Button variant="outline" onClick={reload}>
+          <Button variant="outline" data-tooltip="Reload the latest learner results and predictions" onClick={reload}>
             Refresh
           </Button>
         }
@@ -201,8 +203,11 @@ function FacultyPerformance() {
               {rows.map((row) => (
                 <tr key={row.student_id}>
                   <td data-label="Learner">
-                    <strong>{row.display_name || row.pseudonym}</strong>
-                    <span className="ws-row-meta">{row.pseudonym} · {row.enrolled_language.toUpperCase()}</span>
+                    <Identity
+                      displayName={row.display_name}
+                      pseudonym={row.pseudonym}
+                      meta={row.enrolled_language.toUpperCase()}
+                    />
                   </td>
                   <td data-label="Completed">
                     {row.completed_count} / {row.total_activities}
@@ -214,7 +219,7 @@ function FacultyPerformance() {
                   </td>
                   <td data-label="Prediction"><PredictionCell prediction={row.prediction} /></td>
                   <td data-label="Action">
-                    <Button variant="outline" onClick={() => void openStudent(row.student_id)}>
+                    <Button variant="outline" data-tooltip="View this learner's attempt history and saved predictions" onClick={() => void openStudent(row.student_id)}>
                       View history
                     </Button>
                   </td>
@@ -233,7 +238,7 @@ function FacultyPerformance() {
 
       <ConfirmDialog
         open={Boolean(studentId)}
-        title={detail ? `${detail.student.display_name || detail.student.pseudonym} · history` : "Learner history"}
+        title={detail ? `${personName(detail.student.display_name, detail.student.pseudonym)} · history` : "Learner history"}
         confirmLabel="Close"
         hideConfirm
         onCancel={() => setStudentId(null)}

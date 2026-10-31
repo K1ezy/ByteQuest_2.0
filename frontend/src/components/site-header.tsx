@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiRequest } from "@/lib/api";
 import { getSupabase } from "@/lib/supabase";
 import { useSignOut } from "@/hooks/use-sign-out";
+import { shortId } from "@/components/workspace/ui";
 import type { Profile } from "@/lib/types";
 
 export interface SiteHeaderProps {
@@ -126,8 +127,9 @@ export function SiteHeader({ isAuthenticated }: SiteHeaderProps) {
               {accountOpen && (
                 <div className="ws-account-menu" role="menu">
                   <div className="ws-account-identity">
-                    <strong>{profile.display_name || profile.pseudonym_id}</strong>
+                    <strong>{profile.display_name || shortId(profile.pseudonym_id)}</strong>
                     <span>{profile.role === "admin" ? "Administrator" : profile.role === "instructor" ? "Faculty" : "Student"}</span>
+                    {!profile.display_name ? <code className="ws-row-meta">{profile.pseudonym_id}</code> : null}
                   </div>
                   <Link role="menuitem" href="/quests?view=accessibility" onClick={() => setAccountOpen(false)}>Accessibility settings</Link>
                   <Link role="menuitem" href="/quests" onClick={() => setAccountOpen(false)}>Student Quest Map</Link>
