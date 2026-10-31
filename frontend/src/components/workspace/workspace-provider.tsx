@@ -17,6 +17,7 @@ import {
 import { apiRequest, getErrorMessage } from "@/lib/api";
 import { useSignOut } from "@/hooks/use-sign-out";
 import type { Profile } from "@/lib/types";
+import { subscribeToProfileUpdates } from "@/lib/profile-events";
 import { getAdminCourses, getFacultyCourses, type CourseSummary, type WorkspaceRole } from "@/lib/workspace";
 import { Button, shortId } from "@/components/workspace/ui";
 import { QuestNavIcon, type QuestNavIconName } from "@/components/workspace/quest-nav-icon";
@@ -194,6 +195,8 @@ export function WorkspaceProvider({ role, children }: { role: WorkspaceRole; chi
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
+
+  useEffect(() => subscribeToProfileUpdates(setProfile), []);
 
   useEffect(() => {
     function handleDocumentClick(event: MouseEvent) {

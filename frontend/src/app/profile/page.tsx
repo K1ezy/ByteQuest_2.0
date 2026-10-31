@@ -1,15 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
-import { getErrorMessage } from "@/lib/api";
+import { ApiError, getErrorMessage } from "@/lib/api";
 import { Button, ConfirmDialog, Notice, StatCard, StatusChip, shortId } from "@/components/workspace/ui";
 import { useToast } from "@/components/toast";
 import { cropCompressImage } from "@/lib/image";
+import { publishProfileUpdate } from "@/lib/profile-events";
 import {
   deleteMyAvatar,
+  formatDate,
   formatDateTime,
   getMyAnalytics,
   getMyProfile,
@@ -74,13 +76,13 @@ function identiconCells(seed: string): boolean[] {
   return cells;
 }
 
-function ProfileAvatar({ seed, url, busy }: { seed: string; url?: string | null; busy?: boolean }) {
+function ProfileAvatar({ seed, name, url, busy }: { seed: string; name: string; url?: string | null; busy?: boolean }) {
   const hue = hueFromSeed(seed);
   return (
     <span className={`profile-avatar-wrap${busy ? " is-busy" : ""}`}>
       {url ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img className="profile-avatar" src={url} alt="" />
+        <img className="profile-avatar" src={url} alt={`${name}'s profile photo`} />
       ) : (
         <span className="profile-avatar" aria-hidden="true" style={{ display: "inline-block", lineHeight: 0, overflow: "hidden", background: `hsl(${hue} 70% 94%)` }}>
           <svg viewBox="0 0 5 5" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
@@ -111,8 +113,15 @@ function Sparkline({ points }: { points: TrendPoint[] }) {
   });
   const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
   const area = `${pad},${height - pad} ${line} ${width - pad},${height - pad}`;
+  const first = Math.round(points[0].score_percentage);
+  const latest = Math.round(points[points.length - 1].score_percentage);
   return (
-    <svg className="profile-spark" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Recent score trend">
+    <svg
+      className="profile-spark"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label={`Recent score trend across ${points.length} released or practice attempts, from ${first}% to ${latest}%`}
+    >
       <polygon className="profile-spark-fill" points={area} />
       <polyline className="profile-spark-line" points={line} />
       {coords.map(([x, y], index) => (
@@ -133,8 +142,15 @@ function BarList({ items }: { items: { label: string; value: number; caption?: s
             <span>{item.label}</span>
             <strong>{Math.round(item.value)}%{item.caption ? ` · ${item.caption}` : ""}</strong>
           </div>
-          <div className="profile-bar-track">
-            <div className="profile-bar-fill" style={{ width: `${Math.max(2, Math.min(100, item.value))}%` }} />
+          <div
+            className="profile-bar-track"
+            role="progressbar"
+            aria-label={item.label}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(item.value)}
+          >
+            <div className="profile-bar-fill" style={{ width: `${Math.max(0, Math.min(100, item.value))}%` }} />
           </div>
         </li>
       ))}
@@ -144,6 +160,9 @@ function BarList({ items }: { items: { label: string; value: number; caption?: s
 
 function StudentSections({ a }: { a: StudentAnalytics }) {
   const typeLabel = (t: string) => (t === "quiz" ? "Quizzes" : t === "challenge" ? "Coding challenges" : t);
+  const nextHref = a.next_action.activity_id
+    ? `/${a.next_action.kind === "quiz" ? "quiz" : "arena"}/${a.next_action.activity_id}`
+    : "/quests";
   return (
     <>
       <section className="ws-panel" aria-labelledby="student-stats-title">
@@ -153,12 +172,66 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
             <h2 id="student-stats-title">Your results at a glance</h2>
           </div>
         </div>
+        <div className="profile-level-progress">
+          <div
+            className="profile-level-ring"
+            style={{ "--level-progress": `${a.level_progress_percent * 3.6}deg` } as CSSProperties}
+            aria-hidden="true"
+          >
+            <span>Lv {a.current_level}</span>
+          </div>
+          <div className="profile-level-copy">
+            <strong>{a.xp_to_next_level} XP to Level {a.current_level + 1}</strong>
+            <span>{a.xp_into_level} of {a.xp_per_level} XP earned in this level</span>
+            <div
+              className="profile-level-track"
+              role="progressbar"
+              aria-label={`Progress toward level ${a.current_level + 1}`}
+              aria-valuemin={0}
+              aria-valuemax={a.xp_per_level}
+              aria-valuenow={a.xp_into_level}
+            >
+              <span style={{ width: `${a.level_progress_percent}%` }} />
+            </div>
+          </div>
+        </div>
+        <div className="profile-next-action">
+          <div>
+            <span>Recommended next</span>
+            <strong>{a.next_action.title || (a.next_action.recommended_action === "completed_track" ? "Track complete" : "Explore your quest map")}</strong>
+            <p>{a.next_action.rationale}</p>
+          </div>
+          <Link className="button button-primary" href={nextHref}>{a.next_action.activity_id ? "Continue learning" : "View quest map"} <span aria-hidden="true">→</span></Link>
+        </div>
         <div className="ws-stat-grid">
-          <StatCard label="Level" value={a.current_level} hint={`${a.xp_points} XP`} icon="★" tone="good" />
+          <StatCard label="Total XP" value={a.xp_points} hint={`Level ${a.current_level}`} icon="★" tone="good" />
           <StatCard label="Pass rate" value={`${Math.round(a.pass_rate)}%`} hint={`${a.successful_attempts}/${a.total_attempts} passed`} icon="✓" tone={a.pass_rate >= 60 ? "good" : "wait"} />
           <StatCard label="Average score" value={`${Math.round(a.average_score)}%`} hint={`Best ${Math.round(a.best_score)}%`} icon="◎" tone="info" />
           <StatCard label="Badges" value={a.badge_count} hint={`${Math.round(a.total_time_seconds / 60)} min practised`} icon="▲" tone="info" />
         </div>
+      </section>
+
+      <section className="ws-panel" aria-labelledby="learning-activity-title">
+        <div className="ws-panel-head">
+          <div>
+            <p className="eyebrow-label">CONSISTENCY</p>
+            <h2 id="learning-activity-title">Learning activity</h2>
+          </div>
+          <p className="profile-activity-summary">
+            <strong>{a.active_days_30}</strong> active days · <strong>{a.current_streak}</strong> day current streak · <strong>{a.longest_streak}</strong> best
+          </p>
+        </div>
+        <ol className="profile-activity-days" aria-label="Attempts during the last 30 days, in Asia Manila time">
+          {a.activity_days.map((day) => (
+            <li key={day.date} className={`level-${Math.min(4, day.attempts)}`}>
+              <time dateTime={day.date} title={`${formatDate(day.date)}: ${day.attempts} attempt${day.attempts === 1 ? "" : "s"}`}>
+                <span aria-hidden="true" />
+                <span className="sr-only">{formatDate(day.date)}: {day.attempts} attempt{day.attempts === 1 ? "" : "s"}</span>
+              </time>
+            </li>
+          ))}
+        </ol>
+        <p className="profile-activity-note">Activity is counted by calendar day in Asia/Manila. Breaks are normal—this view celebrates consistency without penalizing time away.</p>
       </section>
 
       <div className="ws-columns">
@@ -221,13 +294,21 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
                 <div className="ws-row-main">
                   <strong>{exam.title}</strong>
                   <span className="ws-row-meta">
-                    {exam.submitted_at ? `Submitted ${formatDateTime(exam.submitted_at)}` : "In progress"}
+                    {exam.submitted_at
+                      ? exam.results_released
+                        ? `Results released · submitted ${formatDateTime(exam.submitted_at)}`
+                        : `Awaiting release · submitted ${formatDateTime(exam.submitted_at)}`
+                      : "In progress"}
                   </span>
                 </div>
                 <div className="ws-row-actions">
                   <StatusChip state={exam.status} />
                   <strong>
-                    {exam.score === null ? "—" : `${Math.round(exam.score)}${exam.max_score ? ` / ${Math.round(exam.max_score)}` : ""}`}
+                    {!exam.results_released
+                      ? "Awaiting release"
+                      : exam.score === null
+                        ? "—"
+                        : `${Math.round(exam.score)}${exam.max_score ? ` / ${Math.round(exam.max_score)}` : ""}`}
                   </strong>
                 </div>
               </li>
@@ -249,7 +330,10 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
           <ul className="profile-badges">
             {a.badges.map((badge) => (
               <li key={badge.code} data-tooltip={badge.description || undefined}>
-                <span className="profile-badge-icon" aria-hidden="true">★</span>
+                <span className="profile-badge-icon" aria-hidden="true">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={badge.icon_url} alt="" />
+                </span>
                 <span className="profile-badge-copy">
                   <strong>{badge.name}</strong>
                   <span>+{badge.xp_bonus} XP{badge.awarded_at ? ` · ${formatDateTime(badge.awarded_at)}` : ""}</span>
@@ -345,7 +429,6 @@ function AdminSections({ a }: { a: AdminAnalytics }) {
 
 const COMPLETE_STEPS = [
   { key: "name", label: "Add your name" },
-  { key: "photo", label: "Add a photo" },
   { key: "bio", label: "Add a bio" },
 ] as const;
 
@@ -354,6 +437,8 @@ export default function ProfilePage() {
   const toast = useToast();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [analytics, setAnalytics] = useState<ProfileAnalytics | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -372,6 +457,19 @@ export default function ProfilePage() {
   const [confirmRemove, setConfirmRemove] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const loadAnalytics = useCallback(async () => {
+    setAnalyticsLoading(true);
+    setAnalyticsError("");
+    setAnalytics(null);
+    try {
+      setAnalytics(await getMyAnalytics());
+    } catch (caught) {
+      setAnalyticsError(getErrorMessage(caught));
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -381,15 +479,18 @@ export default function ProfilePage() {
         router.replace("/onboarding");
         return;
       }
-      const [me, stats] = await Promise.all([getMyProfile(), getMyAnalytics()]);
-      setProfile(me);
-      setAnalytics(stats);
+      void loadAnalytics();
+      setProfile(await getMyProfile());
     } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        router.replace("/onboarding");
+        return;
+      }
       setError(getErrorMessage(caught));
     } finally {
       setLoading(false);
     }
-  }, [router]);
+  }, [loadAnalytics, router]);
 
   useEffect(() => {
     // Kicking off the initial load is the effect's whole purpose here.
@@ -401,6 +502,11 @@ export default function ProfilePage() {
     editingRef.current = field;
     setDraft(current);
     setEditingField(field);
+  };
+
+  const applyProfileUpdate = (updated: Profile) => {
+    setProfile(updated);
+    publishProfileUpdate(updated);
   };
 
   const cancelEdit = () => {
@@ -418,7 +524,7 @@ export default function ProfilePage() {
     setSavingField(true);
     try {
       const updated = await updateMyProfile(field === "name" ? { display_name: value } : { bio: value });
-      setProfile(updated);
+      applyProfileUpdate(updated);
       setEditingField(null);
       toast.show(field === "name" ? "Name updated" : "Bio updated", "success");
     } catch (caught) {
@@ -433,7 +539,7 @@ export default function ProfilePage() {
     setTrackSaving(true);
     try {
       const updated = await updateMyTrack({ enrolled_language: language, year_level: yearLevel, semester });
-      setProfile(updated);
+      applyProfileUpdate(updated);
       setTrackOpen(false);
       toast.show("Learning track updated", "success");
     } catch (caught) {
@@ -452,7 +558,7 @@ export default function ProfilePage() {
       const processed = await cropCompressImage(file);
       const ext = processed.type === "image/webp" ? "webp" : "jpg";
       const updated = await uploadMyAvatar(new File([processed], `avatar.${ext}`, { type: processed.type }));
-      setProfile(updated);
+      applyProfileUpdate(updated);
       toast.show("Photo updated", "success");
     } catch (caught) {
       toast.show(getErrorMessage(caught), "error");
@@ -465,7 +571,7 @@ export default function ProfilePage() {
     setAvatarBusy(true);
     try {
       const updated = await deleteMyAvatar();
-      setProfile(updated);
+      applyProfileUpdate(updated);
       toast.show("Photo removed", "success");
     } catch (caught) {
       toast.show(getErrorMessage(caught), "error");
@@ -501,30 +607,31 @@ export default function ProfilePage() {
     return (
       <div className="page-shell profile-shell">
         <Notice tone="error">{error || "Profile unavailable."}</Notice>
-        <p><Link href="/onboarding">Sign in</Link></p>
+        <div className="ws-inline-actions">
+          <Button variant="primary" onClick={() => void load()}>Try again</Button>
+          <Link className="button button-outline" href="/onboarding">Sign in again</Link>
+        </div>
       </div>
     );
   }
 
   const displayName = profile.display_name?.trim() || shortId(profile.pseudonym_id);
-  const memberSince = profile.created_at ? formatDateTime(profile.created_at) : null;
+  const memberSince = profile.created_at ? formatDate(profile.created_at) : null;
   const done: Record<string, boolean> = {
     name: Boolean(profile.display_name?.trim()),
-    photo: Boolean(profile.avatar_url),
     bio: Boolean(profile.bio?.trim()),
   };
   const completePercent = Math.round((Object.values(done).filter(Boolean).length / COMPLETE_STEPS.length) * 100);
   const actOnStep = (key: string) => {
     if (key === "name") startEdit("name", profile.display_name || "");
-    else if (key === "bio") startEdit("bio", profile.bio || "");
-    else fileInputRef.current?.click();
+    else startEdit("bio", profile.bio || "");
   };
 
   return (
     <div className="page-shell profile-shell">
       <section className="profile-header ws-panel">
         <div className="profile-avatar-col">
-          <ProfileAvatar seed={profile.pseudonym_id} url={profile.avatar_url} busy={avatarBusy} />
+          <ProfileAvatar seed={profile.pseudonym_id} name={displayName} url={profile.avatar_url} busy={avatarBusy} />
           <input
             ref={fileInputRef}
             type="file"
@@ -548,6 +655,7 @@ export default function ProfilePage() {
               </button>
             ) : null}
           </div>
+          {!profile.avatar_url ? <span className="profile-avatar-optional">Photo optional</span> : null}
         </div>
 
         <div className="profile-header-main">
@@ -557,7 +665,14 @@ export default function ProfilePage() {
                 <strong>Complete your profile</strong>
                 <span>{completePercent}%</span>
               </div>
-              <div className="profile-complete-bar">
+              <div
+                className="profile-complete-bar"
+                role="progressbar"
+                aria-label="Profile setup completion"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={completePercent}
+              >
                 <div className="profile-complete-fill" style={{ width: `${completePercent}%` }} />
               </div>
               <ul className="profile-complete-list">
@@ -575,6 +690,7 @@ export default function ProfilePage() {
               <span className="profile-inline-name" style={{ flex: 1 }}>
                 <input
                   className="profile-inline-input"
+                  aria-label="Display name"
                   autoFocus
                   maxLength={120}
                   value={draft}
@@ -602,7 +718,7 @@ export default function ProfilePage() {
             <StatusChip
               state={profile.role}
               label={ROLE_LABEL[profile.role]}
-              tone={profile.role === "admin" ? "bad" : profile.role === "instructor" ? "info" : "good"}
+              tone={profile.role === "admin" ? "muted" : profile.role === "instructor" ? "info" : "good"}
             />
           </div>
 
@@ -635,17 +751,26 @@ export default function ProfilePage() {
           {trackOpen && profile.role === "student" ? (
             <div className="profile-track-edit">
               <div className="profile-track-grid">
-                <select value={language} onChange={(event) => setLanguage(event.target.value as ProgrammingLanguage)}>
-                  {LANGUAGES.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <select value={yearLevel} onChange={(event) => setYearLevel(Number(event.target.value))}>
-                  {[1, 2, 3, 4].map((value) => <option key={value} value={value}>Year {value}</option>)}
-                </select>
-                <select value={semester} onChange={(event) => setSemester(Number(event.target.value))}>
-                  {[1, 2].map((value) => <option key={value} value={value}>Semester {value}</option>)}
-                </select>
+                <label className="profile-track-field">
+                  <span>Learning language</span>
+                  <select value={language} onChange={(event) => setLanguage(event.target.value as ProgrammingLanguage)}>
+                    {LANGUAGES.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="profile-track-field">
+                  <span>Year level</span>
+                  <select value={yearLevel} onChange={(event) => setYearLevel(Number(event.target.value))}>
+                    {[1, 2, 3, 4].map((value) => <option key={value} value={value}>Year {value}</option>)}
+                  </select>
+                </label>
+                <label className="profile-track-field">
+                  <span>Semester</span>
+                  <select value={semester} onChange={(event) => setSemester(Number(event.target.value))}>
+                    {[1, 2].map((value) => <option key={value} value={value}>Semester {value}</option>)}
+                  </select>
+                </label>
               </div>
               <div className="ws-inline-actions" style={{ marginTop: 10 }}>
                 <Button variant="primary" disabled={trackSaving} onClick={() => void saveTrack()}>
@@ -660,6 +785,7 @@ export default function ProfilePage() {
             <div style={{ marginTop: 10 }}>
               <textarea
                 className="profile-inline-textarea"
+                aria-label="Bio"
                 autoFocus
                 rows={3}
                 maxLength={500}
@@ -691,6 +817,23 @@ export default function ProfilePage() {
           )}
         </div>
       </section>
+
+      {analyticsLoading ? (
+        <section className="ws-panel" role="status" aria-label="Loading profile analytics">
+          <span className="ws-skeleton ws-skeleton-line" style={{ width: "25%", height: 16 }} />
+          <div className="ws-stat-grid" style={{ marginTop: 12 }}>
+            {[0, 1, 2, 3].map((index) => <span key={index} className="ws-skeleton" style={{ height: 96 }} />)}
+          </div>
+        </section>
+      ) : null}
+
+      {analyticsError ? (
+        <section className="ws-panel" aria-labelledby="analytics-error-title">
+          <h2 id="analytics-error-title">Progress is temporarily unavailable</h2>
+          <Notice tone="error">{analyticsError}</Notice>
+          <Button variant="outline" onClick={() => void loadAnalytics()}>Retry progress</Button>
+        </section>
+      ) : null}
 
       {analytics?.student ? <StudentSections a={analytics.student} /> : null}
       {analytics?.instructor ? <InstructorSections a={analytics.instructor} /> : null}

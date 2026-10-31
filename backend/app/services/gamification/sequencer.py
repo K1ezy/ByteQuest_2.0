@@ -12,6 +12,7 @@ from app.models.entities import (
     Profile,
     ReviewState,
 )
+from app.services.attempt_visibility import learner_visible_attempt_clause
 
 MAX_MASTERY_ATTEMPTS = 2
 QUIZ_MASTERY_SCORE = 75.0
@@ -36,12 +37,11 @@ def determine_next_task_rule_based(
         .filter(
             ActivityAttempt.student_id == student.id,
             ActivityAttempt.activity_id == completed_activity.id,
+            learner_visible_attempt_clause(),
         )
         .scalar()
         or 0
     )
-    attempt_count = max(attempt_count, int(latest_attempt.attempt_number or 0))
-
     mastery_score = (
         CHALLENGE_MASTERY_SCORE
         if completed_activity.activity_type == ActivityKind.challenge
@@ -60,6 +60,7 @@ def determine_next_task_rule_based(
             ActivityAttempt.student_id == student.id,
             ActivityAttempt.activity_id == LearningActivity.id,
             ActivityAttempt.is_successful.is_(True),
+            learner_visible_attempt_clause(),
         )
         .exists()
     )
@@ -139,6 +140,7 @@ def determine_track_recommendation(
             ActivityAttempt.student_id == student.id,
             ActivityAttempt.activity_id == LearningActivity.id,
             ActivityAttempt.is_successful.is_(True),
+            learner_visible_attempt_clause(),
         )
         .exists()
     )
@@ -163,6 +165,7 @@ def determine_track_recommendation(
             ActivityAttempt.student_id == student.id,
             LearningActivity.language == student.enrolled_language,
             LearningActivity.review_status == ReviewState.published,
+            learner_visible_attempt_clause(),
         )
         .order_by(ActivityAttempt.created_at.desc(), ActivityAttempt.id.desc())
         .first()

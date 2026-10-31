@@ -11,10 +11,8 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.entities import (
     ActivityAttempt, ActivityKind, Exam, ExamAttempt, ExamItem,
-    LearningActivity, Profile, ProgrammingLang,
+    LearningActivity, ProgrammingLang,
 )
-from app.services.gamification.badges import evaluate_and_award_badges
-from app.services.gamification.progression import grant_xp
 from app.services.gamification.quiz_content import parse_quiz_questions
 from app.services.gamification.sequencer import CHALLENGE_MASTERY_SCORE, QUIZ_MASTERY_SCORE
 from app.services.judge0.client import TestCaseInput, judge0_client
@@ -106,12 +104,12 @@ def grade_exam(attempt_id: uuid.UUID) -> None:
         grades = [(item_id, activity_id, points, snapshot, answer, _grade_item(snapshot, answer))
                   for item_id, activity_id, points, snapshot, answer in work]
 
-        student = db.query(Profile).filter(Profile.id == student_id).with_for_update().one()
         attempt = db.query(ExamAttempt).filter(ExamAttempt.id == attempt_id).with_for_update().one()
         if attempt.status == "submitted":
             db.rollback()
             return
         score = 0.0
+        pending_xp = 0
         result_items = []
         for item_id, activity_id, points, snapshot, answer, result in grades:
             activity = db.get(LearningActivity, activity_id)
@@ -125,25 +123,25 @@ def grade_exam(attempt_id: uuid.UUID) -> None:
                     ActivityAttempt.student_id == student_id, ActivityAttempt.activity_id == activity_id,
                     ActivityAttempt.is_successful.is_(True)).first() is not None
                 xp = int(snapshot["xp_reward"] or 0) if result["successful"] and not prior_success else 0
+                pending_xp += xp
                 row = ActivityAttempt(student_id=student_id, activity_id=activity_id,
                     attempt_number=prior_count+1, exam_attempt_id=attempt_id, exam_item_id=item_id,
                     submitted_code=answer if snapshot["kind"] == "challenge" and isinstance(answer, str) else None,
                     quiz_answers_json=answer if snapshot["kind"] == "quiz" and isinstance(answer, dict) else None,
                     passed_test_cases=result["passed"], total_test_cases=result["total"],
                     score_percentage=result["percentage"], is_successful=result["successful"],
-                    error_category=result["error_category"], xp_awarded=xp,
+                    error_category=result["error_category"], xp_awarded=0,
                     result_json={"percentage": result["percentage"]})
                 db.add(row)
-                grant_xp(student, xp)
                 db.flush()
             item_score = round(points * result["percentage"] / 100, 2)
             score += item_score
             result_items.append({"item_id": str(item_id), "points_earned": item_score,
                 "points_possible": points, "solution": result["solution"]})
-        evaluate_and_award_badges(db, student)
         attempt.score = round(score, 2)
         attempt.max_score = sum(i[2] for i in work)
         attempt.result_json = jsonable_encoder({"score": attempt.score, "max_score": attempt.max_score,
-                                               "items": result_items})
+                                               "items": result_items, "pending_xp": pending_xp,
+                                               "xp_released": False})
         attempt.status = "submitted"
         db.commit()

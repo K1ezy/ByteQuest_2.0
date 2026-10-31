@@ -36,6 +36,7 @@ from app.services.gamification.sequencer import (
     determine_track_recommendation,
     determine_next_task_rule_based,
 )
+from app.services.attempt_visibility import learner_visible_attempt_clause
 from app.services.ml_predictor.audit import record_prediction_outcome
 from app.services.ml_predictor.shadow import record_shadow_prediction
 
@@ -184,6 +185,7 @@ def list_published_quests(
                 ActivityAttempt.student_id == current_user.id,
                 ActivityAttempt.activity_id.in_(activity_ids),
                 ActivityAttempt.is_successful.is_(True),
+                learner_visible_attempt_clause(),
             )
             .distinct()
             .all()
@@ -316,6 +318,7 @@ def submit_conceptual_quiz(
             ActivityAttempt.student_id == student.id,
             ActivityAttempt.activity_id == activity.id,
             ActivityAttempt.is_successful.is_(True),
+            learner_visible_attempt_clause(),
         )
         .first()
         is not None
@@ -426,14 +429,14 @@ def get_student_progress(
 
     total_attempts = (
         db.query(func.count(ActivityAttempt.id))
-        .filter(ActivityAttempt.student_id == current_user.id)
+        .filter(ActivityAttempt.student_id == current_user.id, learner_visible_attempt_clause())
         .scalar()
         or 0
     )
     rows = (
         db.query(ActivityAttempt, LearningActivity)
         .join(LearningActivity, LearningActivity.id == ActivityAttempt.activity_id)
-        .filter(ActivityAttempt.student_id == current_user.id)
+        .filter(ActivityAttempt.student_id == current_user.id, learner_visible_attempt_clause())
         .order_by(ActivityAttempt.created_at.desc(), ActivityAttempt.id.desc())
         .offset(offset)
         .limit(limit)

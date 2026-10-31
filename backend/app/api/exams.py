@@ -18,6 +18,8 @@ from app.models.entities import (
     ExamSampleRun, LearningActivity, NotificationOutbox, Profile, QuestGroup,
     QuestGroupMember, ReviewState, TestCase, UserRole,
 )
+from app.services.gamification.badges import evaluate_and_award_badges
+from app.services.gamification.progression import grant_xp
 from app.services.gamification.quiz_content import parse_quiz_questions
 from app.services.judge0.client import TestCaseInput, judge0_client
 
@@ -219,8 +221,31 @@ def release_exam(exam_id: uuid.UUID, user: Profile = Depends(require_instructor)
         ExamAttempt.status == "submitted",
         ExamAttempt.submitted_at > (exam.results_released_at or datetime.min.replace(tzinfo=timezone.utc))).first()
     if unreleased:
-        exam.results_released_at = utcnow()
-        students = db.query(ExamAttempt.student_id).filter(ExamAttempt.exam_id == exam.id).distinct().all()
+        previous_release = exam.results_released_at or datetime.min.replace(tzinfo=timezone.utc)
+        release_time = utcnow()
+        newly_released_attempts = db.query(ExamAttempt).filter(
+            ExamAttempt.exam_id == exam.id,
+            ExamAttempt.status == "submitted",
+            ExamAttempt.submitted_at > previous_release,
+            ExamAttempt.submitted_at <= release_time,
+        ).all()
+        student_ids = {attempt.student_id for attempt in newly_released_attempts}
+        for student_id in student_ids:
+            student = db.query(Profile).filter(Profile.id == student_id).with_for_update().one()
+            for released_attempt in newly_released_attempts:
+                if released_attempt.student_id != student_id:
+                    continue
+                result = dict(released_attempt.result_json or {})
+                if result.get("xp_released"):
+                    continue
+                pending_xp = max(0, int(result.get("pending_xp") or 0))
+                grant_xp(student, pending_xp)
+                result["xp_released"] = True
+                released_attempt.result_json = result
+            evaluate_and_award_badges(db, student)
+
+        exam.results_released_at = release_time
+        students = [(student_id,) for student_id in student_ids]
         for (student_id,) in students:
             db.add(NotificationOutbox(recipient_id=student_id,
                 dedupe_key=f"exam-release:{exam.id}:{exam.results_released_at.isoformat()}:{student_id}",

@@ -8,6 +8,7 @@ import { apiRequest } from "@/lib/api";
 import { getSupabase } from "@/lib/supabase";
 import { useSignOut } from "@/hooks/use-sign-out";
 import { shortId } from "@/components/workspace/ui";
+import { subscribeToProfileUpdates } from "@/lib/profile-events";
 import type { Profile } from "@/lib/types";
 
 export interface SiteHeaderProps {
@@ -41,6 +42,8 @@ export function SiteHeader({ isAuthenticated }: SiteHeaderProps) {
     void loadProfile();
     return () => { active = false; };
   }, [hidden, pathname]);
+
+  useEffect(() => subscribeToProfileUpdates(setProfile), []);
 
   useEffect(() => {
     if (!accountOpen) return;
