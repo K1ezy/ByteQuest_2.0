@@ -303,9 +303,14 @@ function FacultyActivities() {
             return (
               <li className="ws-row" key={activity.activity_id}>
                 <div className="ws-row-main">
-                  <strong>{activity.title || activity.topic_concept}</strong>
+                  <div className="ws-row-heading">
+                    <strong>{activity.title || activity.topic_concept}</strong>
+                    {activity.title && activity.topic_concept ? (
+                      <span className="ws-tag" data-tooltip="Topic this activity covers">{activity.topic_concept}</span>
+                    ) : null}
+                  </div>
                   <p>
-                    {activity.activity_type === "quiz" ? "Quiz / review" : "Coding challenge"} · {activity.topic_concept} ·{" "}
+                    {activity.activity_type === "quiz" ? "Quiz / review" : "Coding challenge"} ·{" "}
                     {activity.activity_type === "quiz"
                       ? `${activity.question_count} questions`
                       : `${activity.test_case_count} grading cases`}{" "}

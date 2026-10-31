@@ -5792,6 +5792,13 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
 .ws-compact-list strong { font-size: 13px; font-weight: 700; }
 .ws-compact-list span { color: var(--muted-soft); font-size: 12px; line-height: 1.45; }
 .ws-compact-list a { color: var(--purple-dark); font-size: 13px; font-weight: 650; }
+/* Full-width audit strip: flow entries into two or three columns on wider
+   screens so the panel fills its width instead of a tall single column. */
+.ws-audit-list { grid-template-columns: 1fr; column-gap: 28px; }
+@media (min-width: 720px) { .ws-audit-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1200px) { .ws-audit-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.ws-audit-list li:last-child,
+.ws-audit-list li:nth-last-child(2) { padding-bottom: 9px; }
 .ws-plain-list { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .ws-plain-list li + li { margin-top: 4px; }
 .ws-tag-list { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; }
@@ -5854,6 +5861,21 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
   background: var(--surface-sunk, #f4f1fa);
   padding: 0 5px;
   border-radius: 5px;
+}
+
+/* Row title with an optional topic tag, so the concept reads as a label
+   instead of being buried in the run-on metadata line. */
+.ws-row-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.ws-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: var(--purple-soft, #f0eaff);
+  color: var(--purple-dark, #5b25b0);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
 }
 .ws-chip-count {
   margin-left: 5px;

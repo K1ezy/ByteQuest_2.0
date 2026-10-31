@@ -219,31 +219,32 @@ function FacultyDashboardPage() {
             )}
           </section>
 
-          <section className="ws-panel" aria-labelledby="recent-title">
-            <div className="ws-panel-head">
-              <div>
-                <p className="eyebrow-label">AUDIT</p>
-                <h2 id="recent-title">Recent changes</h2>
-              </div>
-            </div>
-            {data.recent_changes.length === 0 ? (
-              <p className="ws-muted">No recorded changes in this course yet.</p>
-            ) : (
-              <ul className="ws-compact-list">
-                {data.recent_changes.map((entry) => (
-                  <li key={entry.id}>
-                    <strong>{entry.summary}</strong>
-                    <span>
-                      {entry.actor} · {formatDateTime(entry.created_at)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {activeCourse?.description ? <p className="ws-muted">{activeCourse.description}</p> : null}
-          </section>
         </div>
       </div>
+
+      <section className="ws-panel ws-audit-strip" aria-labelledby="recent-title">
+        <div className="ws-panel-head">
+          <div>
+            <p className="eyebrow-label">AUDIT</p>
+            <h2 id="recent-title">Recent changes</h2>
+          </div>
+        </div>
+        {data.recent_changes.length === 0 ? (
+          <p className="ws-muted">No recorded changes in this course yet.</p>
+        ) : (
+          <ul className="ws-compact-list ws-audit-list">
+            {data.recent_changes.map((entry) => (
+              <li key={entry.id}>
+                <strong>{entry.summary}</strong>
+                <span>
+                  {entry.actor} · {formatDateTime(entry.created_at)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {activeCourse?.description ? <p className="ws-muted">{activeCourse.description}</p> : null}
+      </section>
 
       {data.counts.materials_needing_attention > 0 ? (
         <Notice tone="warning">
