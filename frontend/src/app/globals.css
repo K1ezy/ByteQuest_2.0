@@ -6464,3 +6464,87 @@ html[data-contrast="high"] .ws-row-meta { color: #252337; }
 .profile-avatar-actions { display: flex; gap: 10px; }
 .profile-avatar-actions .ws-inline-link { font-size: 12px; }
 .profile-avatar-error { margin: 0; color: var(--danger, #a53647); font-size: 11.5px; max-width: 120px; text-align: center; }
+
+/* ===========================================================================
+   Profile polish: completeness, inline edit, skeletons, identicon, toasts
+   =========================================================================== */
+
+/* Completeness meter */
+.profile-complete { margin: 0 0 14px; }
+.profile-complete-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.profile-complete-top strong { font-size: 13px; }
+.profile-complete-top span { color: var(--muted); font-size: 12px; }
+.profile-complete-bar { height: 7px; border-radius: 999px; background: var(--purple-soft, #f0eaff); overflow: hidden; }
+.profile-complete-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #7c3aed, #5b25b0); transition: width .3s ease; }
+.profile-complete-list { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; padding: 0; }
+.profile-complete-list button {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: #fff; color: var(--purple-dark, #5b25b0); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
+}
+.profile-complete-list button:hover { background: var(--purple-soft, #f0eaff); }
+.profile-complete-list button::before { content: "+"; font-weight: 800; }
+
+/* Inline editing */
+.profile-editable {
+  display: inline-flex; align-items: center; gap: 8px; border: 0; background: none;
+  padding: 2px 6px; margin: -2px -6px; border-radius: 8px; cursor: text; color: inherit; font: inherit; text-align: left;
+}
+.profile-editable:hover, .profile-editable:focus-visible { background: var(--purple-soft, #f0eaff); outline: none; }
+.profile-editable .profile-edit-pencil { opacity: 0; font-size: 13px; color: var(--muted); transition: opacity .12s ease; }
+.profile-editable:hover .profile-edit-pencil, .profile-editable:focus-visible .profile-edit-pencil { opacity: 1; }
+.profile-inline-input, .profile-inline-textarea {
+  width: 100%; padding: 6px 10px; border: 1px solid var(--purple, #5b25b0); border-radius: 8px; background: #fff; color: var(--ink); font: inherit;
+}
+.profile-inline-name .profile-inline-input { font-size: clamp(1.2rem, 3vw, 1.6rem); font-weight: 760; }
+.profile-inline-textarea { resize: vertical; font-size: 14px; }
+.profile-inline-actions { display: flex; gap: 8px; margin-top: 8px; }
+.profile-inline-hint { color: var(--muted-soft); font-size: 11.5px; }
+
+/* Collapsible track editor */
+.profile-track-edit { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.profile-track-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+.profile-track-grid select { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; font-size: 13px; }
+
+/* Avatar uploading overlay */
+.profile-avatar-wrap { position: relative; display: inline-flex; }
+.profile-avatar-wrap.is-busy::after {
+  content: ""; position: absolute; inset: 0; border-radius: 999px;
+  background: rgb(255 255 255 / 55%);
+}
+.profile-avatar-spinner {
+  position: absolute; inset: 0; margin: auto; width: 22px; height: 22px; border-radius: 999px;
+  border: 2.5px solid var(--purple-soft, #f0eaff); border-top-color: var(--purple, #5b25b0);
+  animation: profile-spin .7s linear infinite;
+}
+@keyframes profile-spin { to { transform: rotate(360deg); } }
+
+/* Skeletons */
+.ws-skeleton {
+  position: relative; overflow: hidden; border-radius: 8px;
+  background: #ece8f3;
+}
+.ws-skeleton::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 65%), transparent);
+  animation: ws-shimmer 1.3s infinite;
+}
+@keyframes ws-shimmer { 100% { transform: translateX(100%); } }
+.ws-skeleton-line { height: 12px; margin: 8px 0; }
+.ws-skeleton-avatar { width: 72px; height: 72px; border-radius: 999px; }
+
+/* Toasts */
+.toast-layer {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  z-index: 1200; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none;
+}
+.toast {
+  pointer-events: auto; max-width: min(92vw, 420px);
+  padding: 10px 16px; border-radius: 10px; font-size: 13.5px; font-weight: 600;
+  color: #fff; background: #2c2541; box-shadow: 0 10px 30px rgb(17 12 40 / 22%);
+  animation: toast-in .2s ease;
+}
+.toast-success { background: #0f7a56; }
+.toast-error { background: #a53647; }
+.toast-info { background: #2c2541; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
