@@ -84,6 +84,9 @@ tmp/
 temp/
 supabase/.temp/
 
+# AI tool / session scratch (local-only attachments, never committed)
+.codex-remote-attachments/
+
 # IDE & Editor Settings (Optional, allow user custom settings)
 .idea/
 .vscode/*
