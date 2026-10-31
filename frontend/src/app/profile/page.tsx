@@ -1,12 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
-import { ApiError, getErrorMessage } from "@/lib/api";
+import { apiRequest, ApiError, getErrorMessage } from "@/lib/api";
 import { Button, ConfirmDialog, Notice, StatCard, StatusChip, shortId } from "@/components/workspace/ui";
 import { useToast } from "@/components/toast";
+import { UserAvatar } from "@/components/user-avatar";
+import { usePasswordReset } from "@/hooks/use-password-reset";
+import { useSignOut } from "@/hooks/use-sign-out";
 import { cropCompressImage } from "@/lib/image";
 import { publishProfileUpdate } from "@/lib/profile-events";
 import {
@@ -20,7 +23,9 @@ import {
   uploadMyAvatar,
   type AdminAnalytics,
   type InstructorAnalytics,
+  type ProfileAction,
   type ProfileAnalytics,
+  type ProfileAuditEntry,
   type StudentAnalytics,
   type TrendPoint,
 } from "@/lib/workspace";
@@ -43,61 +48,6 @@ const LANGUAGE_LABEL: Record<string, string> = {
   cpp: "C++",
   java: "Java",
 };
-
-function hueFromSeed(seed: string): number {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) % 360;
-  return hash;
-}
-
-/** Deterministic left-right symmetric 5x5 identicon pattern from a seed. */
-function identiconCells(seed: string): boolean[] {
-  let h = 2166136261;
-  for (let i = 0; i < seed.length; i += 1) {
-    h ^= seed.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  let x = (h >>> 0) || 1;
-  const nextBit = () => {
-    x ^= x << 13;
-    x ^= x >>> 17;
-    x ^= x << 5;
-    x >>>= 0;
-    return (x & 1) === 1;
-  };
-  const cells = new Array<boolean>(25).fill(false);
-  for (let row = 0; row < 5; row += 1) {
-    for (let col = 0; col < 3; col += 1) {
-      const on = nextBit();
-      cells[row * 5 + col] = on;
-      cells[row * 5 + (4 - col)] = on;
-    }
-  }
-  return cells;
-}
-
-function ProfileAvatar({ seed, name, url, busy }: { seed: string; name: string; url?: string | null; busy?: boolean }) {
-  const hue = hueFromSeed(seed);
-  return (
-    <span className={`profile-avatar-wrap${busy ? " is-busy" : ""}`}>
-      {url ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img className="profile-avatar" src={url} alt={`${name}'s profile photo`} />
-      ) : (
-        <span className="profile-avatar" aria-hidden="true" style={{ display: "inline-block", lineHeight: 0, overflow: "hidden", background: `hsl(${hue} 70% 94%)` }}>
-          <svg viewBox="0 0 5 5" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
-            {identiconCells(seed).map((on, index) =>
-              on ? (
-                <rect key={index} x={index % 5} y={Math.floor(index / 5)} width="1" height="1" fill={`hsl(${hue} 52% 42%)`} />
-              ) : null,
-            )}
-          </svg>
-        </span>
-      )}
-      {busy ? <span className="profile-avatar-spinner" aria-hidden="true" /> : null}
-    </span>
-  );
-}
 
 /** Inline score-trend sparkline (0–100%), oldest → newest. */
 function Sparkline({ points }: { points: TrendPoint[] }) {
@@ -158,39 +108,27 @@ function BarList({ items }: { items: { label: string; value: number; caption?: s
   );
 }
 
-function StudentSections({ a }: { a: StudentAnalytics }) {
-  const typeLabel = (t: string) => (t === "quiz" ? "Quizzes" : t === "challenge" ? "Coding challenges" : t);
+function StudentOverview({ a }: { a: StudentAnalytics }) {
   const nextHref = a.next_action.activity_id
     ? `/${a.next_action.kind === "quiz" ? "quiz" : "arena"}/${a.next_action.activity_id}`
     : "/quests";
   return (
-    <>
-      <section className="ws-panel" aria-labelledby="student-stats-title">
-        <div className="ws-panel-head">
-          <div>
-            <p className="eyebrow-label">PROGRESS</p>
-            <h2 id="student-stats-title">Your results at a glance</h2>
-          </div>
+    <section className="ws-panel profile-overview-panel" aria-labelledby="student-stats-title">
+      <div className="ws-panel-head">
+        <div>
+          <p className="eyebrow-label">LEARNING OVERVIEW</p>
+          <h2 id="student-stats-title">Your progress at a glance</h2>
         </div>
+      </div>
+      <div className="profile-overview-grid">
         <div className="profile-level-progress">
-          <div
-            className="profile-level-ring"
-            style={{ "--level-progress": `${a.level_progress_percent * 3.6}deg` } as CSSProperties}
-            aria-hidden="true"
-          >
+          <div className="profile-level-ring" style={{ "--level-progress": `${a.level_progress_percent * 3.6}deg` } as CSSProperties} aria-hidden="true">
             <span>Lv {a.current_level}</span>
           </div>
           <div className="profile-level-copy">
             <strong>{a.xp_to_next_level} XP to Level {a.current_level + 1}</strong>
             <span>{a.xp_into_level} of {a.xp_per_level} XP earned in this level</span>
-            <div
-              className="profile-level-track"
-              role="progressbar"
-              aria-label={`Progress toward level ${a.current_level + 1}`}
-              aria-valuemin={0}
-              aria-valuemax={a.xp_per_level}
-              aria-valuenow={a.xp_into_level}
-            >
+            <div className="profile-level-track" role="progressbar" aria-label={`Progress toward level ${a.current_level + 1}`} aria-valuemin={0} aria-valuemax={a.xp_per_level} aria-valuenow={a.xp_into_level}>
               <span style={{ width: `${a.level_progress_percent}%` }} />
             </div>
           </div>
@@ -203,13 +141,21 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
           </div>
           <Link className="button button-primary" href={nextHref}>{a.next_action.activity_id ? "Continue learning" : "View quest map"} <span aria-hidden="true">→</span></Link>
         </div>
-        <div className="ws-stat-grid">
-          <StatCard label="Total XP" value={a.xp_points} hint={`Level ${a.current_level}`} icon="★" tone="good" />
-          <StatCard label="Pass rate" value={`${Math.round(a.pass_rate)}%`} hint={`${a.successful_attempts}/${a.total_attempts} passed`} icon="✓" tone={a.pass_rate >= 60 ? "good" : "wait"} />
-          <StatCard label="Average score" value={`${Math.round(a.average_score)}%`} hint={`Best ${Math.round(a.best_score)}%`} icon="◎" tone="info" />
-          <StatCard label="Badges" value={a.badge_count} hint={`${Math.round(a.total_time_seconds / 60)} min practised`} icon="▲" tone="info" />
-        </div>
-      </section>
+      </div>
+      <div className="ws-stat-grid">
+        <StatCard label="Total XP" value={a.xp_points} hint={`Level ${a.current_level}`} icon="★" tone="good" />
+        <StatCard label="Pass rate" value={`${Math.round(a.pass_rate)}%`} hint={`${a.successful_attempts}/${a.total_attempts} passed`} icon="✓" tone={a.pass_rate >= 60 ? "good" : "wait"} />
+        <StatCard label="Average score" value={`${Math.round(a.average_score)}%`} hint={`Best ${Math.round(a.best_score)}%`} icon="◎" tone="info" />
+        <StatCard label="Badges" value={a.badge_count} hint={`${Math.round(a.total_time_seconds / 60)} min practised`} icon="▲" tone="info" />
+      </div>
+    </section>
+  );
+}
+
+function StudentSections({ a }: { a: StudentAnalytics }) {
+  const typeLabel = (t: string) => (t === "quiz" ? "Quizzes" : t === "challenge" ? "Coding challenges" : t);
+  return (
+    <>
 
       <section className="ws-panel" aria-labelledby="learning-activity-title">
         <div className="ws-panel-head">
@@ -347,20 +293,195 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
   );
 }
 
-function InstructorSections({ a }: { a: InstructorAnalytics }) {
+/** The one dominant call to action for this role, per Von Restorff emphasis. */
+function RecommendedAction({ action, eyebrow }: { action: ProfileAction | null; eyebrow: string }) {
+  if (!action) return null;
+  const calm = action.kind === "workspace" || action.kind === "dashboard";
   return (
-    <section className="ws-panel" aria-labelledby="teach-title">
+    <div className={`profile-next-action${calm ? " is-calm" : ""}`}>
+      <div>
+        <span>{eyebrow}</span>
+        <strong>{action.title}</strong>
+        <p>{action.detail}</p>
+      </div>
+      <div className="profile-next-action-side">
+        <StatusChip state={action.status} label={action.status} tone={calm ? "good" : "wait"} />
+        <Link className="button button-primary" href={action.href}>
+          {calm ? "Open workspace" : "Review now"} <span aria-hidden="true">→</span>
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+/** Counts of work waiting on this user. Numbers carry the meaning, not colour. */
+function AttentionSummary({
+  title,
+  items,
+}: {
+  title: string;
+  items: { label: string; value: number; hint: string; href: string }[];
+}) {
+  const total = items.reduce((sum, item) => sum + item.value, 0);
+  return (
+    <section className="ws-panel" aria-labelledby="attention-title">
       <div className="ws-panel-head">
         <div>
-          <p className="eyebrow-label">TEACHING</p>
-          <h2 id="teach-title">Your teaching activity</h2>
+          <p className="eyebrow-label">NEEDS ATTENTION</p>
+          <h2 id="attention-title">{title}</h2>
         </div>
       </div>
+      {total === 0 ? (
+        <p className="ws-muted">Nothing is waiting on you right now.</p>
+      ) : null}
+      <div className="ws-stat-grid">
+        {items.map((item) => (
+          <StatCard
+            key={item.label}
+            label={item.label}
+            value={item.value}
+            hint={item.hint}
+            href={item.href}
+            icon={item.value > 0 ? "!" : "✓"}
+            tone={item.value > 0 ? "wait" : "good"}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** Actions this person performed themselves — never a productivity score. */
+function PersonalTimeline({
+  entries,
+  title,
+  emptyLabel,
+}: {
+  entries: ProfileAuditEntry[];
+  title: string;
+  emptyLabel: string;
+}) {
+  return (
+    <section className="ws-panel" aria-labelledby="personal-timeline-title">
+      <div className="ws-panel-head">
+        <div>
+          <p className="eyebrow-label">YOUR RECENT WORK</p>
+          <h2 id="personal-timeline-title">{title}</h2>
+        </div>
+      </div>
+      <p className="profile-context-note">Only actions you performed. This is a record, not a target.</p>
+      {entries.length === 0 ? (
+        <p className="ws-muted">{emptyLabel}</p>
+      ) : (
+        <ul className="ws-compact-list">
+          {entries.map((entry, index) => (
+            <li key={`${entry.action}-${index}`}>
+              <strong>{entry.summary}</strong>
+              <span>
+                {entry.action} · {formatDateTime(entry.created_at)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function InstructorOverview({ a }: { a: InstructorAnalytics }) {
+  return (
+    <section className="ws-panel profile-overview-panel" aria-labelledby="teach-overview-title">
+      <div className="ws-panel-head">
+        <div>
+          <p className="eyebrow-label">TEACHING IMPACT</p>
+          <h2 id="teach-overview-title">The learning you support</h2>
+        </div>
+        <Link className="button button-outline" href="/faculty">Open faculty workspace <span aria-hidden="true">→</span></Link>
+      </div>
+      <RecommendedAction action={a.next_action} eyebrow="Highest priority" />
       <div className="ws-stat-grid">
         <StatCard label="Courses" value={a.courses} hint="Assigned to you" icon="▦" tone="info" />
         <StatCard label="Learners taught" value={a.learners_taught} hint="Across your courses" icon="◉" tone="good" />
+        <StatCard label="Published activities" value={a.activities_published} hint={`${a.activities_created} created`} icon="✎" tone="info" />
+        <StatCard label="Reviews completed" value={a.drafts_reviewed} hint="Drafts reviewed" icon="✓" tone="good" />
+      </div>
+    </section>
+  );
+}
+
+function InstructorSections({ a }: { a: InstructorAnalytics }) {
+  // Tolerate an older or partial payload rather than failing the whole view.
+  const attention = a.attention ?? {
+    drafts_awaiting_review: 0,
+    materials_needing_attention: 0,
+    upcoming_activities: 0,
+  };
+  return (
+    <>
+      <AttentionSummary
+        title="Work waiting in your courses"
+        items={[
+          {
+            label: "Materials needing attention",
+            value: attention.materials_needing_attention,
+            hint: "PDFs that cannot be cited yet",
+            href: "/faculty/materials?status=attention",
+          },
+          {
+            label: "Drafts awaiting review",
+            value: attention.drafts_awaiting_review,
+            hint: "Hidden from students until approved",
+            href: "/faculty/review?status=open",
+          },
+          {
+            label: "Upcoming activities",
+            value: attention.upcoming_activities,
+            hint: "Opening in the next 14 days",
+            href: "/faculty/activities?status=scheduled",
+          },
+        ]}
+      />
+    <section className="ws-panel" aria-labelledby="teach-title">
+      <div className="ws-panel-head">
+        <div>
+          <p className="eyebrow-label">YOUR CONTRIBUTIONS</p>
+          <h2 id="teach-title">Teaching activity</h2>
+        </div>
+        <Link className="button button-outline" href="/faculty">Manage teaching</Link>
+      </div>
+      <div className="ws-stat-grid">
         <StatCard label="Activities created" value={a.activities_created} hint={`${a.activities_published} published`} icon="✎" tone="info" />
-        <StatCard label="Drafts reviewed" value={a.drafts_reviewed} hint={`${a.materials_uploaded} materials uploaded`} icon="✓" tone="good" />
+        <StatCard label="Drafts reviewed" value={a.drafts_reviewed} hint="Learning content checked" icon="✓" tone="good" />
+        <StatCard label="Materials uploaded" value={a.materials_uploaded} hint="Teaching resources" icon="▤" tone="info" />
+        <StatCard label="Learners reached" value={a.learners_taught} hint={`Across ${a.courses} courses`} icon="◉" tone="good" />
+      </div>
+      <p className="ws-footnote">Detailed review queues, materials, schedules, and class performance remain in the faculty workspace.</p>
+    </section>
+      <PersonalTimeline
+        entries={a.recent_activity ?? []}
+        title="Your recent contributions"
+        emptyLabel="Your reviews, uploads and publishing will appear here."
+      />
+    </>
+  );
+}
+
+function AdminOverview({ a }: { a: AdminAnalytics }) {
+  return (
+    <section className="ws-panel profile-overview-panel" aria-labelledby="admin-overview-title">
+      <div className="ws-panel-head">
+        <div>
+          <p className="eyebrow-label">PLATFORM STEWARDSHIP</p>
+          <h2 id="admin-overview-title">ByteQuest at a glance</h2>
+        </div>
+        <Link className="button button-outline" href="/admin">Open admin workspace <span aria-hidden="true">→</span></Link>
+      </div>
+      <RecommendedAction action={a.next_action} eyebrow="Highest priority" />
+      <div className="ws-stat-grid">
+        <StatCard label="Accounts" value={a.total_accounts} hint="All roles" icon="◉" tone="info" />
+        <StatCard label="Courses" value={a.total_courses} icon="▦" tone="info" />
+        <StatCard label="Activities" value={a.total_activities} icon="▣" tone="info" />
+        <StatCard label="Materials" value={a.total_materials} hint="Current versions" icon="▤" tone="good" />
       </div>
     </section>
   );
@@ -368,23 +489,37 @@ function InstructorSections({ a }: { a: InstructorAnalytics }) {
 
 function AdminSections({ a }: { a: AdminAnalytics }) {
   const total = Object.values(a.accounts_by_role).reduce((sum, value) => sum + value, 0) || 1;
+  // Tolerate an older or partial payload rather than failing the whole view.
+  const attention = a.attention ?? {
+    accounts_needing_action: 0,
+    failed_jobs: 0,
+    availability_changes: 0,
+  };
   return (
     <>
-      <section className="ws-panel" aria-labelledby="admin-stats-title">
-        <div className="ws-panel-head">
-          <div>
-            <p className="eyebrow-label">PLATFORM</p>
-            <h2 id="admin-stats-title">Platform overview</h2>
-          </div>
-        </div>
-        <div className="ws-stat-grid">
-          <StatCard label="Accounts" value={a.total_accounts} hint="All roles" icon="◉" tone="info" />
-          <StatCard label="Courses" value={a.total_courses} icon="▦" tone="info" />
-          <StatCard label="Activities" value={a.total_activities} icon="▣" tone="info" />
-          <StatCard label="Materials" value={a.total_materials} hint="Current versions" icon="▤" tone="good" />
-        </div>
-      </section>
-
+      <AttentionSummary
+        title="Operational work waiting"
+        items={[
+          {
+            label: "Failed jobs",
+            value: attention.failed_jobs,
+            hint: "Processing that needs investigation",
+            href: "/admin/monitoring?status=failed",
+          },
+          {
+            label: "Accounts needing action",
+            value: attention.accounts_needing_action,
+            hint: "Blocked from course access",
+            href: "/admin/accounts?status=attention",
+          },
+          {
+            label: "Availability changes",
+            value: attention.availability_changes,
+            hint: "Scheduled or closed activities",
+            href: "/admin/activities?status=attention",
+          },
+        ]}
+      />
       <div className="ws-columns">
         <section className="ws-panel" aria-labelledby="roles-title">
           <div className="ws-panel-head">
@@ -409,11 +544,12 @@ function AdminSections({ a }: { a: AdminAnalytics }) {
               <h2 id="audit-title">Recent platform activity</h2>
             </div>
           </div>
-          {a.recent_audit.length === 0 ? (
+          <p className="profile-context-note">This is a platform-wide audit view, not a measure of individual productivity.</p>
+          {(a.recent_audit ?? []).length === 0 ? (
             <p className="ws-muted">No recorded activity yet.</p>
           ) : (
             <ul className="ws-compact-list">
-              {a.recent_audit.map((event, index) => (
+              {(a.recent_audit ?? []).map((event, index) => (
                 <li key={index}>
                   <strong>{event.summary}</strong>
                   <span>{event.action} · {formatDateTime(event.created_at)}</span>
@@ -423,7 +559,151 @@ function AdminSections({ a }: { a: AdminAnalytics }) {
           )}
         </section>
       </div>
+      <PersonalTimeline
+        entries={a.recent_activity ?? []}
+        title="Your recent administration"
+        emptyLabel="Account, course and configuration changes you make will appear here."
+      />
     </>
+  );
+}
+
+interface ConsentStatus {
+  available: boolean;
+  version: string | null;
+  choice: "accepted" | "declined" | "withdrawn" | null;
+}
+
+function AccountPanel({
+  profile,
+  memberSince,
+  profileTipsDismissed,
+  onRestoreProfileTips,
+}: {
+  profile: Profile;
+  memberSince: string | null;
+  profileTipsDismissed: boolean;
+  onRestoreProfileTips: () => void;
+}) {
+  const { isLoading: resetBusy, error: resetError, statusMessage: resetStatus, requestResetLink } = usePasswordReset();
+  const { isSigningOut, error: signOutError, signOut } = useSignOut();
+  const [consent, setConsent] = useState<ConsentStatus | null>(null);
+  const [consentError, setConsentError] = useState("");
+
+  useEffect(() => {
+    if (profile.role !== "student") return;
+    let active = true;
+    apiRequest<ConsentStatus>("/pilot/research/consent")
+      .then((result) => {
+        if (active) setConsent(result);
+      })
+      .catch((caught) => {
+        if (active) setConsentError(getErrorMessage(caught));
+      });
+    return () => {
+      active = false;
+    };
+  }, [profile.role]);
+
+  return (
+    <div className="profile-account-grid">
+      <section className="ws-panel" aria-labelledby="identity-settings-title">
+        <div className="ws-panel-head">
+          <div>
+            <p className="eyebrow-label">IDENTITY</p>
+            <h2 id="identity-settings-title">Your ByteQuest account</h2>
+          </div>
+        </div>
+        <dl className="profile-account-details">
+          <div><dt>Email</dt><dd>{profile.email || "No email is stored on this profile"}</dd></div>
+          <div><dt>Role</dt><dd>{ROLE_LABEL[profile.role]}</dd></div>
+          <div><dt>Account ID</dt><dd><code>{profile.pseudonym_id}</code></dd></div>
+          <div><dt>Member since</dt><dd>{memberSince || "Not available"}</dd></div>
+        </dl>
+        <div className="profile-privacy-note">
+          <span aria-hidden="true">◆</span>
+          <div>
+            <strong>Private by default</strong>
+            <p>Your profile details and role analytics are visible only to you while signed in.</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="ws-panel" aria-labelledby="security-settings-title">
+        <div className="ws-panel-head">
+          <div>
+            <p className="eyebrow-label">SECURITY</p>
+            <h2 id="security-settings-title">Sign-in and password</h2>
+          </div>
+        </div>
+        <div className="profile-setting-row">
+          <div>
+            <strong>Password reset</strong>
+            <p>{profile.email ? `Send a secure reset link to ${profile.email}.` : "Ask an administrator to add an email before resetting your password."}</p>
+          </div>
+          <Button variant="outline" disabled={!profile.email || resetBusy} onClick={() => profile.email && void requestResetLink(profile.email)}>
+            {resetBusy ? "Sending…" : "Email reset link"}
+          </Button>
+        </div>
+        {resetStatus ? <Notice tone="success">{resetStatus}</Notice> : null}
+        {resetError ? <Notice tone="error">{resetError}</Notice> : null}
+        <div className="profile-setting-row profile-setting-row-danger">
+          <div>
+            <strong>Sign out on this device</strong>
+            <p>Clears local ByteQuest session data from this browser.</p>
+          </div>
+          <Button variant="outline" disabled={isSigningOut} onClick={() => void signOut()}>
+            {isSigningOut ? "Signing out…" : "Sign out"}
+          </Button>
+        </div>
+        {signOutError ? <Notice tone="error">{signOutError}</Notice> : null}
+      </section>
+
+      <section className="ws-panel" aria-labelledby="preferences-settings-title">
+        <div className="ws-panel-head">
+          <div>
+            <p className="eyebrow-label">PREFERENCES</p>
+            <h2 id="preferences-settings-title">Comfort and guidance</h2>
+          </div>
+        </div>
+        <div className="profile-setting-row">
+          <div>
+            <strong>Accessibility settings</strong>
+            <p>Adjust motion, contrast, text, and interaction preferences.</p>
+          </div>
+          <Link className="button button-outline" href="/quests?view=accessibility">Open settings</Link>
+        </div>
+        <div className="profile-setting-row">
+          <div>
+            <strong>Profile tips</strong>
+            <p>{profileTipsDismissed ? "Show the optional setup guidance on Overview again." : "Optional setup guidance is currently available on Overview."}</p>
+          </div>
+          <Button variant="outline" disabled={!profileTipsDismissed} onClick={onRestoreProfileTips}>Show tips again</Button>
+        </div>
+      </section>
+
+      {profile.role === "student" ? (
+        <section className="ws-panel" aria-labelledby="research-settings-title">
+          <div className="ws-panel-head">
+            <div>
+              <p className="eyebrow-label">PRIVACY</p>
+              <h2 id="research-settings-title">Research participation</h2>
+            </div>
+          </div>
+          {consentError ? <Notice tone="error">Research consent status is temporarily unavailable. {consentError}</Notice> : null}
+          {!consent && !consentError ? <span className="ws-skeleton ws-skeleton-line" style={{ width: "65%" }} /> : null}
+          {consent ? (
+            <div className="profile-setting-row">
+              <div>
+                <strong>{consent.available ? `Status: ${consent.choice || "not chosen"}` : "Research telemetry is disabled"}</strong>
+                <p>Participation is optional and never changes access to quests, exams, or grades.</p>
+              </div>
+              <Link className="button button-outline" href="/account/research">Manage consent</Link>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+    </div>
   );
 }
 
@@ -432,8 +712,13 @@ const COMPLETE_STEPS = [
   { key: "bio", label: "Add a bio" },
 ] as const;
 
-export default function ProfilePage() {
+function setupDismissalKey(profileId: string) {
+  return `bytequest:profile-setup-dismissed:${profileId}`;
+}
+
+function ProfilePageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const toast = useToast();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [analytics, setAnalytics] = useState<ProfileAnalytics | null>(null);
@@ -455,7 +740,11 @@ export default function ProfilePage() {
 
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [profileTipsDismissed, setProfileTipsDismissed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const tabParam = searchParams.get("tab");
+  const activeTab = tabParam === "activity" || tabParam === "account" ? tabParam : "overview";
 
   const loadAnalytics = useCallback(async () => {
     setAnalyticsLoading(true);
@@ -480,7 +769,9 @@ export default function ProfilePage() {
         return;
       }
       void loadAnalytics();
-      setProfile(await getMyProfile());
+      const currentProfile = await getMyProfile();
+      setProfile(currentProfile);
+      setProfileTipsDismissed(window.localStorage.getItem(setupDismissalKey(currentProfile.id)) === "true");
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
         router.replace("/onboarding");
@@ -581,6 +872,19 @@ export default function ProfilePage() {
     }
   };
 
+  const dismissProfileTips = () => {
+    if (!profile) return;
+    window.localStorage.setItem(setupDismissalKey(profile.id), "true");
+    setProfileTipsDismissed(true);
+  };
+
+  const restoreProfileTips = () => {
+    if (!profile) return;
+    window.localStorage.removeItem(setupDismissalKey(profile.id));
+    setProfileTipsDismissed(false);
+    toast.show("Profile tips restored", "success");
+  };
+
   if (loading) {
     return (
       <div className="page-shell profile-shell">
@@ -615,13 +919,13 @@ export default function ProfilePage() {
     );
   }
 
-  const displayName = profile.display_name?.trim() || shortId(profile.pseudonym_id);
+  const displayName = profile.display_name?.trim() || "Add your name";
   const memberSince = profile.created_at ? formatDate(profile.created_at) : null;
+  const activityLabel = profile.role === "student" ? "Progress" : profile.role === "instructor" ? "Teaching" : "Stewardship";
   const done: Record<string, boolean> = {
     name: Boolean(profile.display_name?.trim()),
     bio: Boolean(profile.bio?.trim()),
   };
-  const completePercent = Math.round((Object.values(done).filter(Boolean).length / COMPLETE_STEPS.length) * 100);
   const actOnStep = (key: string) => {
     if (key === "name") startEdit("name", profile.display_name || "");
     else startEdit("bio", profile.bio || "");
@@ -631,7 +935,20 @@ export default function ProfilePage() {
     <div className="page-shell profile-shell">
       <section className="profile-header ws-panel">
         <div className="profile-avatar-col">
-          <ProfileAvatar seed={profile.pseudonym_id} name={displayName} url={profile.avatar_url} busy={avatarBusy} />
+          <div className="profile-avatar-control">
+            <UserAvatar seed={profile.pseudonym_id} name={displayName} url={profile.avatar_url} size="profile" busy={avatarBusy} />
+            <details className="profile-avatar-menu">
+              <summary aria-label="Edit profile photo" title="Edit profile photo"><span aria-hidden="true">✎</span></summary>
+              <div className="profile-avatar-menu-popover">
+                <button type="button" disabled={avatarBusy} onClick={() => fileInputRef.current?.click()}>
+                  {profile.avatar_url ? "Change photo" : "Add a photo"}
+                </button>
+                {profile.avatar_url ? (
+                  <button type="button" disabled={avatarBusy} onClick={() => setConfirmRemove(true)}>Remove photo</button>
+                ) : null}
+              </div>
+            </details>
+          </div>
           <input
             ref={fileInputRef}
             type="file"
@@ -639,52 +956,10 @@ export default function ProfilePage() {
             className="sr-only"
             onChange={(event) => void onAvatarPicked(event)}
           />
-          <div className="profile-avatar-actions">
-            <button
-              type="button"
-              className="ws-inline-link"
-              disabled={avatarBusy}
-              data-tooltip="Upload a photo — it is cropped to a square and compressed automatically"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              {profile.avatar_url ? "Change photo" : "Add photo"}
-            </button>
-            {profile.avatar_url ? (
-              <button type="button" className="ws-inline-link" disabled={avatarBusy} onClick={() => setConfirmRemove(true)}>
-                Remove
-              </button>
-            ) : null}
-          </div>
           {!profile.avatar_url ? <span className="profile-avatar-optional">Photo optional</span> : null}
         </div>
 
         <div className="profile-header-main">
-          {completePercent < 100 ? (
-            <div className="profile-complete">
-              <div className="profile-complete-top">
-                <strong>Complete your profile</strong>
-                <span>{completePercent}%</span>
-              </div>
-              <div
-                className="profile-complete-bar"
-                role="progressbar"
-                aria-label="Profile setup completion"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={completePercent}
-              >
-                <div className="profile-complete-fill" style={{ width: `${completePercent}%` }} />
-              </div>
-              <ul className="profile-complete-list">
-                {COMPLETE_STEPS.filter((step) => !done[step.key]).map((step) => (
-                  <li key={step.key}>
-                    <button type="button" onClick={() => actOnStep(step.key)}>{step.label}</button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
           <div className="profile-header-top">
             {editingField === "name" ? (
               <span className="profile-inline-name" style={{ flex: 1 }}>
@@ -723,8 +998,7 @@ export default function ProfilePage() {
           </div>
 
           <p className="profile-header-meta">
-            <code>{shortId(profile.pseudonym_id)}</code>
-            {profile.email ? <> · {profile.email}</> : null}
+            Account ID <code>{shortId(profile.pseudonym_id)}</code>
             {memberSince ? <> · Member since {memberSince}</> : null}
           </p>
 
@@ -811,14 +1085,41 @@ export default function ProfilePage() {
               data-tooltip="Click to edit your bio"
               onClick={() => startEdit("bio", profile.bio || "")}
             >
-              <span className={profile.bio ? "" : "ws-muted"}>{profile.bio || "Add a bio"}</span>
+              <span className={profile.bio ? "" : "ws-muted"}>{profile.bio || "Add a short introduction — optional"}</span>
               <span className="profile-edit-pencil" aria-hidden="true">✎</span>
             </button>
           )}
         </div>
       </section>
 
-      {analyticsLoading ? (
+      <nav className="profile-tabs" aria-label="Profile sections">
+        <Link href="/profile" scroll={false} aria-current={activeTab === "overview" ? "page" : undefined}>Overview</Link>
+        <Link href="/profile?tab=activity" scroll={false} aria-current={activeTab === "activity" ? "page" : undefined}>{activityLabel}</Link>
+        <Link href="/profile?tab=account" scroll={false} aria-current={activeTab === "account" ? "page" : undefined}>Account</Link>
+      </nav>
+
+      {activeTab === "overview" && !profileTipsDismissed && COMPLETE_STEPS.some((step) => !done[step.key]) ? (
+        <section className="profile-setup-card" aria-labelledby="profile-tips-title">
+          <div className="profile-setup-copy">
+            <p className="eyebrow-label">OPTIONAL PROFILE TIPS</p>
+            <h2 id="profile-tips-title">Make ByteQuest feel more personal</h2>
+            <p>These details help ByteQuest address you clearly. They never affect access, grades, or permissions.</p>
+          </div>
+          <ul className="profile-complete-list">
+            {COMPLETE_STEPS.filter((step) => !done[step.key]).map((step) => (
+              <li key={step.key}>
+                <button type="button" onClick={() => actOnStep(step.key)}>{step.label}</button>
+              </li>
+            ))}
+          </ul>
+          <div className="profile-setup-footer">
+            <span>Profile photo is always optional.</span>
+            <button type="button" className="ws-inline-link" onClick={dismissProfileTips}>Not now</button>
+          </div>
+        </section>
+      ) : null}
+
+      {activeTab !== "account" && analyticsLoading ? (
         <section className="ws-panel" role="status" aria-label="Loading profile analytics">
           <span className="ws-skeleton ws-skeleton-line" style={{ width: "25%", height: 16 }} />
           <div className="ws-stat-grid" style={{ marginTop: 12 }}>
@@ -827,7 +1128,7 @@ export default function ProfilePage() {
         </section>
       ) : null}
 
-      {analyticsError ? (
+      {activeTab !== "account" && analyticsError ? (
         <section className="ws-panel" aria-labelledby="analytics-error-title">
           <h2 id="analytics-error-title">Progress is temporarily unavailable</h2>
           <Notice tone="error">{analyticsError}</Notice>
@@ -835,9 +1136,22 @@ export default function ProfilePage() {
         </section>
       ) : null}
 
-      {analytics?.student ? <StudentSections a={analytics.student} /> : null}
-      {analytics?.instructor ? <InstructorSections a={analytics.instructor} /> : null}
-      {analytics?.admin ? <AdminSections a={analytics.admin} /> : null}
+      {activeTab === "overview" && analytics?.student ? <StudentOverview a={analytics.student} /> : null}
+      {activeTab === "overview" && analytics?.instructor ? <InstructorOverview a={analytics.instructor} /> : null}
+      {activeTab === "overview" && analytics?.admin ? <AdminOverview a={analytics.admin} /> : null}
+
+      {activeTab === "activity" && analytics?.student ? <StudentSections a={analytics.student} /> : null}
+      {activeTab === "activity" && analytics?.instructor ? <InstructorSections a={analytics.instructor} /> : null}
+      {activeTab === "activity" && analytics?.admin ? <AdminSections a={analytics.admin} /> : null}
+
+      {activeTab === "account" ? (
+        <AccountPanel
+          profile={profile}
+          memberSince={memberSince}
+          profileTipsDismissed={profileTipsDismissed}
+          onRestoreProfileTips={restoreProfileTips}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={confirmRemove}
@@ -851,5 +1165,13 @@ export default function ProfilePage() {
         Your avatar will fall back to the generated pattern. You can upload a new photo any time.
       </ConfirmDialog>
     </div>
+  );
+}
+
+export default function ProfilePage() {
+  return (
+    <Suspense fallback={<div className="page-shell profile-shell"><section className="profile-header ws-panel"><span className="ws-skeleton ws-skeleton-avatar" /></section></div>}>
+      <ProfilePageContent />
+    </Suspense>
   );
 }

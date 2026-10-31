@@ -8,6 +8,7 @@ import { apiRequest } from "@/lib/api";
 import { getSupabase } from "@/lib/supabase";
 import { useSignOut } from "@/hooks/use-sign-out";
 import { shortId } from "@/components/workspace/ui";
+import { UserAvatar } from "@/components/user-avatar";
 import { subscribeToProfileUpdates } from "@/lib/profile-events";
 import type { Profile } from "@/lib/types";
 
@@ -119,13 +120,18 @@ export function SiteHeader({ isAuthenticated }: SiteHeaderProps) {
             <div className="ws-account" ref={accountRef}>
               <button
                 type="button"
-                className="qm-avatar ws-avatar-button"
+                className="ws-avatar-button site-header-avatar-button"
                 aria-haspopup="menu"
                 aria-expanded={accountOpen}
                 aria-label={`Account menu for ${profile.display_name || profile.pseudonym_id}`}
                 onClick={() => setAccountOpen((open) => !open)}
               >
-                {(profile.display_name || profile.pseudonym_id).slice(0, 1).toUpperCase()}
+                <UserAvatar
+                  seed={profile.pseudonym_id}
+                  name={profile.display_name || shortId(profile.pseudonym_id)}
+                  url={profile.avatar_url}
+                  size="nav"
+                />
               </button>
               {accountOpen && (
                 <div className="ws-account-menu" role="menu">

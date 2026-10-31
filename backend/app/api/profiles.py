@@ -13,6 +13,12 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.services.storage.supabase_storage import StorageError, avatar_storage
+from app.services.profile_attention import (
+    admin_attention,
+    instructor_attention,
+    instructor_course_ids,
+    personal_audit,
+)
 from app.services.gamification.progression import XP_PER_LEVEL
 from app.services.gamification.sequencer import determine_track_recommendation
 from app.services.attempt_visibility import learner_visible_attempt_clause
@@ -297,6 +303,35 @@ class StudentAnalytics(BaseModel):
     badges: list[BadgeEntry]
 
 
+class AuditEntry(BaseModel):
+    action: str
+    entity_type: str
+    summary: str
+    created_at: datetime
+
+
+class ProfileAction(BaseModel):
+    """The single highest-priority thing this user could do next."""
+
+    kind: str
+    title: str
+    detail: str
+    status: str
+    href: str
+
+
+class InstructorAttention(BaseModel):
+    drafts_awaiting_review: int = 0
+    materials_needing_attention: int = 0
+    upcoming_activities: int = 0
+
+
+class AdminAttention(BaseModel):
+    accounts_needing_action: int = 0
+    failed_jobs: int = 0
+    availability_changes: int = 0
+
+
 class InstructorAnalytics(BaseModel):
     courses: int
     activities_created: int
@@ -304,13 +339,9 @@ class InstructorAnalytics(BaseModel):
     drafts_reviewed: int
     materials_uploaded: int
     learners_taught: int
-
-
-class AuditEntry(BaseModel):
-    action: str
-    entity_type: str
-    summary: str
-    created_at: datetime
+    attention: InstructorAttention = InstructorAttention()
+    next_action: ProfileAction | None = None
+    recent_activity: list[AuditEntry] = []
 
 
 class AdminAnalytics(BaseModel):
@@ -319,7 +350,11 @@ class AdminAnalytics(BaseModel):
     total_courses: int
     total_activities: int
     total_materials: int
+    # Platform-wide audit, kept separate from the personal timeline below.
     recent_audit: list[AuditEntry]
+    attention: AdminAttention = AdminAttention()
+    next_action: ProfileAction | None = None
+    recent_activity: list[AuditEntry] = []
 
 
 class AnalyticsResponse(BaseModel):
@@ -514,18 +549,21 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
     )
 
 
-def _instructor_analytics(db: Session, user: Profile) -> InstructorAnalytics:
-    course_ids = [
-        row[0]
-        for row in db.query(CourseMember.course_id)
-        .filter(
-            CourseMember.profile_id == user.id,
-            CourseMember.member_role == "instructor",
-            CourseMember.status == "active",
+def _personal_audit_entries(db: Session, user: Profile) -> list[AuditEntry]:
+    """Audit events this user personally performed (never anyone else)."""
+    return [
+        AuditEntry(
+            action=event.action,
+            entity_type=event.entity_type,
+            summary=event.summary,
+            created_at=event.created_at,
         )
-        .distinct()
-        .all()
+        for event in personal_audit(db, user.id)
     ]
+
+
+def _instructor_analytics(db: Session, user: Profile) -> InstructorAnalytics:
+    course_ids = instructor_course_ids(db, user)
 
     activities_created = (
         db.query(func.count(LearningActivity.id)).filter(LearningActivity.created_by == user.id).scalar() or 0
@@ -558,6 +596,8 @@ def _instructor_analytics(db: Session, user: Profile) -> InstructorAnalytics:
             or 0
         )
 
+    attention_counts, next_action = instructor_attention(db, user, course_ids)
+
     return InstructorAnalytics(
         courses=len(course_ids),
         activities_created=int(activities_created),
@@ -565,6 +605,9 @@ def _instructor_analytics(db: Session, user: Profile) -> InstructorAnalytics:
         drafts_reviewed=int(drafts_reviewed),
         materials_uploaded=int(materials_uploaded),
         learners_taught=int(learners_taught),
+        attention=InstructorAttention(**attention_counts),
+        next_action=ProfileAction(**next_action),
+        recent_activity=_personal_audit_entries(db, user),
     )
 
 
@@ -597,6 +640,8 @@ def _admin_analytics(db: Session, user: Profile) -> AdminAnalytics:
         for event in audit_rows
     ]
 
+    attention_counts, next_action = admin_attention(db, user)
+
     return AdminAnalytics(
         total_accounts=int(total_accounts),
         accounts_by_role=accounts_by_role,
@@ -604,6 +649,9 @@ def _admin_analytics(db: Session, user: Profile) -> AdminAnalytics:
         total_activities=int(total_activities),
         total_materials=int(total_materials),
         recent_audit=recent_audit,
+        attention=AdminAttention(**attention_counts),
+        next_action=ProfileAction(**next_action),
+        recent_activity=_personal_audit_entries(db, user),
     )
 
 

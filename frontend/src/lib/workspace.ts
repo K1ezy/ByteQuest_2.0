@@ -984,6 +984,34 @@ export interface StudentAnalytics {
   badges: BadgeEntry[];
 }
 
+export interface ProfileAuditEntry {
+  action: string;
+  entity_type: string;
+  summary: string;
+  created_at: string;
+}
+
+/** The single highest-priority thing this user could do next. */
+export interface ProfileAction {
+  kind: string;
+  title: string;
+  detail: string;
+  status: string;
+  href: string;
+}
+
+export interface InstructorAttention {
+  drafts_awaiting_review: number;
+  materials_needing_attention: number;
+  upcoming_activities: number;
+}
+
+export interface AdminAttention {
+  accounts_needing_action: number;
+  failed_jobs: number;
+  availability_changes: number;
+}
+
 export interface InstructorAnalytics {
   courses: number;
   activities_created: number;
@@ -991,13 +1019,10 @@ export interface InstructorAnalytics {
   drafts_reviewed: number;
   materials_uploaded: number;
   learners_taught: number;
-}
-
-export interface ProfileAuditEntry {
-  action: string;
-  entity_type: string;
-  summary: string;
-  created_at: string;
+  attention: InstructorAttention;
+  next_action: ProfileAction | null;
+  /** Only actions this user personally performed. */
+  recent_activity: ProfileAuditEntry[];
 }
 
 export interface AdminAnalytics {
@@ -1006,7 +1031,12 @@ export interface AdminAnalytics {
   total_courses: number;
   total_activities: number;
   total_materials: number;
+  /** Platform-wide audit, distinct from the personal timeline below. */
   recent_audit: ProfileAuditEntry[];
+  attention: AdminAttention;
+  next_action: ProfileAction | null;
+  /** Only actions this user personally performed. */
+  recent_activity: ProfileAuditEntry[];
 }
 
 export interface ProfileAnalytics {
