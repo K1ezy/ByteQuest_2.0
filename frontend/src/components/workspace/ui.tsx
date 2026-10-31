@@ -116,6 +116,7 @@ export function StatCard({
   icon,
   href,
   tone = "info",
+  tooltip,
 }: {
   label: string;
   value: ReactNode;
@@ -123,6 +124,7 @@ export function StatCard({
   icon?: ReactNode;
   href?: string;
   tone?: "info" | "good" | "wait" | "bad";
+  tooltip?: string;
 }) {
   const inner = (
     <>
@@ -139,27 +141,107 @@ export function StatCard({
     </>
   );
   return href ? (
-    <Link className="ws-stat-card" href={href}>
+    <Link className="ws-stat-card" href={href} data-tooltip={tooltip}>
       {inner}
     </Link>
   ) : (
-    <div className="ws-stat-card">{inner}</div>
+    <div className="ws-stat-card" data-tooltip={tooltip}>
+      {inner}
+    </div>
   );
 }
 
 export type StatusTone = "good" | "wait" | "bad" | "info" | "muted";
 
-export function StatusChip({ state, label, tone }: { state: string; label?: string; tone?: StatusTone }) {
+export function StatusChip({
+  state,
+  label,
+  tone,
+  tooltip,
+}: {
+  state: string;
+  label?: string;
+  tone?: StatusTone;
+  tooltip?: string;
+}) {
   const resolvedTone = tone || stateTone(state);
-  return <span className={`ws-chip ${resolvedTone}`}>{label || prettify(state)}</span>;
+  return (
+    <span className={`ws-chip ${resolvedTone}`} data-tooltip={tooltip}>
+      {label || prettify(state)}
+    </span>
+  );
 }
 
 export function stateTone(state: string): StatusTone {
-  if (["ready", "open", "published", "healthy", "active", "complete", "ready_for_review"].includes(state)) return "good";
-  if (["processing", "scheduled", "pending", "stale", "draft_ready"].includes(state)) return "wait";
+  if (["ready", "open", "published", "healthy", "active", "complete", "ready_for_review", "verified", "passed"].includes(state)) return "good";
+  if (["processing", "scheduled", "pending", "stale", "draft_ready", "needs_review", "needs_verification"].includes(state)) return "wait";
   if (["failed", "rejected", "closed", "deactivated", "unavailable"].includes(state)) return "bad";
   if (["draft"].includes(state)) return "info";
   return "muted";
+}
+
+/* --------------------------------------------------------------- identity */
+
+// Deterministic hue from a pseudonymous id so each person keeps a stable
+// monogram colour across sessions without revealing anything about who they are.
+function identityHue(seed: string): number {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) % 360;
+  }
+  return hash;
+}
+
+// stu_b9bbb48f48444951a1c66cc1e04bcfd -> "stu_b9bb…bcfd": compact but still
+// identifiable and copyable, instead of a 30-character hash dominating the row.
+export function shortId(id: string): string {
+  if (!id) return "";
+  if (id.length <= 14) return id;
+  return `${id.slice(0, 8)}…${id.slice(-4)}`;
+}
+
+// Primary label for a pseudonymous person: their chosen display name when set,
+// otherwise a short readable handle derived from the stable id.
+export function personName(displayName: string | null | undefined, pseudonym: string): string {
+  const trimmed = displayName?.trim();
+  if (trimmed) return trimmed;
+  const bare = (pseudonym || "").replace(/^[a-z]+_/i, "");
+  return bare ? `Learner ${bare.slice(0, 4).toUpperCase()}` : "Learner";
+}
+
+export function Identity({
+  displayName,
+  pseudonym,
+  meta,
+  size = "md",
+}: {
+  displayName?: string | null;
+  pseudonym: string;
+  meta?: ReactNode;
+  size?: "sm" | "md";
+}) {
+  const name = personName(displayName, pseudonym);
+  const bare = (pseudonym || "").replace(/^[a-z]+_/i, "");
+  const monogram = (displayName?.trim()?.[0] ?? bare[0] ?? "?").toUpperCase();
+  const hue = identityHue(pseudonym || name);
+  return (
+    <span className={`ws-identity ws-identity-${size}`}>
+      <span
+        className="ws-identity-avatar"
+        aria-hidden="true"
+        style={{ background: `hsl(${hue} 70% 93%)`, color: `hsl(${hue} 52% 32%)` }}
+      >
+        {monogram}
+      </span>
+      <span className="ws-identity-text">
+        <strong>{name}</strong>
+        <span className="ws-row-meta">
+          <code>{shortId(pseudonym)}</code>
+          {meta ? <> · {meta}</> : null}
+        </span>
+      </span>
+    </span>
+  );
 }
 
 export function prettify(value: string): string {

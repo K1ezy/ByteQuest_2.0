@@ -56,7 +56,7 @@ function FacultyDashboardPage() {
         }
         status={<span className="ws-muted">{data.counts.active_learners} active learners</span>}
         actions={
-          <Button variant="outline" onClick={reload}>
+          <Button variant="outline" data-tooltip="Reload dashboard counts and tasks" onClick={reload}>
             Refresh
           </Button>
         }
@@ -70,6 +70,7 @@ function FacultyDashboardPage() {
           icon="◇"
           tone="info"
           href={draftCardHref}
+          tooltip="AI-generated drafts waiting for your approval — open the review queue"
         />
         <StatCard
           label="Materials needing attention"
@@ -78,6 +79,7 @@ function FacultyDashboardPage() {
           icon="▤"
           tone={data.counts.materials_needing_attention ? "bad" : "good"}
           href={data.queue_hrefs.materials}
+          tooltip="PDFs that failed processing or lack searchable text — open Materials"
         />
         <StatCard
           label="Upcoming activities"
@@ -86,6 +88,7 @@ function FacultyDashboardPage() {
           icon="▦"
           tone="info"
           href={data.queue_hrefs.activities}
+          tooltip="Activities scheduled to open soon — open Activities"
         />
         <StatCard
           label="Class progress"
@@ -94,6 +97,7 @@ function FacultyDashboardPage() {
           icon="↗"
           tone="good"
           href={data.queue_hrefs.performance}
+          tooltip="Average completion across published activities — open Performance"
         />
       </div>
 
@@ -137,7 +141,11 @@ function FacultyDashboardPage() {
                   </div>
                   <div className="ws-row-actions">
                     <StatusChip state={item.status} tone={item.severity} />
-                    <Link className="button button-outline small" href={item.href}>
+                    <Link
+                      className="button button-outline small"
+                      href={item.href}
+                      data-tooltip={`${ACTION_LABEL[item.kind] || "Open"}: ${item.title}`}
+                    >
                       {ACTION_LABEL[item.kind] || "Open"}
                     </Link>
                   </div>

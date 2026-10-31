@@ -271,7 +271,7 @@ function FacultyMaterials() {
         description="Course sources and PDF processing. Indexed passages become the citable evidence for generated drafts."
         status={data ? <StatusChip state="active" label={`${data.total} in this view`} /> : undefined}
         actions={
-          <Button variant="primary" onClick={() => openUpload(null)}>
+          <Button variant="primary" data-tooltip="Upload a new course PDF to index as citable evidence" onClick={() => openUpload(null)}>
             Upload PDF
           </Button>
         }
@@ -499,28 +499,28 @@ function FacultyMaterials() {
                 <div className="ws-row-actions ws-material-actions">
                   <StatusChip state={material.state} label={materialStateLabel[material.state]} />
                   <div className="ws-action-grid">
-                    <Button variant="outline" disabled={busy !== ""} onClick={() => void doDownload(material)}>
+                    <Button variant="primary" disabled={busy !== ""} data-tooltip="Download the stored PDF for this version" onClick={() => void doDownload(material)}>
                       {busy === "download" ? "Preparing…" : "Download PDF"}
                     </Button>
                     {material.state === "failed" && material.can_retry ? (
-                      <Button variant="outline" disabled={busy !== ""} onClick={() => void doRetry(material)}>
+                      <Button variant="outline" disabled={busy !== ""} data-tooltip="Retry indexing this PDF after a transient failure" onClick={() => void doRetry(material)}>
                         {busy === "retry" ? "Retrying…" : "Retry processing"}
                       </Button>
                     ) : null}
                     {!material.archived_at ? (
-                      <Button variant="outline" disabled={busy !== ""} onClick={() => openUpload(material)}>
+                      <Button variant="outline" disabled={busy !== ""} data-tooltip="Upload a new PDF as the next version, keeping citation history" onClick={() => openUpload(material)}>
                         Replace version
                       </Button>
                     ) : null}
-                    <Button variant="quiet" disabled={busy !== ""} onClick={() => startEdit(material)}>
+                    <Button variant="quiet" disabled={busy !== ""} data-tooltip="Edit the title, topic and metadata for this material" onClick={() => startEdit(material)}>
                       Edit details
                     </Button>
                     {material.archived_at ? (
-                      <Button variant="quiet" disabled={busy !== ""} onClick={() => void doRestore(material)}>
+                      <Button variant="quiet" disabled={busy !== ""} data-tooltip="Restore this material so it can be cited again" onClick={() => void doRestore(material)}>
                         {busy === "restore" ? "Restoring…" : "Restore"}
                       </Button>
                     ) : (
-                      <Button variant="danger" disabled={busy !== ""} onClick={() => setArchiveTarget(material)}>
+                      <Button variant="danger" disabled={busy !== ""} data-tooltip="Archive this material; historical citations stay intact" onClick={() => setArchiveTarget(material)}>
                         Archive
                       </Button>
                     )}
