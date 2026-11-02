@@ -17,12 +17,12 @@ ByteQuest lets students practice coding challenges and quizzes in **C++, Python,
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js · TypeScript · Tailwind · Monaco editor · Supabase auth |
+| Frontend | Next.js · React · TypeScript · hand-written CSS design tokens · Monaco editor · Supabase auth |
 | Backend | FastAPI (Python 3.11) · SQLAlchemy |
 | Data | Supabase — PostgreSQL, Auth, Storage, pgvector |
 | Code execution | Judge0 Extra CE 1.13.1 (private Ubuntu VM) |
 | AI | Google Gemini (challenge generation, embeddings, hints) |
-| ML | Offline scikit-learn pipeline (Logistic Regression, Random Forest) |
+| ML | Offline scikit-learn comparison of Logistic Regression and Random Forest on a student-disjoint 60/20/20 split |
 | Infra | Docker Compose · Caddy · PowerShell launch scripts |
 
 ## Architecture
@@ -42,7 +42,7 @@ FastAPI backend (localhost:8000–8010)
 ```text
 ByteQuest_2.0/
 ├── backend/        # FastAPI app: api routes, core, models, services, scripts, tests
-├── frontend/       # Next.js + TypeScript + Tailwind application
+├── frontend/       # Next.js + TypeScript app; all styling in src/app/globals.css
 ├── infra/          # Local launcher, VM config, and VPS deployment templates
 ├── ml_pipeline/    # Shared features and offline model comparison
 ├── supabase/       # Database migrations and idempotent local seed data

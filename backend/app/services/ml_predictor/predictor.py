@@ -23,6 +23,7 @@ from app.services.ml_predictor.feature_engineering import (
     FEATURE_NAMES,
     extract_features_from_dataframe,
 )
+from app.services.ml_predictor.thresholds import classify_success, recommended_action
 
 logger = logging.getLogger(__name__)
 
@@ -229,8 +230,10 @@ def _positive_probability(model: Any, model_input: pd.DataFrame) -> tuple[float,
     probability = float(probabilities[0][positive_index])
     if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
         raise ModelArtifactError("Model returned an invalid probability.")
-    predicted = bool(model.predict(model_input)[0] == 1)
-    return probability, predicted
+    # Classify from the shared threshold rather than the estimator's own
+    # argmax, so a served prediction uses the same boundary the reported
+    # offline metrics were computed at.
+    return probability, classify_success(probability)
 
 
 def predict_student_success(
@@ -310,12 +313,6 @@ def predict_student_success(
         models.logistic_regression, model_input
     )
     rf_probability, rf_prediction = _positive_probability(models.random_forest, model_input)
-    if rf_probability >= 0.60:
-        recommended_action = "advance_next_level"
-    elif rf_probability >= 0.40:
-        recommended_action = "standard_next"
-    else:
-        recommended_action = "remedial_practice"
 
     return PredictionResult(
         features=features,
@@ -323,6 +320,6 @@ def predict_student_success(
         logreg_prediction=logreg_prediction,
         rf_probability=rf_probability,
         rf_prediction=rf_prediction,
-        recommended_action=recommended_action,
+        recommended_action=recommended_action(rf_probability),
         model_version=models.model_version,
     )

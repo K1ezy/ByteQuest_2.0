@@ -67,14 +67,47 @@ python -m pip install -r backend/requirements.txt
 python ml_pipeline/train_compare.py --data-csv .\ml_pipeline\data\attempts.csv --research-approved
 ```
 
-The script includes cold-start rows, performs nested student-grouped
-`GroupKFold` evaluation and tuning, and writes both pipelines, model metadata,
-ROC curve points, confusion matrices, and fold metrics to an immutable
-`ml_pipeline/artifacts/runs/<model-version>/` directory. Files are staged and
-published as one completed run; metadata includes SHA-256 integrity hashes.
-Each run records its data source, feature schema, library version, sample and
-student counts, and grouped evaluation results. It does not write an activation
-manifest or replace earlier runs.
+The script includes cold-start rows and writes both pipelines, model metadata,
+ROC and precision-recall curve points, confusion matrices, and per-partition
+metrics to an immutable `ml_pipeline/artifacts/runs/<model-version>/`
+directory. Files are staged and published as one completed run; metadata
+includes SHA-256 integrity hashes. Each run records its data source, feature
+schema, library version, sample and student counts, the full comparison
+protocol, and the evaluation results. It does not write an activation manifest
+or replace earlier runs.
+
+## Comparison protocol
+
+Every run follows the protocol the thesis reports, and records it under
+`protocol` in `metrics_summary.json` so a reader never has to infer it:
+
+- **Split.** Rows are partitioned 60/20/20 into train, validation and test by
+  `student_id`, so no student's records span partitions. Students are dealt out
+  from one seeded permutation stream (`--seed`, default 42), and candidate
+  permutations are redrawn until all three partitions carry both outcome
+  classes. The split is reproducible from the seed alone.
+- **Preprocessing and tuning.** Median imputation, scaling and the
+  `GridSearchCV` hyperparameter search run inside the training partition only,
+  over student-grouped `GroupKFold` folds. Validation and test rows never
+  influence a fitted transformer or a chosen hyperparameter.
+- **Selection.** The winner is the model with the higher validation Average
+  Precision (PR-AUC), which stays informative when passes and failures are
+  imbalanced. A predeclared tie rule resolves gaps of at most 0.005 to logistic
+  regression as the simpler, directly interpretable model.
+- **Test evaluation.** Both pipelines are frozen and the winner is fixed before
+  the test partition is scored, once, informing no decision. Reported metrics
+  are accuracy, precision, recall, F1, ROC-AUC, Average Precision, Brier score
+  and the confusion matrix, beside a majority-class and a prevalence baseline
+  fitted on the same training partition.
+- **Threshold.** Every threshold-dependent metric uses `DECISION_THRESHOLD`
+  from `backend/app/services/ml_predictor/thresholds.py`, the same constant the
+  live predictor classifies with, so a reported metric and a served prediction
+  can never disagree about where a predicted pass begins. The wider 0.60/0.40
+  advisory bands in that module drive next-task guidance only and never enter
+  the reported metrics.
+- **Saved artifacts.** The published pipelines are the ones fitted on the
+  training partition, so the reported test metrics describe exactly the models
+  on disk rather than a later refit on all rows.
 
 The backend loader checks for a separate explicit `active_model.json`, requires
 the selected version to be inside `artifacts/runs/`, validates approval and
