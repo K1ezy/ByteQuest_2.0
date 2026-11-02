@@ -3,6 +3,13 @@
 Input CSV files contain one joined activity attempt per row with the columns
 required by ``REQUIRED_COLUMNS``. Without a CSV, a clearly labeled synthetic
 dataset is used for pipeline setup; those results are not empirical findings.
+
+Protocol: rows are partitioned 60/20/20 by student, so no student's records
+span partitions. Imputation, scaling and hyperparameter tuning see the training
+partition only; the winning model is chosen on the validation partition by
+Average Precision; both frozen pipelines are then scored exactly once on the
+untouched test partition, beside a majority-class and a prevalence baseline.
+Every threshold-dependent metric uses the shared ``DECISION_THRESHOLD``.
 """
 
 from __future__ import annotations
@@ -21,13 +28,17 @@ import joblib
 import numpy as np
 import pandas as pd
 import sklearn
+from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
+    brier_score_loss,
     confusion_matrix,
     f1_score,
+    precision_recall_curve,
     precision_score,
     recall_score,
     roc_auc_score,
@@ -45,12 +56,29 @@ from app.services.ml_predictor.feature_engineering import (  # noqa: E402
     FEATURE_NAMES,
     extract_features_from_dataframe,
 )
+from app.services.ml_predictor.thresholds import DECISION_THRESHOLD  # noqa: E402
 
 ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
 RANDOM_SEED = 42
 MODEL_VERSION = "v1.0.0"
 DATASET_SOURCE_SYNTHETIC = "synthetic_bootstrap"
 DATASET_SOURCE_APPROVED = "approved_deidentified_csv"
+# Student-disjoint partition sizes; the test share is whatever remains.
+TRAIN_FRACTION = 0.60
+VALIDATION_FRACTION = 0.20
+PARTITION_NAMES = ("train", "validation", "test")
+# Three partitions, each needing both outcome classes, and a training partition
+# that still has two groups left for inner grouped tuning.
+MIN_STUDENTS = 5
+MAX_SPLIT_ATTEMPTS = 64
+# Average Precision summarises the precision-recall curve, which stays
+# informative when passes and failures are imbalanced; it selects the model.
+PRIMARY_SELECTION_METRIC = "average_precision"
+# Predeclared tie rule: a validation gap this small is not evidence of a real
+# difference, so the simpler, directly interpretable model wins.
+SELECTION_TIE_TOLERANCE = 0.005
+# Naive references the reported models must beat to mean anything.
+BASELINE_STRATEGIES = {"majority_class": "most_frequent", "prevalence": "prior"}
 REQUIRED_COLUMNS = {
     "id",
     "student_id",
@@ -355,7 +383,61 @@ def generate_synthetic_thesis_dataset(
     return pd.DataFrame.from_records(records)
 
 
-def _build_pipeline(model_name: str) -> tuple[Pipeline, dict[str, list[Any]]]:
+def split_students_disjoint(
+    y: np.ndarray, groups: np.ndarray, *, seed: int = RANDOM_SEED
+) -> dict[str, np.ndarray]:
+    """Partition rows 60/20/20 so every student sits in exactly one partition.
+
+    Students, not rows, are dealt out; that is what stops one student's records
+    from spanning partitions and leaking their own history across the split.
+    Permutations come from a single seeded stream, so the chosen split is
+    reproducible from ``seed`` alone. A partition missing an outcome class
+    would leave ROC-AUC and Average Precision undefined there, so candidate
+    permutations are redrawn until all three carry both classes.
+    """
+    unique_students = np.unique(groups)
+    total = len(unique_students)
+    if total < MIN_STUDENTS:
+        raise ValueError(
+            f"A student-disjoint 60/20/20 split needs at least {MIN_STUDENTS} "
+            f"students; found {total}."
+        )
+    # Clamp so the training partition keeps two groups for inner grouped
+    # tuning and the validation and test partitions are never empty.
+    n_train = max(2, min(int(round(total * TRAIN_FRACTION)), total - 2))
+    n_validation = max(
+        1, min(int(round(total * VALIDATION_FRACTION)), total - n_train - 1)
+    )
+
+    rng = np.random.default_rng(seed)
+    for _ in range(MAX_SPLIT_ATTEMPTS):
+        shuffled = rng.permutation(unique_students)
+        assigned = {
+            "train": shuffled[:n_train],
+            "validation": shuffled[n_train : n_train + n_validation],
+            "test": shuffled[n_train + n_validation :],
+        }
+        partitions = {
+            name: np.flatnonzero(np.isin(groups, students))
+            for name, students in assigned.items()
+        }
+        covered = np.concatenate([partitions[name] for name in PARTITION_NAMES])
+        if len(covered) != len(groups) or len(np.unique(covered)) != len(groups):
+            raise RuntimeError(
+                "Student partitioning did not place every row in exactly one partition."
+            )
+        if all(len(np.unique(y[rows])) == 2 for rows in partitions.values()):
+            return partitions
+    raise ValueError(
+        "Could not place both outcome classes in all three partitions after "
+        f"{MAX_SPLIT_ATTEMPTS} seeded attempts. Collect more students, or more "
+        "balanced outcomes per student, before comparing models."
+    )
+
+
+def _build_pipeline(
+    model_name: str, *, seed: int = RANDOM_SEED
+) -> tuple[Pipeline, dict[str, list[Any]]]:
     if model_name == "logreg":
         pipeline = Pipeline(
             [
@@ -363,7 +445,7 @@ def _build_pipeline(model_name: str) -> tuple[Pipeline, dict[str, list[Any]]]:
                 ("scaler", StandardScaler()),
                 (
                     "classifier",
-                    LogisticRegression(max_iter=2000, class_weight="balanced", random_state=RANDOM_SEED),
+                    LogisticRegression(max_iter=2000, class_weight="balanced", random_state=seed),
                 ),
             ]
         )
@@ -375,7 +457,7 @@ def _build_pipeline(model_name: str) -> tuple[Pipeline, dict[str, list[Any]]]:
                 (
                     "classifier",
                     RandomForestClassifier(
-                        class_weight="balanced", random_state=RANDOM_SEED, n_jobs=1
+                        class_weight="balanced", random_state=seed, n_jobs=1
                     ),
                 ),
             ]
@@ -398,40 +480,100 @@ def _probability_for_success(model: Pipeline, X: pd.DataFrame) -> np.ndarray:
     return model.predict_proba(X)[:, int(positive_columns[0])]
 
 
-def _evaluate_fold(
+def _finite_or_none(values: np.ndarray) -> list[float | None]:
+    """JSON cannot hold the infinite first threshold a ROC curve reports."""
+    return [float(value) if np.isfinite(value) else None for value in values]
+
+
+def _evaluate_partition(
     model: Pipeline,
     X: pd.DataFrame,
     y: np.ndarray,
+    groups: np.ndarray,
     *,
-    model_name: str,
-    fold_number: int,
-    n_train_students: int,
-    n_validation_students: int,
+    partition: str,
 ) -> dict[str, Any]:
-    predicted = model.predict(X)
+    """Score one frozen estimator on one partition at ``DECISION_THRESHOLD``.
+
+    The label is taken from the probability and the shared threshold rather
+    than from ``predict``, so the reported metrics and the served predictions
+    are guaranteed to use one boundary. Ranking metrics need both outcome
+    classes present and are reported as null when the partition lacks one.
+    """
     probabilities = _probability_for_success(model, X)
+    predicted = (probabilities >= DECISION_THRESHOLD).astype(np.int8)
+    both_classes = len(np.unique(y)) == 2
     result: dict[str, Any] = {
-        "model": model_name,
-        "fold": fold_number,
-        "train_students": n_train_students,
-        "validation_students": n_validation_students,
+        "partition": partition,
+        "n_samples": int(len(y)),
+        "n_students": int(len(np.unique(groups))),
+        "positive_rate": float(np.mean(y)),
+        "decision_threshold": DECISION_THRESHOLD,
         "accuracy": float(accuracy_score(y, predicted)),
         "precision": float(precision_score(y, predicted, zero_division=0)),
         "recall": float(recall_score(y, predicted, zero_division=0)),
         "f1_score": float(f1_score(y, predicted, zero_division=0)),
-        "roc_auc": float(roc_auc_score(y, probabilities)) if len(np.unique(y)) == 2 else None,
+        "roc_auc": float(roc_auc_score(y, probabilities)) if both_classes else None,
+        "average_precision": (
+            float(average_precision_score(y, probabilities)) if both_classes else None
+        ),
+        "brier_score": float(brier_score_loss(y, probabilities)),
         "confusion_matrix": confusion_matrix(y, predicted, labels=[0, 1]).tolist(),
     }
-    if len(np.unique(y)) == 2:
-        false_positive_rate, true_positive_rate, thresholds = roc_curve(y, probabilities)
+    if both_classes:
+        false_positive_rate, true_positive_rate, roc_thresholds = roc_curve(y, probabilities)
         result["roc_curve"] = {
             "false_positive_rate": false_positive_rate.tolist(),
             "true_positive_rate": true_positive_rate.tolist(),
-            "thresholds": [float(value) if np.isfinite(value) else None for value in thresholds],
+            "thresholds": _finite_or_none(roc_thresholds),
+        }
+        precisions, recalls, pr_thresholds = precision_recall_curve(y, probabilities)
+        result["pr_curve"] = {
+            "precision": precisions.tolist(),
+            "recall": recalls.tolist(),
+            "thresholds": _finite_or_none(pr_thresholds),
         }
     else:
         result["roc_curve"] = None
+        result["pr_curve"] = None
     return result
+
+
+def _select_winner(scores: dict[str, dict[str, dict[str, Any]]]) -> tuple[str, bool]:
+    """Choose the model with the higher validation Average Precision.
+
+    Returns the winner and whether the predeclared tie rule decided it. The
+    test partition is deliberately not consulted: selection happens before it
+    is ever scored.
+    """
+    validation_scores = {
+        model_name: partition_scores["validation"]["average_precision"]
+        for model_name, partition_scores in scores.items()
+    }
+    missing = sorted(name for name, value in validation_scores.items() if value is None)
+    if missing:
+        raise ValueError(
+            "Validation Average Precision is undefined for "
+            + ", ".join(missing)
+            + "; the validation partition must contain both outcome classes."
+        )
+    logreg_score = validation_scores["logreg"]
+    forest_score = validation_scores["random_forest"]
+    if abs(logreg_score - forest_score) <= SELECTION_TIE_TOLERANCE:
+        return "logreg", True
+    return ("logreg" if logreg_score > forest_score else "random_forest"), False
+
+
+def _fit_baselines(
+    train_X: pd.DataFrame, train_y: np.ndarray, *, seed: int
+) -> dict[str, DummyClassifier]:
+    """Fit the naive references, on the training partition like any model."""
+    baselines: dict[str, DummyClassifier] = {}
+    for name, strategy in BASELINE_STRATEGIES.items():
+        baseline = DummyClassifier(strategy=strategy, random_state=seed)
+        baseline.fit(train_X, train_y)
+        baselines[name] = baseline
+    return baselines
 
 
 def _validate_group_splits(
@@ -456,7 +598,14 @@ def _fit_tuned_model(
     groups: np.ndarray,
     *,
     n_jobs: int,
+    seed: int = RANDOM_SEED,
 ) -> GridSearchCV:
+    """Tune one pipeline on grouped folds drawn from the given rows only.
+
+    Callers pass the training partition, so the imputer, the scaler and the
+    hyperparameter search never observe validation or test rows. Candidates are
+    ranked by Average Precision, the same metric that later selects the winner.
+    """
     unique_groups = np.unique(groups)
     inner_splits = min(3, len(unique_groups))
     if inner_splits < 2:
@@ -464,11 +613,11 @@ def _fit_tuned_model(
     cv = GroupKFold(n_splits=inner_splits)
     splits = list(cv.split(X, y, groups=groups))
     _validate_group_splits(splits, y, groups)
-    pipeline, parameter_grid = _build_pipeline(model_name)
+    pipeline, parameter_grid = _build_pipeline(model_name, seed=seed)
     search = GridSearchCV(
         estimator=pipeline,
         param_grid=parameter_grid,
-        scoring="f1",
+        scoring=PRIMARY_SELECTION_METRIC,
         cv=splits,
         n_jobs=n_jobs,
         refit=True,
@@ -477,11 +626,6 @@ def _fit_tuned_model(
     )
     search.fit(X, y)
     return search
-
-
-def _mean_metric(folds: list[dict[str, Any]], metric: str) -> float | None:
-    values = [fold[metric] for fold in folds if fold[metric] is not None]
-    return float(np.mean(values)) if values else None
 
 
 def _atomic_write(path: Path, writer: Any) -> None:
@@ -525,8 +669,15 @@ def run_training_and_comparison(
     artifacts_dir: Path | str | None = None,
     dataset_source: str,
     n_jobs: int = 1,
+    seed: int = RANDOM_SEED,
 ) -> dict[str, Any]:
-    """Tune and compare both classifiers using student-isolated outer folds."""
+    """Tune, select and compare both classifiers on a student-disjoint split.
+
+    Tuning and preprocessing see the training partition only, the winner is
+    chosen on the validation partition by Average Precision, and each frozen
+    pipeline is scored once on the untouched test partition beside a
+    majority-class and a prevalence baseline.
+    """
     if n_jobs == 0:
         raise ValueError("n_jobs cannot be zero.")
     if dataset_source not in {DATASET_SOURCE_SYNTHETIC, DATASET_SOURCE_APPROVED}:
@@ -535,55 +686,61 @@ def run_training_and_comparison(
             f"{DATASET_SOURCE_APPROVED!r}."
         )
     X, y, groups = prepare_ml_dataset(df)
-    unique_students = np.unique(groups)
-    if len(unique_students) < 5:
-        raise ValueError(
-            f"GroupKFold(n_splits=5) requires at least five students; found {len(unique_students)}."
+    partitions = split_students_disjoint(y, groups, seed=seed)
+    train_rows = partitions["train"]
+    train_X = X.iloc[train_rows]
+    train_y = y[train_rows]
+    train_groups = groups[train_rows]
+
+    trained_models: dict[str, Pipeline] = {}
+    best_parameters: dict[str, dict[str, Any]] = {}
+    scores: dict[str, dict[str, dict[str, Any]]] = {}
+    for model_name in ("logreg", "random_forest"):
+        search = _fit_tuned_model(
+            model_name, train_X, train_y, train_groups, n_jobs=n_jobs, seed=seed
         )
-
-    outer_cv = GroupKFold(n_splits=5)
-    outer_splits = list(outer_cv.split(X, y, groups=groups))
-    _validate_group_splits(outer_splits, y, groups)
-    fold_results: dict[str, list[dict[str, Any]]] = {"logreg": [], "random_forest": []}
-
-    for fold_number, (train_indices, validation_indices) in enumerate(outer_splits, start=1):
-        train_X = X.iloc[train_indices]
-        validation_X = X.iloc[validation_indices]
-        train_y = y[train_indices]
-        validation_y = y[validation_indices]
-        train_groups = groups[train_indices]
-
-        for model_name in ("logreg", "random_forest"):
-            tuned = _fit_tuned_model(
-                model_name,
-                train_X,
-                train_y,
-                train_groups,
-                n_jobs=n_jobs,
+        # GridSearchCV refits the winning configuration on the whole training
+        # partition; that refit is the pipeline frozen and saved below.
+        trained_models[model_name] = search.best_estimator_
+        best_parameters[model_name] = search.best_params_
+        scores[model_name] = {
+            name: _evaluate_partition(
+                search.best_estimator_,
+                X.iloc[partitions[name]],
+                y[partitions[name]],
+                groups[partitions[name]],
+                partition=name,
             )
-            fold_results[model_name].append(
-                _evaluate_fold(
-                    tuned.best_estimator_,
-                    validation_X,
-                    validation_y,
-                    model_name=model_name,
-                    fold_number=fold_number,
-                    n_train_students=len(np.unique(train_groups)),
-                    n_validation_students=len(np.unique(groups[validation_indices])),
-                )
-            )
+            for name in ("train", "validation")
+        }
+
+    winner, tie_rule_applied = _select_winner(scores)
+
+    # Both pipelines are frozen and the winner is fixed, so the test partition
+    # is scored exactly once here and informs no tuning or selection decision.
+    test_rows = partitions["test"]
+    test_X = X.iloc[test_rows]
+    test_y = y[test_rows]
+    test_groups = groups[test_rows]
+    for model_name, model in trained_models.items():
+        scores[model_name]["test"] = _evaluate_partition(
+            model, test_X, test_y, test_groups, partition="test"
+        )
+    baseline_scores = {
+        name: {
+            "strategy": BASELINE_STRATEGIES[name],
+            "test": _evaluate_partition(
+                baseline, test_X, test_y, test_groups, partition="test"
+            ),
+        }
+        for name, baseline in _fit_baselines(train_X, train_y, seed=seed).items()
+    }
 
     artifacts_root = Path(artifacts_dir or ARTIFACTS_DIR).expanduser().resolve()
     run_parent = artifacts_root / (
         "development" if dataset_source == DATASET_SOURCE_SYNTHETIC else "runs"
     )
     run_parent.mkdir(parents=True, exist_ok=True)
-    trained_models: dict[str, Pipeline] = {}
-    final_parameters: dict[str, dict[str, Any]] = {}
-    for model_name in ("logreg", "random_forest"):
-        final_search = _fit_tuned_model(model_name, X, y, groups, n_jobs=n_jobs)
-        trained_models[model_name] = final_search.best_estimator_
-        final_parameters[model_name] = final_search.best_params_
 
     generated_at = datetime.now(timezone.utc)
     model_version = f"{MODEL_VERSION}-{generated_at.strftime('%Y%m%dT%H%M%S%fZ')}"
@@ -592,29 +749,64 @@ def run_training_and_comparison(
     metrics_summary = {
         "model_version": model_version,
         "dataset_source": dataset_source,
-        "is_synthetic_data": dataset_source == "synthetic_bootstrap",
+        "is_synthetic_data": dataset_source == DATASET_SOURCE_SYNTHETIC,
         "research_approved": dataset_source == DATASET_SOURCE_APPROVED,
         "n_samples": int(len(y)),
-        "n_students": int(len(unique_students)),
+        "n_students": int(len(np.unique(groups))),
         "outcome_counts": {
             "unsuccessful": int((y == 0).sum()),
             "successful": int((y == 1).sum()),
         },
         "features": list(FEATURE_NAMES),
-        "outer_cv": "GroupKFold(n_splits=5), grouped by student_id",
-        "hyperparameter_tuning": "inner GroupKFold, student_id grouped",
+        "protocol": {
+            "split": (
+                "student-disjoint 60/20/20 train/validation/test, partitioned by student_id"
+            ),
+            "random_seed": seed,
+            "preprocessing": (
+                "median imputation and scaling fitted on the training partition only"
+            ),
+            "hyperparameter_tuning": (
+                "GridSearchCV over GroupKFold folds inside the training partition only"
+            ),
+            "primary_selection_metric": PRIMARY_SELECTION_METRIC,
+            "selection_tie_rule": (
+                f"a validation Average Precision gap of at most {SELECTION_TIE_TOLERANCE} "
+                "resolves to logistic regression as the simpler model"
+            ),
+            "decision_threshold": DECISION_THRESHOLD,
+            "test_partition_scored": (
+                "once, after both pipelines were frozen and the winner was fixed"
+            ),
+            "artifacts_fitted_on": (
+                "training partition only, so the reported test metrics describe the "
+                "saved pipelines"
+            ),
+        },
+        "partitions": {
+            name: {
+                "n_samples": int(len(rows)),
+                "n_students": int(len(np.unique(groups[rows]))),
+                "positive_rate": float(np.mean(y[rows])),
+            }
+            for name, rows in partitions.items()
+        },
+        "selection": {
+            "winner": winner,
+            "tie_rule_applied": tie_rule_applied,
+            "validation_average_precision": {
+                model_name: partition_scores["validation"]["average_precision"]
+                for model_name, partition_scores in scores.items()
+            },
+        },
         "models": {
             model_name: {
-                "mean_accuracy": _mean_metric(folds, "accuracy"),
-                "mean_precision": _mean_metric(folds, "precision"),
-                "mean_recall": _mean_metric(folds, "recall"),
-                "mean_f1_score": _mean_metric(folds, "f1_score"),
-                "mean_roc_auc": _mean_metric(folds, "roc_auc"),
-                "folds": folds,
-                "final_best_parameters": final_parameters[model_name],
+                "best_parameters": best_parameters[model_name],
+                **scores[model_name],
             }
-            for model_name, folds in fold_results.items()
+            for model_name in trained_models
         },
+        "baselines": baseline_scores,
         "generated_at": generated_at.isoformat(),
         "scikit_learn_version": sklearn.__version__,
         "artifact_directory": relative_run_directory,
@@ -658,6 +850,11 @@ def run_training_and_comparison(
     return metrics_summary
 
 
+def _format_metric(value: float | None) -> str:
+    """Ranking metrics are null when a partition holds a single class."""
+    return "n/a" if value is None else f"{value:.3f}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-csv", type=Path, help="CSV with one row per attempt and a student_id.")
@@ -676,7 +873,15 @@ def main() -> None:
         ),
     )
     parser.add_argument("--n-jobs", type=int, default=1, help="Parallel tuning jobs; defaults to 1.")
-    parser.add_argument("--seed", type=int, default=RANDOM_SEED)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=RANDOM_SEED,
+        help=(
+            "Seed for the student-disjoint split, the estimators and the synthetic "
+            "bootstrap, so a whole run is reproducible from one number."
+        ),
+    )
     args = parser.parse_args()
 
     if args.data_csv:
@@ -704,17 +909,42 @@ def main() -> None:
         artifacts_dir=args.artifacts_dir,
         dataset_source=dataset_source,
         n_jobs=args.n_jobs,
+        seed=args.seed,
     )
     print(
         "Saved immutable training run to "
         f"{(args.artifacts_dir.resolve() / results['artifact_directory'])}"
     )
     print("The run is not active; reviewed model activation is a separate Phase 6 decision.")
+    partitions = results["partitions"]
+    print(
+        "Student-disjoint partitions: "
+        + ", ".join(
+            f"{name}={summary['n_students']} students/{summary['n_samples']} rows"
+            for name, summary in partitions.items()
+        )
+    )
+    selection = results["selection"]
+    print(
+        f"Selected on validation {results['protocol']['primary_selection_metric']}: "
+        f"{selection['winner']}"
+        + (" (predeclared tie rule applied)" if selection["tie_rule_applied"] else "")
+    )
     for model_name, metrics in results["models"].items():
+        test = metrics["test"]
         print(
-            f"{model_name}: accuracy={metrics['mean_accuracy']:.3f}, "
-            f"precision={metrics['mean_precision']:.3f}, recall={metrics['mean_recall']:.3f}, "
-            f"f1={metrics['mean_f1_score']:.3f}, roc_auc={metrics['mean_roc_auc']}"
+            f"{model_name} [test] accuracy={test['accuracy']:.3f}, "
+            f"precision={test['precision']:.3f}, recall={test['recall']:.3f}, "
+            f"f1={test['f1_score']:.3f}, roc_auc={_format_metric(test['roc_auc'])}, "
+            f"pr_auc={_format_metric(test['average_precision'])}, "
+            f"brier={test['brier_score']:.3f}"
+        )
+    for name, baseline in results["baselines"].items():
+        test = baseline["test"]
+        print(
+            f"baseline:{name} [test] accuracy={test['accuracy']:.3f}, "
+            f"pr_auc={_format_metric(test['average_precision'])}, "
+            f"brier={test['brier_score']:.3f}"
         )
 
 
