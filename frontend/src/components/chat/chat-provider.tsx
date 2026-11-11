@@ -11,7 +11,6 @@ import {
   type ReactNode,
 } from "react";
 import { ApiError, apiRequest } from "@/lib/api";
-import { getSupabase } from "@/lib/supabase";
 
 export type ChatRole = "user" | "assistant";
 
@@ -134,7 +133,9 @@ function mapChatError(error: unknown): ChatError {
     if (error.status === 503) {
       return {
         kind: "unavailable",
-        message: "The learning assistant is temporarily unavailable. Your message is still here—try again.",
+        message: typeof navigator !== "undefined" && !navigator.onLine
+          ? "AI chat needs an internet connection. Your message is saved here; retry when connected."
+          : "The learning assistant is temporarily unavailable. Your message is still here—try again.",
         retryable: true,
       };
     }
@@ -203,6 +204,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const requestReply = useCallback(
     async (history: ChatMessage[]) => {
       if (pendingRef.current) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        setError({
+          kind: "network",
+          message: "AI chat needs an internet connection. Your message is saved here; retry when connected.",
+          retryable: true,
+        });
+        return;
+      }
 
       const seq = requestSeqRef.current + 1;
       requestSeqRef.current = seq;
@@ -294,16 +303,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    let supabase;
-    try {
-      supabase = getSupabase();
-    } catch {
-      // The auth client is an external system. A missing configuration is the
-      // only synchronous failure path, and the shell must stop showing chat.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSignedIn(false);
-      return;
-    }
+    let listener: { subscription: { unsubscribe: () => void } } | undefined;
 
     const applySession = (session: { user?: { id?: string } } | null) => {
       const nextUserId = session?.user?.id ?? null;
@@ -322,20 +322,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    void supabase.auth
-      .getSession()
-      .then(({ data }) => {
-        if (active) applySession(data.session);
-      })
-      .catch(() => {
-        if (active) applySession(null);
-      });
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!active) return;
-      applySession(session);
-    });
-
     const handleAuthCleared = () => {
       if (!active) return;
       userIdRef.current = null;
@@ -345,9 +331,38 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     };
     window.addEventListener("bytequest:auth-cleared", handleAuthCleared);
 
+    void (async () => {
+      let supabase;
+      try {
+        // Imported on demand: a static import pulls @supabase/supabase-js into every route's shared bundle.
+        const { getSupabase } = await import("@/lib/supabase");
+        supabase = getSupabase();
+      } catch {
+        // The auth client is an external system. A missing configuration is the
+        // only failure path here, and the shell must stop showing chat.
+        if (active) setSignedIn(false);
+        return;
+      }
+      if (!active) return;
+
+      void supabase.auth
+        .getSession()
+        .then(({ data }) => {
+          if (active) applySession(data.session);
+        })
+        .catch(() => {
+          if (active) applySession(null);
+        });
+
+      listener = supabase.auth.onAuthStateChange((_event, session) => {
+        if (!active) return;
+        applySession(session);
+      }).data;
+    })();
+
     return () => {
       active = false;
-      listener.subscription.unsubscribe();
+      listener?.subscription.unsubscribe();
       window.removeEventListener("bytequest:auth-cleared", handleAuthCleared);
     };
   }, [resetConversation, setActivityId]);
