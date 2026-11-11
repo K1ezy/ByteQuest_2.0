@@ -249,7 +249,7 @@ CREATE TABLE ml_predictions (
 -- 8. BADGES & STUDENT BADGES (Gamification Elements)
 CREATE TABLE badges (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    code VARCHAR(64) UNIQUE,
+    code VARCHAR(64) NOT NULL UNIQUE, -- NOT NULL: ON CONFLICT target for supabase/seed.sql
     name VARCHAR(100) NOT NULL,
     description TEXT NOT NULL,
     icon_url TEXT NOT NULL,

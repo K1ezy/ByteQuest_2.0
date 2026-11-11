@@ -1,6 +1,6 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
@@ -26,6 +26,18 @@ from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 
 from app.core.database import Base
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware UTC now.
+
+    Every timestamp column in this module is timestamptz (see
+    supabase/migrations/20261111000100_timestamp_and_state_integrity.sql).
+    Returning an aware value keeps ORM-populated defaults comparable with values
+    read back from the database and with the aware columns on the same row.
+    """
+    return datetime.now(timezone.utc)
+
 
 # Supabase owns auth.users. Keep this reference in separate metadata so regular
 # application metadata operations never try to create or migrate the Auth table.
@@ -93,8 +105,8 @@ class Profile(Base):
     email = Column(String(320), nullable=True)
     avatar_url = Column(Text, nullable=True)
     bio = Column(String(500), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False)
 
     attempts = relationship("ActivityAttempt", back_populates="student", cascade="all, delete-orphan")
 
@@ -138,7 +150,7 @@ class InstructionalDocument(Base):
     processing_error = Column(Text, nullable=True)
     uploaded_original_name = Column(String(255), nullable=True)
     indexed_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
 
@@ -166,7 +178,7 @@ class DocumentChunk(Base):
     embedding = Column(Vector(768), nullable=False)
     embedding_model = Column(String(50), default="gemini-embedding-2", nullable=False)
     embedding_dim = Column(Integer, default=768, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     document = relationship("InstructionalDocument", back_populates="chunks")
 
@@ -225,7 +237,7 @@ class LearningActivity(Base):
     version_number = Column(Integer, nullable=False, default=1, server_default=text("1"))
     version_of = Column(UUID(as_uuid=True), ForeignKey("learning_activities.id", ondelete="SET NULL"), nullable=True)
     rejection_reason = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     test_cases = relationship("TestCase", back_populates="activity", cascade="all, delete-orphan", order_by="TestCase.order_index")
     attempts = relationship("ActivityAttempt", back_populates="activity", cascade="all, delete-orphan")
@@ -240,7 +252,7 @@ class QuestGroup(Base):
     language = Column(Enum(ProgrammingLang, name="programminglang"), nullable=False)
     join_code = Column(String(8), unique=True, nullable=False, index=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 
 class QuestGroupMember(Base):
@@ -250,7 +262,7 @@ class QuestGroupMember(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     group_id = Column(UUID(as_uuid=True), ForeignKey("quest_groups.id", ondelete="CASCADE"), nullable=False, index=True)
     profile_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
-    joined_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    joined_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 
 class QuestGroupActivity(Base):
@@ -280,7 +292,7 @@ class TestCase(Base):
     memory_limit_kb = Column(Integer, default=256000, nullable=False)
     is_hidden = Column(Boolean, default=False, nullable=False)
     weight = Column(Float, default=1.0, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     activity = relationship("LearningActivity", back_populates="test_cases")
 
@@ -326,7 +338,7 @@ class ActivityAttempt(Base):
     result_json = Column(JSONB, nullable=True)
     exam_attempt_id = Column(UUID(as_uuid=True), ForeignKey("exam_attempts.id", ondelete="SET NULL"), nullable=True)
     exam_item_id = Column(UUID(as_uuid=True), ForeignKey("exam_items.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     student = relationship("Profile", back_populates="attempts")
     activity = relationship("LearningActivity", back_populates="attempts")
@@ -536,7 +548,7 @@ class MLPrediction(Base):
     active_sequencer_mode = Column(String(50), nullable=True)
     recommended_action = Column(String(50), nullable=True)
     model_version = Column(String(50), default="v1.0.0", nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 
 # ============================================================================
@@ -548,7 +560,9 @@ class Badge(Base):
     __table_args__ = (UniqueConstraint("code", name="uq_badges_code"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    code = Column(String(64), nullable=True)
+    # NOT NULL: this is the ON CONFLICT target for supabase/seed.sql. A NULL here
+    # would bypass the unique index and duplicate the badge on every seed run.
+    code = Column(String(64), nullable=False)
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=False)
     icon_url = Column(Text, nullable=False)
@@ -566,7 +580,7 @@ class StudentBadge(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     student_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
     badge_id = Column(UUID(as_uuid=True), ForeignKey("badges.id", ondelete="CASCADE"), nullable=False)
-    awarded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    awarded_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 
 # ============================================================================
