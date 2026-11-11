@@ -1,7 +1,5 @@
 "use client";
 
-import { getSupabase } from "@/lib/supabase";
-
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
 
 export class ApiError extends Error {
@@ -43,6 +41,8 @@ function formatApiErrorDetail(detail: unknown): string | null {
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!apiBaseUrl) throw new Error("Set NEXT_PUBLIC_API_URL in frontend/.env.local.");
 
+  // Imported on demand: a static import pulls @supabase/supabase-js into every route's shared bundle.
+  const { getSupabase } = await import("@/lib/supabase");
   const { data, error } = await getSupabase().auth.getSession();
   if (error) throw new Error(error.message);
   const token = data.session?.access_token;

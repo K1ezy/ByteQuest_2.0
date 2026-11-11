@@ -5,7 +5,6 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { apiRequest } from "@/lib/api";
-import { getSupabase } from "@/lib/supabase";
 import { useSignOut } from "@/hooks/use-sign-out";
 import { shortId } from "@/components/workspace/ui";
 import { UserAvatar } from "@/components/user-avatar";
@@ -31,6 +30,8 @@ export function SiteHeader({ isAuthenticated }: SiteHeaderProps) {
     let active = true;
     const loadProfile = async () => {
       try {
+        // Imported on demand: a static import pulls @supabase/supabase-js into every route's shared bundle.
+        const { getSupabase } = await import("@/lib/supabase");
         const { data } = await getSupabase().auth.getSession();
         if (!active) return;
         if (!data.session) { setProfile(null); return; }
