@@ -202,27 +202,27 @@ export function shortId(id: string): string {
 
 // Primary label for a pseudonymous person: their chosen display name when set,
 // otherwise a short readable handle derived from the stable id.
-export function personName(displayName: string | null | undefined, pseudonym: string): string {
+export function personName(displayName: string | null | undefined, _pseudonym: string, username?: string | null): string {
   const trimmed = displayName?.trim();
   if (trimmed) return trimmed;
-  const bare = (pseudonym || "").replace(/^[a-z]+_/i, "");
-  return bare ? `Learner ${bare.slice(0, 4).toUpperCase()}` : "Learner";
+  return username ? `@${username}` : "Learner";
 }
 
 export function Identity({
   displayName,
   pseudonym,
+  username,
   meta,
   size = "md",
 }: {
   displayName?: string | null;
   pseudonym: string;
+  username?: string | null;
   meta?: ReactNode;
   size?: "sm" | "md";
 }) {
-  const name = personName(displayName, pseudonym);
-  const bare = (pseudonym || "").replace(/^[a-z]+_/i, "");
-  const monogram = (displayName?.trim()?.[0] ?? bare[0] ?? "?").toUpperCase();
+  const name = personName(displayName, pseudonym, username);
+  const monogram = (displayName?.trim()?.[0] ?? username?.[0] ?? "?").toUpperCase();
   const hue = identityHue(pseudonym || name);
   return (
     <span className={`ws-identity ws-identity-${size}`}>
@@ -236,7 +236,7 @@ export function Identity({
       <span className="ws-identity-text">
         <strong>{name}</strong>
         <span className="ws-row-meta">
-          <code>{shortId(pseudonym)}</code>
+          <code>{username ? `@${username}` : "Learner"}</code>
           {meta ? <> · {meta}</> : null}
         </span>
       </span>

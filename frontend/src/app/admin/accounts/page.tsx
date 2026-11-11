@@ -317,7 +317,8 @@ function AdminAccounts() {
                 return (
                   <tr key={account.account_id}>
                     <td data-label="Account">
-                      <strong>{account.display_name || account.pseudonym}</strong>
+                      <strong>{account.display_name || `@${account.username}`}</strong>
+                      <span className="ws-row-meta">@{account.username}</span>
                       <span className="ws-row-meta">{account.email || "No email on record"}</span>
                       {account.needs_action ? <span className="ws-row-meta">⚠ {account.action_reason}</span> : null}
                     </td>
@@ -382,7 +383,7 @@ function AdminAccounts() {
             <p>{impact.effect}</p>
             <ul className="ws-plain-list">
               <li>
-                <strong>{impact.account.display_name || impact.account.pseudonym}</strong> ({impact.account.email})
+                <strong>{impact.account.display_name || `@${impact.account.username}`}</strong> ({impact.account.email})
               </li>
               {impact.account.course_access.map((access) => (
                 <li key={access.membership_id}>
@@ -405,7 +406,7 @@ function AdminAccounts() {
       >
         {reactivateTarget ? (
           <p>
-            <strong>{reactivateTarget.email || reactivateTarget.pseudonym}</strong> regains its previous course assignments
+            <strong>{reactivateTarget.email || `@${reactivateTarget.username}`}</strong> regains its previous course assignments
             when the account is reactivated.
           </p>
         ) : null}

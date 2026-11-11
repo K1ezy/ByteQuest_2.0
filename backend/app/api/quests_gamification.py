@@ -103,6 +103,7 @@ class QuizSubmissionResponse(BaseModel):
 
 class LeaderboardEntry(BaseModel):
     pseudonym_id: str
+    username: str
     xp_points: int
     current_level: int
     is_me: bool
@@ -407,6 +408,7 @@ def get_gamification_leaderboard(
     return [
         LeaderboardEntry(
             pseudonym_id=student.pseudonym_id,
+            username=student.username,
             xp_points=student.xp_points,
             current_level=student.current_level,
             is_me=student.id == current_user.id,

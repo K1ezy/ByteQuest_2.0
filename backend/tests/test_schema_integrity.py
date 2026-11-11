@@ -6,15 +6,19 @@ column types and constraints rather than in request handling.
 """
 
 import os
+import threading
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.services.usernames import normalize_username, starter_username
 
 
 @pytest.fixture
@@ -43,10 +47,10 @@ def _make_profile(db: Session) -> uuid.UUID:
     db.execute(text("INSERT INTO auth.users (id) VALUES (:id)"), {"id": user_id})
     db.execute(
         text(
-            "INSERT INTO public.profiles (id, pseudonym_id, deactivated_at) "
-            "VALUES (:id, :pseudonym, now())"
+            "INSERT INTO public.profiles (id, pseudonym_id, username, deactivated_at) "
+            "VALUES (:id, :pseudonym, :username, now())"
         ),
-        {"id": user_id, "pseudonym": f"T-{user_id.hex[:10]}"},
+        {"id": user_id, "pseudonym": f"T-{user_id.hex[:10]}", "username": starter_username(user_id)},
     )
     return user_id
 
@@ -79,6 +83,83 @@ def test_every_public_timestamp_column_is_aware(db: Session) -> None:
         )
     ).all()
     assert naive == [], f"naive timestamp columns found: {naive}"
+
+
+def test_username_backfill_and_unique_index_cover_every_profile(db: Session) -> None:
+    invalid = db.execute(text(
+        "SELECT count(*) FROM public.profiles WHERE username IS NULL "
+        "OR username !~ '^[a-z]{3,44}$'"
+    )).scalar_one()
+    duplicates = db.execute(text(
+        "SELECT count(*) FROM (SELECT lower(username) FROM public.profiles "
+        "GROUP BY lower(username) HAVING count(*) > 1) AS collisions"
+    )).scalar_one()
+    assert invalid == 0
+    assert duplicates == 0
+    first, second = _make_profile(db), _make_profile(db)
+    chosen = db.execute(text("SELECT username FROM public.profiles WHERE id = :id"), {"id": first}).scalar_one()
+    with pytest.raises(IntegrityError):
+        db.execute(text("UPDATE public.profiles SET username = :username WHERE id = :id"),
+                   {"username": chosen, "id": second})
+
+
+@pytest.mark.parametrize("username", ["AName", "name1", "ab", "a" * 45])
+def test_database_rejects_invalid_public_usernames(db: Session, username: str) -> None:
+    user_id = _make_profile(db)
+    with pytest.raises((DataError, IntegrityError)):
+        db.execute(text("UPDATE public.profiles SET username = :username WHERE id = :id"),
+                   {"username": username, "id": user_id})
+
+
+def test_concurrent_username_claims_allow_only_one_winner(db: Session) -> None:
+    engine = db.get_bind().engine
+    first, second = uuid.uuid4(), uuid.uuid4()
+    claimed = normalize_username(starter_username(uuid.uuid4(), "Race"))
+    try:
+        with engine.begin() as connection:
+            for user_id in (first, second):
+                connection.execute(text("INSERT INTO auth.users (id) VALUES (:id)"), {"id": user_id})
+                connection.execute(text(
+                    "INSERT INTO public.profiles (id, pseudonym_id, username) "
+                    "VALUES (:id, :pseudonym, :username)"
+                ), {"id": user_id, "pseudonym": f"race_{user_id.hex}",
+                    "username": starter_username(user_id)})
+
+        started = threading.Event()
+        with engine.connect() as first_connection:
+            first_transaction = first_connection.begin()
+            try:
+                first_connection.execute(text("UPDATE public.profiles SET username = :name WHERE id = :id"),
+                                         {"name": claimed, "id": first})
+
+                def second_claim() -> str:
+                    with engine.connect() as second_connection:
+                        transaction = second_connection.begin()
+                        try:
+                            second_connection.execute(text("SET LOCAL lock_timeout = '5s'"))
+                            started.set()
+                            second_connection.execute(text(
+                                "UPDATE public.profiles SET username = :name WHERE id = :id"
+                            ), {"name": claimed, "id": second})
+                            transaction.commit()
+                            return "unexpected_success"
+                        except IntegrityError as exc:
+                            transaction.rollback()
+                            return getattr(getattr(exc.orig, "diag", None), "constraint_name", "")
+
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    result = pool.submit(second_claim)
+                    assert started.wait(3)
+                    time.sleep(0.1)
+                    first_transaction.commit()
+                    assert result.result(timeout=8) == "profiles_username_lower_unique"
+            finally:
+                if first_transaction.is_active:
+                    first_transaction.rollback()
+    finally:
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM auth.users WHERE id IN (:first, :second)"),
+                               {"first": first, "second": second})
 
 
 def test_badge_code_is_required(db: Session) -> None:

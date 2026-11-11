@@ -721,7 +721,7 @@ function OnboardingContent() {
                 </p>
                 <p className="mt-1 leading-relaxed text-slate-600">
                   Quests are matched to your curriculum. Your leaderboard identity
-                  uses a pseudonym so your progress remains private.
+                  uses a public username to show your progress without displaying your account number.
                 </p>
               </div>
 

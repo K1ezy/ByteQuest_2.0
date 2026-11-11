@@ -282,21 +282,10 @@ export interface ActivityList {
   filters: { statuses: string[] };
 }
 
-export interface PredictionView {
-  status: "saved" | "unavailable";
-  as_of: string | null;
-  target_activity?: string | null;
-  probability?: number;
-  random_forest_probability?: number;
-  label?: string;
-  model_version?: string;
-  advisory?: string;
-  reason?: string;
-}
-
 export interface PerformanceRow {
   student_id: string;
   pseudonym: string;
+  username: string;
   display_name: string | null;
   enrolled_language: string;
   completed_count: number;
@@ -304,7 +293,6 @@ export interface PerformanceRow {
   attempt_count: number;
   latest_score: number | null;
   latest_at: string | null;
-  prediction: PredictionView;
 }
 
 export interface PerformanceResponse {
@@ -326,6 +314,7 @@ export interface StudentPerformance {
   student: {
     student_id: string;
     pseudonym: string;
+    username: string;
     display_name: string | null;
     enrolled_language: string;
     xp_points: number;
@@ -343,7 +332,6 @@ export interface StudentPerformance {
     xp_awarded: number;
     created_at: string | null;
   }[];
-  prediction: PredictionView;
 }
 
 export function getFacultyDashboard(courseId: string | null) {
@@ -559,6 +547,7 @@ export interface AccountRecord {
   email: string | null;
   display_name: string | null;
   pseudonym: string;
+  username: string;
   role: "student" | "instructor" | "admin";
   account_status: "active" | "deactivated";
   created_at: string | null;
@@ -643,6 +632,7 @@ export interface AssignmentRecord {
   email: string | null;
   display_name: string | null;
   pseudonym: string;
+  username: string;
   account_role: string;
   account_status: string;
   member_role: "instructor" | "student";
@@ -1050,7 +1040,7 @@ export function getMyProfile() {
   return apiRequest<Profile>("/profile/me");
 }
 
-export function updateMyProfile(body: { display_name?: string | null; bio?: string | null }) {
+export function updateMyProfile(body: { display_name?: string | null; bio?: string | null; username?: string }) {
   return apiRequest<Profile>("/profile/me", { method: "PATCH", body: JSON.stringify(body) });
 }
 

@@ -9,7 +9,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/image", () => ({ default: () => null }));
 vi.mock("@/hooks/use-sign-out", () => ({ useSignOut: () => ({ isSigningOut: false, error: "", signOut: vi.fn() }) }));
 vi.mock("@/lib/api", () => ({
-  apiRequest: vi.fn(async () => ({ role: "admin", display_name: "Admin Verify", pseudonym_id: "admin_verify" })),
+  apiRequest: vi.fn(async () => ({ role: "admin", display_name: "Admin Verify", username: "adminverify", pseudonym_id: "admin_verify" })),
   getErrorMessage: (error: unknown) => String(error),
 }));
 vi.mock("@/lib/workspace", () => ({ getAdminCourses: vi.fn(async () => ({ courses: [] })) }));

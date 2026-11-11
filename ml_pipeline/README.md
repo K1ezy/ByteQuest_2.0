@@ -41,6 +41,8 @@ SELECT
     aa.id::text AS id,
     p.pseudonym_id AS student_id,
     aa.activity_id::text AS activity_id,
+    la.course_id::text AS course_id,
+    aa.exam_attempt_id::text AS exam_attempt_id,
     aa.attempt_number,
     aa.created_at,
     la.language::text AS language,
@@ -56,7 +58,42 @@ SELECT
 FROM public.activity_attempts AS aa
 JOIN public.profiles AS p ON p.id = aa.student_id
 JOIN public.learning_activities AS la ON la.id = aa.activity_id
+WHERE aa.exam_attempt_id IS NULL AND la.course_id IS NOT NULL
 ORDER BY p.pseudonym_id, aa.created_at, aa.attempt_number, aa.id;
+```
+
+Export released overall exam results separately. An exam is associated with a
+course only when **all** its items belong to that course; mixed-course exams are
+excluded. Use the same pseudonymous `student_id` values as the attempt export.
+Apply `20261111154648_usernames_ml_dashboard.sql` and
+`20261112000100_exam_attempt_release_time.sql` before exporting. The latter
+records a release time for each attempt; older retakes are backfilled with the
+latest known exam release time so historical features cannot become available
+too early.
+
+```sql
+WITH course_exams AS (
+    SELECT ei.exam_id, max(la.course_id::text)::uuid AS course_id
+    FROM public.exam_items AS ei
+    JOIN public.learning_activities AS la ON la.id = ei.activity_id
+    GROUP BY ei.exam_id
+    HAVING count(*) = count(la.course_id)
+       AND count(DISTINCT la.course_id) = 1
+)
+SELECT p.pseudonym_id AS student_id,
+       ce.course_id::text AS course_id,
+       ea.id::text AS exam_attempt_id,
+       ea.result_released_at AS released_at,
+       round((ea.score / ea.max_score * 100)::numeric, 2) AS score_percentage
+FROM public.exam_attempts AS ea
+JOIN public.exams AS e ON e.id = ea.exam_id
+JOIN course_exams AS ce ON ce.exam_id = e.id
+JOIN public.profiles AS p ON p.id = ea.student_id
+WHERE ea.status = 'submitted'
+  AND ea.result_released_at IS NOT NULL
+  AND ea.submitted_at <= ea.result_released_at
+  AND ea.max_score > 0
+ORDER BY p.pseudonym_id, ea.result_released_at, ea.id;
 ```
 
 Save the approved, de-identified result as a CSV and train from the repository
@@ -64,7 +101,7 @@ root only after approval:
 
 ```powershell
 python -m pip install -r backend/requirements.txt
-python ml_pipeline/train_compare.py --data-csv .\ml_pipeline\data\attempts.csv --research-approved
+python ml_pipeline/train_compare.py --data-csv .\ml_pipeline\data\attempts.csv --exams-csv .\ml_pipeline\data\exams.csv --research-approved
 ```
 
 The script includes cold-start rows and writes both pipelines, model metadata,
@@ -117,9 +154,9 @@ Phase 6 decision is required first. No model training or model activation is
 performed by the regular local startup script.
 
 The current local student submission flow does not require model artifacts and
-keeps rule-based sequencing active. The Supabase migration
-`supabase/migrations/20261023_ml_analytics.sql` must be applied before using
-prediction logging and analytics.
+keeps rule-based sequencing active. Apply the ML analytics and later username,
+snapshot, and exam release migrations before using prediction logging and the
+faculty Machine Learning dashboard.
 
 ## Prepare an Ubuntu VPS
 

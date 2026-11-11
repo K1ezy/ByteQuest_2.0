@@ -12,6 +12,8 @@ ByteQuest lets students practice coding challenges and quizzes in **C++, Python,
 - **Gamification** — attempts, XP, levels, badges, and deterministic rule-based next-task recommendations.
 - **Instructor tools** — lesson documents are turned into challenges (RAG + Gemini), auto-checked by Judge0, and published only after instructor review.
 - **Research pipeline** — shared feature engineering and offline model comparison. ML recommendations stay shadow-only until consented classroom data is available; deterministic sequencing is the live default.
+- **Public usernames** — every student, instructor, and administrator has a unique, editable `@username` made of 3–44 letters. Display names remain primary; research pseudonyms stay internal.
+- **Faculty Machine Learning dashboard** — `/faculty/ml` shows course-scoped quiz, coding, and released exam history, student trends, forecast readiness, saved next-activity forecasts, and observed model quality. Forecasts are advisory and never change grades or progression.
 
 ## Tech stack
 
@@ -87,6 +89,14 @@ If the Judge0 VM's IP changes, re-point the client with `.\infra\configure-judge
 
 The suite covers instructor publication, student submissions, hidden-case privacy, XP idempotency, and quest-group persistence; Judge0's transport is stubbed and every test rolls back in an outer transaction, so local accounts and progress are preserved. The [GitHub Actions workflow](.github/workflows/regression.yml) runs these plus frontend lint, typecheck, and build. To exercise the real Judge0 VM, run `scripts\verify_all_languages.py` from `backend/`.
 
+## Usernames and faculty forecasts
+
+Apply `supabase/migrations/20261111154648_usernames_ml_dashboard.sql` and `supabase/migrations/20261112000100_exam_attempt_release_time.sql` before deploying this version of the API. The first migration backfills unique alphabetic usernames and records the winning model on new prediction snapshots. The second records the release time of each exam attempt so retakes cannot move earlier results in the ML timeline. Local startup applies pending local migrations without resetting accounts.
+
+Profile owners edit their username on `/profile`; the username is a public display handle, not a login credential. Faculty use **Machine Learning** in the workspace navigation to view historical course results and forecast states. The Performance page continues to show grades and attempt history.
+
+There is **no approved active model** in the repository. Historical charts work now; real probabilities require institution-approved de-identified training exports, a reviewed model run and activation manifest, research approval, and each learner's current consent. The [training export and review guide](ml_pipeline/README.md) documents the released-exam feature schema. Synthetic development runs must not be activated or presented as learner forecasts.
+
 ## Security
 
 - `backend/.env.local` and `frontend/.env.local` hold machine-specific settings and are Git-ignored.
@@ -102,4 +112,4 @@ The suite covers instructor publication, student submissions, hidden-case privac
 - [Local API security](docs/LOCAL_API_SECURITY.md) — route permissions, quotas, and request limits.
 - [Verification evidence](docs/verification/) — dated records and outstanding gates.
 
-> **Status:** Core browser-to-database coding flow is verified locally across C++, Python, and Java. Classroom-pilot routes and the grading worker are under verification; ML shadow scoring is disabled pending institutional approval and participant consent. See the [master plan](docs/MASTER_PLAN.md) and [verification log](docs/verification/) for current detail.
+> **Status:** Core browser-to-database coding flow is verified locally across C++, Python, and Java. Faculty can review real course history in the ML dashboard; forecasting remains unavailable until an approved model and consented data are in place. See the [master plan](docs/MASTER_PLAN.md) and [verification log](docs/verification/) for current detail.

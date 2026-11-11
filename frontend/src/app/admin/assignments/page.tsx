@@ -180,7 +180,7 @@ function AdminAssignments() {
                 <option value="">Choose an account</option>
                 {(accountsData?.items || []).map((account) => (
                   <option key={account.account_id} value={account.account_id} disabled={account.account_status !== "active"}>
-                    {account.display_name || account.pseudonym} · {account.email || account.role}
+                    {account.display_name || `@${account.username}`} · {account.email || account.role}
                     {account.account_status !== "active" ? " (deactivated)" : ""}
                   </option>
                 ))}
@@ -288,7 +288,7 @@ function AdminAssignments() {
               {rows.map((row) => (
                 <tr key={row.membership_id}>
                   <td data-label="Account">
-                    <strong>{row.display_name || row.pseudonym}</strong>
+                    <strong>{row.display_name || `@${row.username}`}</strong>
                     <span className="ws-row-meta">{row.email || "No email on record"} · {row.account_role}</span>
                   </td>
                   <td data-label="Role">{row.member_role === "instructor" ? "Instructor" : "Student"}</td>
@@ -333,7 +333,7 @@ function AdminAssignments() {
         {removeTarget ? (
           <>
             <p>
-              <strong>{removeTarget.display_name || removeTarget.pseudonym}</strong> loses {removeTarget.member_role} access
+              <strong>{removeTarget.display_name || `@${removeTarget.username}`}</strong> loses {removeTarget.member_role} access
               to <strong>{removeTarget.course.title}</strong>.
             </p>
             <ul className="ws-plain-list">

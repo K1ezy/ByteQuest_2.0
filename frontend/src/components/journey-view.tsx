@@ -120,7 +120,7 @@ export function JourneyView() {
     };
   }, [signedIn]);
 
-  const effectivePseudonym = profile?.pseudonym_id ?? "Learner";
+  const effectivePseudonym = profile?.username ? `@${profile.username}` : "Learner";
   const effectiveLevel = profile?.current_level ?? 1;
   const effectiveXp = profile?.xp_points ?? 0;
 

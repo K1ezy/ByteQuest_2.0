@@ -13,23 +13,17 @@ import { JourneyView } from "@/components/journey-view";
 import { useSignOut } from "@/hooks/use-sign-out";
 import { QuestNavIcon } from "@/components/workspace/quest-nav-icon";
 import { UserAvatar } from "@/components/user-avatar";
-import { shortId } from "@/components/workspace/ui";
 import type { Profile, ProgrammingLanguage, Quest, QuestGroup } from "@/lib/types";
 
 interface LeaderboardEntry {
   pseudonym_id: string;
+  username: string;
   xp_points: number;
   current_level: number;
   is_me: boolean;
 }
 
 type QuestStatusFilter = "all" | "next" | "completed";
-
-function formatPseudonym(name?: string | null, maxLen = 14): string {
-  if (!name) return "Learner";
-  if (name.length <= maxLen) return name;
-  return `${name.slice(0, 8)}...${name.slice(-4)}`;
-}
 
 function getBriefDescription(quest: Quest): string {
   if (quest.problem_statement) {
@@ -416,12 +410,12 @@ function QuestsPageContent() {
                 className="ws-avatar-button"
                 aria-haspopup="menu"
                 aria-expanded={accountOpen}
-                aria-label={`Account menu for ${profile.display_name || shortId(profile.pseudonym_id)}`}
+                aria-label={`Account menu for ${profile.display_name || profile.username}`}
                 onClick={() => setAccountOpen((open) => !open)}
               >
                 <UserAvatar
                   seed={profile.pseudonym_id}
-                  name={profile.display_name || shortId(profile.pseudonym_id)}
+                  name={profile.display_name || profile.username}
                   url={profile.avatar_url}
                   size="nav"
                 />
@@ -429,7 +423,8 @@ function QuestsPageContent() {
               {accountOpen && (
                 <div className="ws-account-menu" role="menu">
                   <div className="ws-account-identity">
-                    <strong>{profile.display_name || shortId(profile.pseudonym_id)}</strong>
+                    <strong>{profile.display_name || profile.username}</strong>
+                    <code>@{profile.username}</code>
                     <span>{profile.role === "admin" ? "Administrator" : profile.role === "instructor" ? "Faculty" : "Student"}</span>
                   </div>
                   <Link role="menuitem" href="/profile" onClick={() => setAccountOpen(false)}>
@@ -535,7 +530,7 @@ function QuestsPageContent() {
               <p className="eyebrow-label">QUEST MAP</p>
               <h1>Language Leaderboard</h1>
               <p>
-                Compare XP progress with peers in your language track using privacy-safe pseudonyms.
+                Compare XP progress with peers in your language track using public usernames.
               </p>
             </div>
           </div>}
@@ -617,8 +612,8 @@ function QuestsPageContent() {
                             : String(index + 1).padStart(2, "0")}
                         </span>
                         <div className="leader-identity">
-                          <span className="leader-name-tag" title={entry.pseudonym_id}>
-                            {formatPseudonym(entry.pseudonym_id, 16)}
+                          <span className="leader-name-tag" title={`@${entry.username}`}>
+                            @{entry.username}
                           </span>
                           {entry.is_me && <span className="leader-you-pill">YOU</span>}
                         </div>
@@ -633,7 +628,7 @@ function QuestsPageContent() {
 
             <div className="divider" style={{ margin: "24px 0 16px" }} />
             <p className="muted" style={{ fontSize: "var(--text-sm)", lineHeight: 1.6 }}>
-              Identities are pseudonymized to safeguard student privacy. Your position updates automatically whenever you submit passing code or complete a review quiz.
+              Your username appears on the leaderboard. Your position updates automatically whenever you submit passing code or complete a review quiz.
             </p>
           </section>
         </div>

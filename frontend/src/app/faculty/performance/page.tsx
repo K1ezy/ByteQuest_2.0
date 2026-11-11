@@ -27,27 +27,6 @@ import {
   type StudentPerformance,
 } from "@/lib/workspace";
 
-function PredictionCell({ prediction }: { prediction: PerformanceResponse["students"][number]["prediction"] }) {
-  if (prediction.status === "saved") {
-    return (
-      <div className="ws-prediction">
-        <StatusChip state="ready" label="Saved prediction" tone="info" />
-        <span className="ws-row-meta">as of {formatDateTime(prediction.as_of)}</span>
-        <span className="ws-prediction-label">{prediction.label}</span>
-        {prediction.probability !== undefined ? (
-          <span className="ws-row-meta">{(prediction.probability * 100).toFixed(0)}% estimated pass chance</span>
-        ) : null}
-      </div>
-    );
-  }
-  return (
-    <div className="ws-prediction">
-      <StatusChip state="unavailable" label="Unavailable" tone="muted" />
-      <span className="ws-row-meta">{prediction.reason}</span>
-    </div>
-  );
-}
-
 function FacultyPerformance() {
   const { courseId } = useWorkspace();
   const router = useRouter();
@@ -111,10 +90,10 @@ function FacultyPerformance() {
       <PageHeading
         eyebrow="FACULTY WORKSPACE"
         title="Student performance"
-        description="Course results, attempt history and saved next-task predictions. Predictions are advisory and never change grades or access."
+        description="Course results and attempt history. Open Machine Learning for advisory next-activity forecasts."
         status={data ? <StatusChip state="active" label={`${data.summary.active_learners} learners`} /> : undefined}
         actions={
-          <Button variant="outline" data-tooltip="Reload the latest learner results and predictions" onClick={reload}>
+          <Button variant="outline" data-tooltip="Reload the latest learner results" onClick={reload}>
             Refresh
           </Button>
         }
@@ -195,7 +174,6 @@ function FacultyPerformance() {
                 <th scope="col">Learner</th>
                 <th scope="col">Completed</th>
                 <th scope="col">Latest score</th>
-                <th scope="col">Next-task prediction</th>
                 <th scope="col">Action</th>
               </tr>
             </thead>
@@ -206,6 +184,7 @@ function FacultyPerformance() {
                     <Identity
                       displayName={row.display_name}
                       pseudonym={row.pseudonym}
+                      username={row.username}
                       meta={row.enrolled_language.toUpperCase()}
                     />
                   </td>
@@ -217,9 +196,8 @@ function FacultyPerformance() {
                     {row.latest_score === null ? "—" : `${row.latest_score}%`}
                     <span className="ws-row-meta">{row.latest_at ? formatDateTime(row.latest_at) : "No attempts"}</span>
                   </td>
-                  <td data-label="Prediction"><PredictionCell prediction={row.prediction} /></td>
                   <td data-label="Action">
-                    <Button variant="outline" data-tooltip="View this learner's attempt history and saved predictions" onClick={() => void openStudent(row.student_id)}>
+                    <Button variant="outline" data-tooltip="View this learner's attempt history" onClick={() => void openStudent(row.student_id)}>
                       View history
                     </Button>
                   </td>
@@ -232,13 +210,14 @@ function FacultyPerformance() {
 
       <p className="ws-footnote">
         {activityId
-          ? "Completion counts the selected activity only. Predictions shown come from saved records and are never recomputed from later performance."
-          : "Progress uses published activities in this course. Predictions are saved at assignment time and never change grades, rewards or access."}
+          ? "Completion counts the selected activity only."
+          : "Progress uses published activities in this course."}{" "}
+        <a href="/faculty/ml">Open Machine Learning for forecasts.</a>
       </p>
 
       <ConfirmDialog
         open={Boolean(studentId)}
-        title={detail ? `${personName(detail.student.display_name, detail.student.pseudonym)} · history` : "Learner history"}
+        title={detail ? `${personName(detail.student.display_name, detail.student.pseudonym, detail.student.username)} · history` : "Learner history"}
         confirmLabel="Close"
         hideConfirm
         onCancel={() => setStudentId(null)}
@@ -252,19 +231,6 @@ function FacultyPerformance() {
               <div><dt>Progress</dt><dd>{detail.progress.completed} of {detail.progress.total} published activities ({detail.progress.percent}%)</dd></div>
               <div><dt>Level / XP</dt><dd>Level {detail.student.current_level} · {detail.student.xp_points} XP</dd></div>
             </dl>
-            <h3>Next-task prediction</h3>
-            {detail.prediction.status === "saved" ? (
-              <div className="ws-soft">
-                <strong>{detail.prediction.label}</strong>
-                <p>
-                  As of {formatDateTime(detail.prediction.as_of)} · target {detail.prediction.target_activity || "next task"} · model{" "}
-                  {detail.prediction.model_version}
-                </p>
-                <p>{detail.prediction.advisory}</p>
-              </div>
-            ) : (
-              <p className="ws-muted">{detail.prediction.reason}</p>
-            )}
             <h3>Attempts ({detail.attempts.length})</h3>
             {detail.attempts.length === 0 ? (
               <p className="ws-muted">No attempts in this course yet.</p>

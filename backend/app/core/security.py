@@ -113,9 +113,11 @@ def get_current_user(
     if not profile:
         # Create initial profile
         pseudonym = f"stu_{user_uuid.hex}"
+        from app.services.usernames import starter_username
         profile = Profile(
             id=user_uuid,
             pseudonym_id=pseudonym,
+            username=starter_username(user_uuid),
             role=UserRole.student,
             year_level=1,
             semester=1,

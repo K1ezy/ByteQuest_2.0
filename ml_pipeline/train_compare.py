@@ -60,7 +60,7 @@ from app.services.ml_predictor.thresholds import DECISION_THRESHOLD  # noqa: E40
 
 ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
 RANDOM_SEED = 42
-MODEL_VERSION = "v1.0.0"
+MODEL_VERSION = "v2.0.0"
 DATASET_SOURCE_SYNTHETIC = "synthetic_bootstrap"
 DATASET_SOURCE_APPROVED = "approved_deidentified_csv"
 # Student-disjoint partition sizes; the test share is whatever remains.
@@ -295,13 +295,37 @@ def _validate_training_frame(df: pd.DataFrame) -> pd.DataFrame:
     return valid_rows
 
 
-def prepare_ml_dataset(df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+def prepare_ml_dataset(
+    df: pd.DataFrame, exams_df: pd.DataFrame | None = None
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     """Build one feature/label row per outcome, including each cold-start row.
 
     CSV input must be a joined activity_attempts/learning_activities export so
     it contains the same context and telemetry available to live inference.
     """
     valid_rows = _validate_training_frame(df)
+    if "exam_attempt_id" in valid_rows.columns and valid_rows["exam_attempt_id"].notna().any():
+        raise ValueError("Training targets must exclude exam item attempts; use released overall exams separately.")
+    exams = pd.DataFrame() if exams_df is None else exams_df.copy()
+    if exams_df is not None:
+        required_exam = {"student_id", "course_id", "released_at", "score_percentage", "exam_attempt_id"}
+        if not exams.columns.is_unique or required_exam - set(exams.columns):
+            raise ValueError("Exam dataset must contain unique required columns: " + ", ".join(sorted(required_exam)))
+        sensitive = [str(c) for c in exams.columns if any(marker in str(c).casefold() for marker in SENSITIVE_COLUMN_MARKERS)]
+        if sensitive:
+            raise ValueError("Exam dataset contains identifying columns: " + ", ".join(sensitive))
+        if "course_id" not in valid_rows.columns or valid_rows["course_id"].isna().any():
+            raise ValueError("Attempt dataset needs course_id when exam features are supplied.")
+        exams["released_at"] = pd.to_datetime(exams["released_at"], errors="coerce", utc=True)
+        exams["score_percentage"] = pd.to_numeric(exams["score_percentage"], errors="coerce")
+        if exams["released_at"].isna().any() or not exams["score_percentage"].between(0, 100).all():
+            raise ValueError("Exam rows need a release timestamp and a score from 0 to 100.")
+        if exams["exam_attempt_id"].isna().any() or exams["exam_attempt_id"].duplicated().any():
+            raise ValueError("Exam attempt identifiers must be present and unique.")
+        if exams["student_id"].isna().any() or exams["course_id"].isna().any():
+            raise ValueError("Exam rows need pseudonymous student_id and course_id values.")
+        if exams["student_id"].astype(str).str.contains(r"\S+@\S+\.\S+", regex=True).any() or exams["student_id"].astype(str).str.fullmatch(r"\d+|[0-9a-fA-F-]{36}").any():
+            raise ValueError("Exam student_id must be pseudonymous.")
 
     feature_rows: list[dict[str, float]] = []
     labels: list[int] = []
@@ -312,12 +336,23 @@ def prepare_ml_dataset(df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, np.n
         for position in range(len(ordered)):
             prior_history = ordered.iloc[:position]
             outcome = ordered.iloc[position]
+            if "course_id" in ordered.columns:
+                prior_history = prior_history[prior_history["course_id"] == outcome["course_id"]]
+            prior_exams = pd.DataFrame()
+            if not exams.empty:
+                prior_exams = exams.loc[
+                    (exams["student_id"] == student_id)
+                    & (exams["course_id"] == outcome["course_id"])
+                    & (exams["released_at"] < outcome["created_at"]),
+                    ["released_at", "score_percentage", "exam_attempt_id"],
+                ].rename(columns={"released_at": "created_at", "exam_attempt_id": "id"})
             feature_rows.append(
                 extract_features_from_dataframe(
                     prior_attempts=prior_history,
                     target_difficulty=outcome.get("difficulty_level"),
                     target_language=outcome.get("language"),
                     target_topic=outcome.get("topic_concept"),
+                    exam_history=prior_exams,
                 )
             )
             labels.append(_as_binary_label(outcome["is_successful"]))
@@ -666,6 +701,7 @@ def _sha256_file(path: Path) -> str:
 def run_training_and_comparison(
     df: pd.DataFrame,
     *,
+    exams_df: pd.DataFrame | None = None,
     artifacts_dir: Path | str | None = None,
     dataset_source: str,
     n_jobs: int = 1,
@@ -685,7 +721,9 @@ def run_training_and_comparison(
             f"dataset_source must be {DATASET_SOURCE_SYNTHETIC!r} or "
             f"{DATASET_SOURCE_APPROVED!r}."
         )
-    X, y, groups = prepare_ml_dataset(df)
+    X, y, groups = prepare_ml_dataset(df, exams_df)
+    if dataset_source == DATASET_SOURCE_APPROVED and not (X["released_exam_count"] > 0).any():
+        raise ValueError("Approved training needs released exams that precede target activities in the same course.")
     partitions = split_students_disjoint(y, groups, seed=seed)
     train_rows = partitions["train"]
     train_X = X.iloc[train_rows]
@@ -831,7 +869,7 @@ def run_training_and_comparison(
         _atomic_joblib_dump(trained_models["random_forest"], rf_path)
         _atomic_json_write(metrics_path, metrics_summary)
         metadata = {
-            "schema_version": 1,
+            "schema_version": 2,
             "model_version": model_version,
             "features": list(FEATURE_NAMES),
             "dataset_source": dataset_source,
@@ -858,6 +896,7 @@ def _format_metric(value: float | None) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-csv", type=Path, help="CSV with one row per attempt and a student_id.")
+    parser.add_argument("--exams-csv", type=Path, help="Approved released-exam export for the same pseudonymous students.")
     parser.add_argument(
         "--artifacts-dir",
         type=Path,
@@ -893,8 +932,13 @@ def main() -> None:
         if not args.data_csv.is_file():
             parser.error(f"CSV file not found: {args.data_csv}")
         attempts = pd.read_csv(args.data_csv)
+        if not args.exams_csv or not args.exams_csv.is_file():
+            parser.error("Approved training requires an existing --exams-csv file.")
+        exams = pd.read_csv(args.exams_csv)
         dataset_source = DATASET_SOURCE_APPROVED
     else:
+        if args.exams_csv:
+            parser.error("--exams-csv requires --data-csv.")
         if args.research_approved:
             parser.error("--research-approved requires --data-csv.")
         print(
@@ -902,10 +946,12 @@ def main() -> None:
             "Do not report these metrics as empirical results."
         )
         attempts = generate_synthetic_thesis_dataset(seed=args.seed)
+        exams = None
         dataset_source = DATASET_SOURCE_SYNTHETIC
 
     results = run_training_and_comparison(
         attempts,
+        exams_df=exams,
         artifacts_dir=args.artifacts_dir,
         dataset_source=dataset_source,
         n_jobs=args.n_jobs,

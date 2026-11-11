@@ -19,7 +19,7 @@ import { useSignOut } from "@/hooks/use-sign-out";
 import type { Profile } from "@/lib/types";
 import { subscribeToProfileUpdates } from "@/lib/profile-events";
 import { getAdminCourses, getFacultyCourses, type CourseSummary, type WorkspaceRole } from "@/lib/workspace";
-import { Button, shortId } from "@/components/workspace/ui";
+import { Button } from "@/components/workspace/ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { QuestNavIcon, type QuestNavIconName } from "@/components/workspace/quest-nav-icon";
 
@@ -35,7 +35,8 @@ export const FACULTY_NAV: NavItem[] = [
   { label: "Review queue", href: "/faculty/review", icon: "reviewQueue", tooltip: "Approve or reject AI-generated drafts before students can see them" },
   { label: "Materials", href: "/faculty/materials", icon: "materials", tooltip: "Upload and manage course PDFs; indexed passages become citable evidence" },
   { label: "Activities", href: "/faculty/activities", icon: "grid", tooltip: "Create, schedule and preview lessons, quizzes and coding challenges" },
-  { label: "Performance", href: "/faculty/performance", icon: "performance", tooltip: "Track learner results, attempt history and saved next-task predictions" },
+  { label: "Performance", href: "/faculty/performance", icon: "performance", tooltip: "Track learner results and attempt history" },
+  { label: "Machine Learning", href: "/faculty/ml", icon: "monitoring", tooltip: "Review past results and advisory next-activity forecasts" },
   { label: "Accessibility", href: "/faculty/accessibility", icon: "accessibility", tooltip: "Adjust contrast, typography, motion and assistive navigation" },
 ];
 
@@ -426,12 +427,12 @@ export function WorkspaceProvider({ role, children }: { role: WorkspaceRole; chi
                 className="ws-avatar-button"
                 aria-haspopup="menu"
                 aria-expanded={accountOpen}
-                aria-label={`Account menu for ${profile.display_name || shortId(profile.pseudonym_id)}`}
+                aria-label={`Account menu for ${profile.display_name || profile.username}`}
                 onClick={() => setAccountOpen((open) => !open)}
               >
                 <UserAvatar
                   seed={profile.pseudonym_id}
-                  name={profile.display_name || shortId(profile.pseudonym_id)}
+                  name={profile.display_name || profile.username}
                   url={profile.avatar_url}
                   size="nav"
                 />
@@ -439,12 +440,12 @@ export function WorkspaceProvider({ role, children }: { role: WorkspaceRole; chi
               {accountOpen ? (
                 <div className="ws-account-menu" role="menu">
                   <div className="ws-account-identity">
-                    <strong>{profile.display_name?.trim() || shortId(profile.pseudonym_id)}</strong>
+                    <strong>{profile.display_name?.trim() || profile.username}</strong>
                     <span>
                       {roleLabel(role)}
                       {activeCourse ? ` · ${activeCourse.title}` : ""}
                     </span>
-                    {!profile.display_name?.trim() ? <code className="ws-row-meta">{profile.pseudonym_id}</code> : null}
+                    <code className="ws-row-meta">@{profile.username}</code>
                   </div>
                   <Link role="menuitem" href="/profile">
                     Your profile

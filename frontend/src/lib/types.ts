@@ -4,6 +4,7 @@ export type UserRole = "student" | "instructor" | "admin";
 export interface Profile {
   id: string;
   pseudonym_id: string;
+  username: string;
   role: UserRole;
   enrolled_language: ProgrammingLanguage;
   year_level: number;

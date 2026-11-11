@@ -21,6 +21,9 @@ FEATURE_NAMES = (
     "target_difficulty_level",
     "difficulty_delta",
     "preceding_quiz_score_pct",
+    "released_exam_count",
+    "released_exam_average_score_pct",
+    "released_exam_latest_score_pct",
 )
 BASELINE_DIFFICULTY = 2.0
 _SUCCESS_VALUES = {"1", "true", "t", "yes", "y", "success", "successful", "passed"}
@@ -126,6 +129,7 @@ def extract_features_from_dataframe(
     *,
     target_language: Any = None,
     target_topic: Any = None,
+    exam_history: Any = None,
 ) -> dict[str, float]:
     """Extract finite features; callers use ``FEATURE_NAMES`` for column order.
 
@@ -178,6 +182,12 @@ def extract_features_from_dataframe(
     attempts_count = len(frame)
     success_count = int(successful.sum()) if attempts_count else 0
     score_pct = _preceding_quiz_score(frame, preceding_quiz_score_pct)
+    exams = _ordered_history(_prepare_frame(exam_history))
+    exam_scores = (
+        pd.to_numeric(exams["score_percentage"], errors="coerce")
+        if "score_percentage" in exams.columns else pd.Series(dtype=float)
+    )
+    exam_scores = exam_scores[exam_scores.between(0, 100)].dropna()
     features = {
         "prior_attempts_total": float(attempts_count),
         "historical_pass_rate": success_count / attempts_count if attempts_count else 0.0,
@@ -191,6 +201,9 @@ def extract_features_from_dataframe(
         "target_difficulty_level": target_level,
         "difficulty_delta": target_level - BASELINE_DIFFICULTY,
         "preceding_quiz_score_pct": score_pct,
+        "released_exam_count": float(len(exam_scores)),
+        "released_exam_average_score_pct": float(exam_scores.mean()) if not exam_scores.empty else 0.0,
+        "released_exam_latest_score_pct": float(exam_scores.iloc[-1]) if not exam_scores.empty else 0.0,
     }
     return {name: _as_float(features[name]) for name in FEATURE_NAMES}
 

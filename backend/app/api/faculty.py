@@ -69,7 +69,6 @@ from app.services.workspace_queries import (
     filter_activities,
     filter_drafts,
     filter_materials,
-    latest_predictions,
     material_status_counts,
     passing_attempts_by_student,
     published_activity_ids,
@@ -370,7 +369,7 @@ def faculty_dashboard(
                 "id": str(event.id),
                 "action": event.action,
                 "summary": event.summary,
-                "actor": (actors.get(event.actor_id).display_name or actors.get(event.actor_id).pseudonym_id)
+                "actor": (actors.get(event.actor_id).display_name or actors.get(event.actor_id).username)
                 if event.actor_id in actors
                 else "System",
                 "created_at": iso(event.created_at),
@@ -1529,26 +1528,6 @@ def create_activity_version(
 # ---------------------------------------------------------------------------
 # Performance
 # ---------------------------------------------------------------------------
-def _prediction_view(prediction, target_title: str | None) -> dict:
-    if prediction is None:
-        return {
-            "status": "unavailable",
-            "as_of": None,
-            "reason": "No saved next-task prediction exists for this student yet.",
-        }
-    probability = float(prediction.logreg_prob)
-    return {
-        "status": "saved",
-        "as_of": iso(prediction.created_at),
-        "target_activity": target_title,
-        "probability": round(probability, 3),
-        "random_forest_probability": round(float(prediction.rf_prob), 3),
-        "label": "Likely to pass the next task" if probability >= 0.5 else "May need support on the next task",
-        "model_version": prediction.model_version,
-        "advisory": "Advisory only. Predictions never change grades, rewards or access.",
-    }
-
-
 @router.get("/performance")
 def performance(
     course_id: Optional[uuid.UUID] = None,
@@ -1568,25 +1547,18 @@ def performance(
         activity_ids = published_activity_ids(db, [course.id])
     students = enrolled_students(db, course.id)
     stats = passing_attempts_by_student(db, activity_ids, [student.id for student in students])
-    predictions = latest_predictions(db, [student.id for student in students])
-    target_titles = {
-        row.id: (row.title or row.topic_concept)
-        for row in db.query(LearningActivity)
-        .filter(LearningActivity.id.in_([p.target_activity_id for p in predictions.values()]))
-        .all()
-    } if predictions else {}
 
     needle = (search or "").strip().casefold()
     rows = []
     for student in students:
-        if needle and needle not in (student.pseudonym_id or "").casefold() and needle not in (student.display_name or "").casefold():
+        if needle and needle not in (student.username or "").casefold() and needle not in (student.display_name or "").casefold():
             continue
         entry = stats.get(student.id, {"completed": 0, "attempts": 0, "latest_score": None, "latest_at": None})
-        prediction = predictions.get(student.id)
         rows.append(
             {
                 "student_id": str(student.id),
                 "pseudonym": student.pseudonym_id,
+                "username": student.username,
                 "display_name": student.display_name,
                 "enrolled_language": getattr(student.enrolled_language, "value", student.enrolled_language),
                 "completed_count": entry["completed"],
@@ -1594,7 +1566,6 @@ def performance(
                 "attempt_count": entry["attempts"],
                 "latest_score": round(float(entry["latest_score"]), 1) if entry["latest_score"] is not None else None,
                 "latest_at": iso(entry["latest_at"]),
-                "prediction": _prediction_view(prediction, target_titles.get(prediction.target_activity_id) if prediction else None),
             }
         )
     rows.sort(key=lambda item: item["pseudonym"] or "")
@@ -1671,12 +1642,11 @@ def student_performance(
         if activity_by_id
         else []
     )
-    prediction = latest_predictions(db, [student.id]).get(student.id)
-    target = activity_by_id.get(prediction.target_activity_id) if prediction else None
     return {
         "student": {
             "student_id": str(student.id),
             "pseudonym": student.pseudonym_id,
+            "username": student.username,
             "display_name": student.display_name,
             "enrolled_language": getattr(student.enrolled_language, "value", student.enrolled_language),
             "xp_points": student.xp_points,
@@ -1711,5 +1681,4 @@ def student_performance(
             }
             for attempt in attempts
         ],
-        "prediction": _prediction_view(prediction, (target.title or target.topic_concept) if target else None),
     }

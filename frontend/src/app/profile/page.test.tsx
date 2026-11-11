@@ -58,6 +58,7 @@ import ProfilePage from "./page";
 const profile = {
   id: "student-id",
   pseudonym_id: "student_verify",
+  username: "studentverify",
   role: "student" as const,
   enrolled_language: "python" as const,
   year_level: 2,
@@ -147,6 +148,20 @@ it("keeps identity editing available when analytics fail and publishes the saved
   expect(updatedEvents).toHaveLength(1);
   expect(mocks.toast).toHaveBeenCalledWith("Name updated", "success");
   window.removeEventListener("bytequest:profile-updated", listener);
+});
+
+it("edits the public username and displays the normalized handle", async () => {
+  mocks.updateMyProfile.mockImplementation(async (body: { username?: string }) =>
+    ({ ...profile, username: body.username?.toLowerCase() || profile.username }));
+  render(<ProfilePage />);
+  expect(await screen.findByRole("heading", { name: "Student Verify" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Edit username" }));
+  const input = screen.getByRole("textbox", { name: "Username" });
+  fireEvent.change(input, { target: { value: "NewHandle" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save username" }));
+  await waitFor(() => expect(mocks.updateMyProfile).toHaveBeenCalledWith({ username: "NewHandle" }));
+  expect(await screen.findByText(/@newhandle/)).toBeTruthy();
+  expect(mocks.toast).toHaveBeenCalledWith("Username updated", "success");
 });
 
 it("uses optional profile tips without a completion score", async () => {

@@ -19,6 +19,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.api import admin as admin_api
+from app.api import exams as exams_api
+from app.api import faculty_ml as faculty_ml_api
 from app.core.config import settings
 from app.core.database import get_db
 from app.main import app
@@ -30,16 +32,25 @@ from app.models.entities import (
     Course,
     CourseMember,
     DocumentChunk,
+    Exam,
+    ExamAttempt,
+    ExamItem,
     InstructionalDocument,
     LearningActivity,
+    MLPrediction,
     PlatformSetting,
     ProcessingJob,
     Profile,
     ProgrammingLang,
+    ResearchConsent,
     ReviewState,
     TestCase as GradingCase,
     UserRole,
 )
+from app.services.ml_predictor.exam_history import course_exam_ids, released_exam_history
+from app.services.ml_predictor.audit import record_prediction_outcome
+from app.services.ml_predictor.feature_engineering import extract_features_from_dataframe
+from app.services.ml_predictor.targets import next_course_activity
 
 pytestmark = pytest.mark.integration
 TEST_JWT_SECRET = "bytequest-faculty-admin-tests-only-secret"
@@ -539,15 +550,25 @@ def test_material_list_and_dashboard_counts_agree(workspace):
         assert f"course={ids['course_a']}" in item["href"]
 
 
-def test_performance_is_course_scoped_and_prediction_is_advisory(workspace):
+def test_performance_and_ml_are_course_scoped(workspace):
     client, db_session, ids = workspace
     headers = _token(ids["faculty"])
     performance = client.get(f"/api/v1/faculty/performance?course_id={ids['course_a']}", headers=headers)
     assert performance.status_code == 200, performance.text
     body = performance.json()
     assert [row["student_id"] for row in body["students"]] == [str(ids["student"])]
-    assert body["students"][0]["prediction"]["status"] == "unavailable"
-    assert "No saved next-task prediction" in body["students"][0]["prediction"]["reason"]
+    assert "prediction" not in body["students"][0]
+    ml = client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}", headers=headers)
+    assert ml.status_code == 200, ml.text
+    assert [row["student_id"] for row in ml.json()["students"]] == [str(ids["student"])]
+    assert ml.json()["students"][0]["forecast"] is None
+    assert ml.json()["summary"]["graded_events"] >= 1
+    assert client.get(f"/api/v1/faculty/ml?course_id={ids['course_b']}", headers=headers).status_code == 403
+    assert client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}", headers=_token(ids["student"])).status_code == 403
+    aggregate = client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_a']}", headers=headers)
+    assert aggregate.status_code == 200, aggregate.text
+    assert client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_b']}", headers=headers).status_code == 403
+    assert client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_a']}", headers=_token(ids["admin"])).status_code == 403
 
     detail = client.get(
         f"/api/v1/faculty/performance/students/{ids['student']}?course_id={ids['course_a']}", headers=headers
@@ -559,6 +580,244 @@ def test_performance_is_course_scoped_and_prediction_is_advisory(workspace):
         f"/api/v1/faculty/performance/students/{ids['other_student']}?course_id={ids['course_a']}", headers=headers
     )
     assert cross_course.status_code == 404
+    assert client.get(
+        f"/api/v1/faculty/ml/students/{ids['other_student']}?course_id={ids['course_a']}", headers=headers
+    ).status_code == 404
+
+
+def test_forecast_history_and_quality_never_cross_course_boundaries(workspace, monkeypatch):
+    client, db_session, ids = workspace
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_ACTIVE", True)
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_VERSION", "test-v1")
+    with db_session() as db:
+        other_activity = LearningActivity(course_id=ids["course_b"], created_by=ids["other_faculty"],
+            activity_type=ActivityKind.quiz, language=ProgrammingLang.python, topic_concept="arithmetic",
+            title="Other course quiz", review_status=ReviewState.published, sequence_order=1)
+        next_activity = LearningActivity(course_id=ids["course_a"], created_by=ids["faculty"],
+            activity_type=ActivityKind.quiz, language=ProgrammingLang.python, topic_concept="arithmetic",
+            title="Next course quiz", review_status=ReviewState.published, sequence_order=2)
+        db.add_all([other_activity, next_activity])
+        db.flush()
+        db.add(CourseMember(course_id=ids["course_b"], profile_id=ids["student"],
+                            member_role="student", status="active"))
+        db.add(ResearchConsent(student_id=ids["student"], document_version="test-v1", choice="accepted"))
+        db.add(MLPrediction(student_id=ids["student"], target_activity_id=other_activity.id,
+            features_snapshot_json={}, logreg_prob=0.1, logreg_pred=False,
+            rf_prob=0.8, rf_pred=True, actual_outcome=True, selected_model="random_forest",
+            model_version="v2-test", active_sequencer_mode="rule_based"))
+        db.commit()
+        assert next_course_activity(db, db.get(Profile, ids["student"]), ids["course_a"]).id == next_activity.id
+
+    course_a = client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}", headers=_token(ids["faculty"]))
+    assert course_a.status_code == 200, course_a.text
+    assert course_a.json()["model_quality"]["labeled_predictions"] == 0
+    detail_a = client.get(f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_a']}",
+                          headers=_token(ids["faculty"]))
+    assert detail_a.status_code == 200
+    assert detail_a.json()["predictions"] == []
+    aggregate_a = client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_a']}",
+                             headers=_token(ids["faculty"]))
+    assert aggregate_a.json()["total_predictions_logged"] == 0
+    course_b = client.get(f"/api/v1/faculty/ml?course_id={ids['course_b']}", headers=_token(ids["other_faculty"]))
+    assert course_b.status_code == 200, course_b.text
+    assert course_b.json()["model_quality"]["labeled_predictions"] == 1
+    assert course_b.json()["model_quality"]["accuracy_percent"] == 100.0
+    with db_session() as db:
+        db.add(ResearchConsent(student_id=ids["student"], document_version="test-v1", choice="declined"))
+        db.commit()
+    revoked = client.get(f"/api/v1/faculty/ml?course_id={ids['course_b']}",
+                         headers=_token(ids["other_faculty"]))
+    assert revoked.json()["model_quality"]["labeled_predictions"] == 0
+    revoked_aggregate = client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_b']}",
+                                   headers=_token(ids["other_faculty"]))
+    assert revoked_aggregate.json()["total_predictions_logged"] == 0
+
+
+def test_ml_dashboard_distinguishes_history_consent_and_model_states(workspace, monkeypatch):
+    client, db_session, ids = workspace
+    monkeypatch.setattr(faculty_ml_api, "get_setting_int", lambda *_args: 3)
+    course_url = f"/api/v1/faculty/ml?course_id={ids['course_a']}"
+    headers = _token(ids["faculty"])
+    assert client.get(course_url, headers=headers).json()["students"][0]["forecast_status"] == "no_next_activity"
+    other_course = client.get(f"/api/v1/faculty/ml?course_id={ids['course_b']}",
+                              headers=_token(ids["other_faculty"]))
+    assert other_course.json()["students"][0]["forecast_status"] == "no_graded_history"
+
+    with db_session() as db:
+        target = LearningActivity(course_id=ids["course_a"], created_by=ids["faculty"],
+            activity_type=ActivityKind.quiz, language=ProgrammingLang.python, topic_concept="arithmetic",
+            title="Next quiz", review_status=ReviewState.published, sequence_order=2)
+        db.add(target)
+        db.commit()
+    assert client.get(course_url, headers=headers).json()["students"][0]["forecast_status"] == "missing_consent"
+
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_ACTIVE", True)
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_VERSION", "test-v1")
+    with db_session() as db:
+        db.add(ResearchConsent(student_id=ids["student"], document_version="test-v1", choice="accepted"))
+        db.commit()
+    assert client.get(course_url, headers=headers).json()["students"][0]["forecast_status"] == "insufficient_history"
+
+    with db_session() as db:
+        for order in (3, 4):
+            activity = LearningActivity(course_id=ids["course_a"], created_by=ids["faculty"],
+                activity_type=ActivityKind.quiz, language=ProgrammingLang.python, topic_concept="arithmetic",
+                title=f"Prior practice {order}", review_status=ReviewState.published, sequence_order=order)
+            db.add(activity)
+            db.flush()
+            db.add(ActivityAttempt(student_id=ids["student"], activity_id=activity.id,
+                                   attempt_number=1, score_percentage=90, is_successful=True))
+        db.commit()
+    assert client.get(course_url, headers=headers).json()["students"][0]["forecast_status"] == "model_unavailable"
+
+    with db_session() as db:
+        empty_course = Course(code=f"E-{ids['faculty'].hex[:6]}", title="Empty course", created_by=ids["faculty"])
+        db.add(empty_course)
+        db.flush()
+        db.add(CourseMember(course_id=empty_course.id, profile_id=ids["faculty"],
+                            member_role="instructor", status="active"))
+        db.commit()
+        empty_id = empty_course.id
+    empty = client.get(f"/api/v1/faculty/ml?course_id={empty_id}", headers=headers)
+    assert empty.status_code == 200
+    assert empty.json()["students"] == []
+    assert empty.json()["summary"]["active_learners"] == 0
+
+
+def test_prediction_outcome_links_only_earlier_snapshots(workspace):
+    _client, db_session, ids = workspace
+    now = datetime.now(timezone.utc)
+    with db_session() as db:
+        earlier = MLPrediction(student_id=ids["student"], target_activity_id=ids["published"],
+            features_snapshot_json={}, logreg_prob=0.3, logreg_pred=False, rf_prob=0.7, rf_pred=True,
+            model_version="v2-test", selected_model="random_forest", created_at=now - timedelta(minutes=1))
+        later = MLPrediction(student_id=ids["student"], target_activity_id=ids["published"],
+            features_snapshot_json={}, logreg_prob=0.2, logreg_pred=False, rf_prob=0.6, rf_pred=True,
+            model_version="v2-test", selected_model="random_forest", created_at=now + timedelta(minutes=1))
+        db.add_all([earlier, later])
+        db.flush()
+        earlier_id, later_id = earlier.id, later.id
+        assert record_prediction_outcome(db, student_id=ids["student"], activity_id=ids["published"],
+                                         attempt_created_at=now, is_successful=True) == 1
+        db.commit()
+        assert db.get(MLPrediction, earlier_id).actual_outcome is True
+        assert db.get(MLPrediction, later_id).actual_outcome is None
+
+
+def test_usernames_are_editable_unique_and_alphabetic_for_every_role(workspace):
+    client, db_session, ids = workspace
+    for role in ("student", "faculty", "admin"):
+        profile = client.get("/api/v1/profile/me", headers=_token(ids[role])).json()
+        assert profile["username"].isalpha() and profile["username"].islower()
+        assert not any(char.isdigit() for char in profile["username"])
+    changed = client.patch("/api/v1/profile/me", headers=_token(ids["student"]), json={"username": "NewHandle"})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["username"] == "newhandle"
+    assert client.patch("/api/v1/profile/me", headers=_token(ids["faculty"]), json={"username": "newhandle"}).status_code == 409
+    assert client.patch("/api/v1/profile/me", headers=_token(ids["admin"]), json={"username": "name123"}).status_code == 422
+    faculty_edit = client.patch("/api/v1/profile/me", headers=_token(ids["faculty"]),
+                                json={"username": "FacultyHandle"})
+    admin_edit = client.patch("/api/v1/profile/me", headers=_token(ids["admin"]),
+                              json={"username": "AdminHandle"})
+    assert faculty_edit.status_code == 200 and faculty_edit.json()["username"] == "facultyhandle"
+    assert admin_edit.status_code == 200 and admin_edit.json()["username"] == "adminhandle"
+    with db_session() as db:
+        assert db.get(Profile, ids["student"]).pseudonym_id.startswith("test_student_")
+
+
+def test_ml_exam_history_waits_for_release_and_uses_overall_score_once(workspace):
+    client, db_session, ids = workspace
+    now = datetime.now(timezone.utc)
+    with db_session() as db:
+        exam = Exam(created_by=ids["faculty"], title="Course exam", opens_at=now - timedelta(days=2),
+                    closes_at=now - timedelta(days=1), duration_minutes=30, published_at=now - timedelta(days=2))
+        db.add(exam)
+        db.flush()
+        db.add(ExamItem(exam_id=exam.id, activity_id=ids["published"], position=1, points=100, snapshot_json={}))
+        attempt = ExamAttempt(exam_id=exam.id, student_id=ids["student"], attempt_number=1,
+                              status="submitted", started_at=now - timedelta(days=2), due_at=now - timedelta(days=1),
+                              submitted_at=now - timedelta(days=1), score=80, max_score=100)
+        db.add(attempt)
+        db.flush()
+        db.add(ActivityAttempt(student_id=ids["student"], activity_id=ids["published"], attempt_number=2,
+                               exam_attempt_id=attempt.id, score_percentage=80, is_successful=True))
+        db.commit()
+        assert exam.id in course_exam_ids(db, ids["course_a"])
+        assert released_exam_history(db, ids["student"], ids["course_a"]) == []
+        before = client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}", headers=_token(ids["faculty"])).json()
+        assert before["students"][0]["exam_count"] == 0
+        assert before["students"][0]["challenge_count"] == 1
+        exam.results_released_at = now
+        attempt.result_released_at = now
+        db.commit()
+        history = released_exam_history(db, ids["student"], ids["course_a"])
+        assert len(history) == 1 and history[0]["score_percentage"] == 80.0
+        assert released_exam_history(db, ids["student"], ids["course_a"], as_of=now - timedelta(hours=1)) == []
+        features = extract_features_from_dataframe([], target_difficulty=1, exam_history=history)
+        assert features["released_exam_count"] == 1
+        assert features["released_exam_average_score_pct"] == 80.0
+        after = client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}", headers=_token(ids["faculty"])).json()
+        assert after["students"][0]["exam_count"] == 1
+        assert after["students"][0]["challenge_count"] == 1
+        detail = client.get(f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_a']}",
+                            headers=_token(ids["faculty"])).json()
+        assert any(point["exam"] == 80.0 for point in detail["trend"])
+
+
+def test_exam_release_timestamp_is_stable_idempotent_and_scoring_failure_is_isolated(workspace, monkeypatch):
+    client, db_session, ids = workspace
+    now = datetime.now(timezone.utc)
+    with db_session() as db:
+        exam = Exam(created_by=ids["faculty"], title="Retake timing", opens_at=now - timedelta(days=2),
+                    closes_at=now - timedelta(days=1), duration_minutes=30, published_at=now - timedelta(days=2))
+        db.add(exam)
+        db.flush()
+        db.add(ExamItem(exam_id=exam.id, activity_id=ids["published"], position=1, points=100, snapshot_json={}))
+        first = ExamAttempt(exam_id=exam.id, student_id=ids["student"], attempt_number=1,
+                            status="submitted", started_at=now - timedelta(days=2), due_at=now - timedelta(days=1),
+                            submitted_at=now - timedelta(days=1), score=80, max_score=100)
+        db.add(first)
+        db.commit()
+        exam_id, first_id = exam.id, first.id
+
+    scoring_calls = []
+    def fail_optional_scoring(*args):
+        scoring_calls.append("failed")
+        raise RuntimeError("model service failed")
+    monkeypatch.setattr(exams_api, "_score_released_exam", fail_optional_scoring)
+    url = f"/api/v1/exams/instructor/{exam_id}/release"
+    released = client.post(url, headers=_token(ids["faculty"]))
+    assert released.status_code == 200, released.text
+    assert scoring_calls == ["failed"]
+    first_release = released.json()["released_at"]
+    with db_session() as db:
+        assert db.get(ExamAttempt, first_id).result_released_at.isoformat() == first_release.replace("Z", "+00:00")
+        assert len(released_exam_history(db, ids["student"], ids["course_a"])) == 1
+
+    again = client.post(url, headers=_token(ids["faculty"]))
+    assert again.status_code == 200
+    assert again.json()["released_at"] == first_release
+    assert scoring_calls == ["failed"]
+
+    with db_session() as db:
+        second = ExamAttempt(exam_id=exam_id, student_id=ids["student"], attempt_number=2,
+                             status="submitted", started_at=datetime.now(timezone.utc),
+                             due_at=datetime.now(timezone.utc), submitted_at=datetime.now(timezone.utc),
+                             score=60, max_score=100)
+        db.add(second)
+        db.commit()
+        second_id = second.id
+    monkeypatch.setattr(exams_api, "_score_released_exam", lambda *args: scoring_calls.append("second"))
+    retake_release = client.post(url, headers=_token(ids["faculty"]))
+    assert retake_release.status_code == 200, retake_release.text
+    assert scoring_calls == ["failed", "second"]
+    with db_session() as db:
+        history = released_exam_history(db, ids["student"], ids["course_a"])
+        assert [row["exam_attempt_id"] for row in history] == [str(first_id), str(second_id)]
+        assert history[0]["created_at"].isoformat() == first_release.replace("Z", "+00:00")
+        assert history[1]["created_at"] > history[0]["created_at"]
+        assert len(released_exam_history(db, ids["student"], ids["course_a"],
+                                         as_of=history[0]["created_at"], include_at_cutoff=True)) == 1
 
 
 def test_duplicate_email_and_assignment_conflicts_are_inline(workspace):

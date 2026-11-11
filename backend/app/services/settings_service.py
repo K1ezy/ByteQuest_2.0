@@ -60,7 +60,7 @@ def serialize_setting(setting: PlatformSetting, editor: Profile | None = None) -
         "max_value": setting.max_value,
         "version": setting.version,
         "updated_at": iso(setting.updated_at),
-        "last_editor": (editor.display_name or editor.pseudonym_id) if editor is not None else None,
+        "last_editor": (editor.display_name or editor.username) if editor is not None else None,
         "last_editor_id": str(setting.updated_by) if setting.updated_by else None,
     }
 

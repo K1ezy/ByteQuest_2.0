@@ -6328,6 +6328,7 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
   .ws-table td > strong, .ws-table td .ws-row-meta { display: block; }
 }
 @media (max-width: 640px) {
+  .ml-panel-head { flex-wrap: wrap; }
   .ws-stat-grid, .ws-health-grid { grid-template-columns: 1fr; }
   .ws-form-grid, .ws-option-grid { grid-template-columns: 1fr; }
   .ws-toolbar { align-items: stretch; }
@@ -6592,6 +6593,9 @@ html[data-contrast="high"] .ws-row-meta { color: #252337; }
 .profile-inline-name .profile-inline-input { font-size: clamp(1.2rem, 3vw, 1.6rem); font-weight: 760; }
 .profile-inline-textarea { resize: vertical; font-size: 14px; }
 .profile-inline-actions { display: flex; gap: 8px; margin-top: 8px; }
+.profile-username-edit { align-items: center; flex-wrap: wrap; }
+.profile-username-edit .profile-inline-input { flex: 1 1 220px; min-width: 0; }
+.profile-username-edit .ws-muted { flex-basis: 100%; }
 .profile-inline-hint { color: var(--muted-soft); font-size: 11.5px; }
 
 /* Collapsible track editor */

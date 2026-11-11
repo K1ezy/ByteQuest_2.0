@@ -28,6 +28,18 @@ from pgvector.sqlalchemy import Vector
 from app.core.database import Base
 
 
+def _starter_username(context) -> str:
+    """Derive the starter handle from the row being inserted.
+
+    Imported lazily: app.services imports app.models, so a module-level import
+    here would be circular.
+    """
+    from app.services.usernames import starter_username
+
+    parameters = context.get_current_parameters()
+    return starter_username(parameters["id"], parameters.get("display_name"))
+
+
 def _utcnow() -> datetime:
     """Timezone-aware UTC now.
 
@@ -89,6 +101,9 @@ class Profile(Base):
         default=uuid.uuid4,
     )
     pseudonym_id = Column(String(64), unique=True, nullable=False, index=True)
+    # Defaulted here, not at each call site: scripts, seeds and tests build Profiles
+    # directly and must still get a unique handle that satisfies the NOT NULL column.
+    username = Column(String(44), nullable=False, default=_starter_username)
     role = Column(Enum(UserRole, name="userrole"), nullable=False, default=UserRole.student)
     year_level = Column(Integer, nullable=False, default=1)
     semester = Column(Integer, nullable=False, default=1)
@@ -456,6 +471,7 @@ class ExamAttempt(Base):
     started_at = Column(DateTime(timezone=True), nullable=False)
     due_at = Column(DateTime(timezone=True), nullable=False)
     submitted_at = Column(DateTime(timezone=True), nullable=True)
+    result_released_at = Column(DateTime(timezone=True), nullable=True)
     last_saved_at = Column(DateTime(timezone=True), nullable=True)
     answers_json = Column(JSONB, nullable=False, default=dict)
     revision = Column(Integer, nullable=False, default=0)
@@ -548,6 +564,8 @@ class MLPrediction(Base):
     active_sequencer_mode = Column(String(50), nullable=True)
     recommended_action = Column(String(50), nullable=True)
     model_version = Column(String(50), default="v1.0.0", nullable=False)
+    selected_model = Column(String(20), nullable=True)
+    source_exam_attempt_id = Column(UUID(as_uuid=True), ForeignKey("exam_attempts.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 

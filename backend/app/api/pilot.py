@@ -112,7 +112,7 @@ def group_students(group_id: uuid.UUID, user: Profile = Depends(require_instruct
         ActivityAttempt.activity_id.in_(activity_ids), ActivityAttempt.is_successful.is_(True)
     ).group_by(ActivityAttempt.student_id).all()) if members and activity_ids else {}
     return {"group_id": group_id, "total_activities": len(activity_ids),
-            "students": [{"alias": m.pseudonym_id, "completed": counts.get(m.id, 0),
+            "students": [{"alias": m.username, "completed": counts.get(m.id, 0),
                           "level": m.current_level} for m in members]}
 
 

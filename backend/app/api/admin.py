@@ -134,7 +134,7 @@ def admin_dashboard(request: Request, user: Profile = Depends(admin_user), db: S
             {
                 "kind": "account",
                 "id": account["account_id"],
-                "title": account["email"] or account["display_name"] or account["pseudonym"],
+                "title": account["email"] or account["display_name"] or account["username"],
                 "detail": account["action_reason"] or "Review this account.",
                 "status": "Needs action",
                 "severity": "wait",
@@ -198,7 +198,7 @@ def admin_dashboard(request: Request, user: Profile = Depends(admin_user), db: S
                 "id": str(event.id),
                 "action": event.action,
                 "summary": event.summary,
-                "actor": (actors.get(event.actor_id).display_name or actors.get(event.actor_id).pseudonym_id)
+                "actor": (actors.get(event.actor_id).display_name or actors.get(event.actor_id).username)
                 if event.actor_id in actors
                 else "System",
                 "created_at": iso(event.created_at),
@@ -256,6 +256,7 @@ def _serialize_account(
         "email": profile.email or email,
         "display_name": profile.display_name,
         "pseudonym": profile.pseudonym_id,
+        "username": profile.username,
         "role": _role_value(profile),
         "account_status": profile.account_status,
         "created_at": iso(profile.created_at),
@@ -288,7 +289,7 @@ def _all_accounts(db: Session, *, search: str | None = None, role: str | None = 
         elif status_filter != "all" and serialized["account_status"] != status_filter:
             continue
         if needle:
-            haystack = f"{serialized['email'] or ''} {serialized['display_name'] or ''} {serialized['pseudonym'] or ''} {serialized['role']}".casefold()
+            haystack = f"{serialized['email'] or ''} {serialized['display_name'] or ''} {serialized['username'] or ''} {serialized['role']}".casefold()
             if needle not in haystack:
                 continue
         rows.append(serialized)
@@ -338,7 +339,7 @@ def account_impact(account_id: uuid.UUID, user: Profile = Depends(admin_user), d
         "account": _serialize_account(profile, email=profile.email, memberships=memberships, course_lookup=courses),
         "already_deactivated": False,
         "effect": (
-            f"{profile.display_name or profile.pseudonym_id} will immediately lose access to "
+            f"{profile.display_name or profile.username} will immediately lose access to "
             f"{len([m for m in memberships if m.status == 'active'])} course assignment(s). "
             "Existing materials, activity versions, attempts and audit records are preserved."
         ),
@@ -381,7 +382,7 @@ def deactivate_account(
         action="account.deactivated",
         entity_type="account",
         entity_id=profile.id,
-        summary=f"Deactivated account {profile.email or profile.pseudonym_id}",
+        summary=f"Deactivated account {profile.email or profile.username}",
     )
     db.commit()
     return {"account_id": str(profile.id), "account_status": "deactivated", "message": "Account deactivated. Access is blocked immediately."}
@@ -402,7 +403,7 @@ def reactivate_account(account_id: uuid.UUID, user: Profile = Depends(admin_user
         action="account.reactivated",
         entity_type="account",
         entity_id=profile.id,
-        summary=f"Reactivated account {profile.email or profile.pseudonym_id}",
+        summary=f"Reactivated account {profile.email or profile.username}",
     )
     db.commit()
     return {"account_id": str(profile.id), "account_status": "active", "message": "Account reactivated with its prior course assignments."}
@@ -615,7 +616,7 @@ def _assignment_rows(db: Session, *, course_id: uuid.UUID | None, role: str | No
     result = []
     for membership, profile, course in rows:
         if needle:
-            haystack = f"{profile.email or emails.get(profile.id) or ''} {profile.display_name or ''} {profile.pseudonym_id or ''} {course.code} {course.title}".casefold()
+            haystack = f"{profile.email or emails.get(profile.id) or ''} {profile.display_name or ''} {profile.username or ''} {course.code} {course.title}".casefold()
             if needle not in haystack:
                 continue
         result.append(
@@ -625,6 +626,7 @@ def _assignment_rows(db: Session, *, course_id: uuid.UUID | None, role: str | No
                 "email": profile.email or emails.get(profile.id),
                 "display_name": profile.display_name,
                 "pseudonym": profile.pseudonym_id,
+                "username": profile.username,
                 "account_role": _role_value(profile),
                 "account_status": profile.account_status,
                 "member_role": membership.member_role,
@@ -712,7 +714,7 @@ def create_assignment(payload: AssignmentCreate, user: Profile = Depends(admin_u
             detail={
                 "code": "duplicate_assignment",
                 "field": "profile_id",
-                "message": f"{profile.display_name or profile.pseudonym_id} already has active {payload.member_role} access to {course.title}.",
+                "message": f"{profile.display_name or profile.username} already has active {payload.member_role} access to {course.title}.",
             },
         )
     if existing is not None and existing.status == "pending":
@@ -746,7 +748,7 @@ def create_assignment(payload: AssignmentCreate, user: Profile = Depends(admin_u
         entity_type="course_member",
         entity_id=membership.id if membership.id else None,
         course_id=course.id,
-        summary=f"Assigned {profile.display_name or profile.pseudonym_id} as {payload.member_role} in {course.title}",
+        summary=f"Assigned {profile.display_name or profile.username} as {payload.member_role} in {course.title}",
     )
     db.commit()
     db.refresh(membership)
@@ -758,7 +760,7 @@ def create_assignment(payload: AssignmentCreate, user: Profile = Depends(admin_u
             "member_role": membership.member_role,
             "status": membership.status,
         },
-        "message": f"{profile.display_name or profile.pseudonym_id} now has {payload.member_role} access to {course.title}.",
+        "message": f"{profile.display_name or profile.username} now has {payload.member_role} access to {course.title}.",
     }
 
 
@@ -827,7 +829,7 @@ def _admin_material_items(db: Session) -> list[dict]:
         serialized.update(
             {
                 "course": {"id": str(course.id), "code": course.code, "title": course.title} if course else None,
-                "uploaded_by": (uploader.display_name or uploader.pseudonym_id) if uploader else "Deleted account",
+                "uploaded_by": (uploader.display_name or uploader.username) if uploader else "Deleted account",
                 "draft_count": material_draft_count(db, document.id),
                 "downloadable": bool(document.storage_path),
             }
@@ -1254,7 +1256,7 @@ def monitoring(
                 "entity_type": event.entity_type,
                 "entity_id": event.entity_id,
                 "summary": event.summary,
-                "actor": (actors.get(event.actor_id).display_name or actors.get(event.actor_id).pseudonym_id)
+                "actor": (actors.get(event.actor_id).display_name or actors.get(event.actor_id).username)
                 if event.actor_id in actors
                 else "System",
                 "created_at": iso(event.created_at),

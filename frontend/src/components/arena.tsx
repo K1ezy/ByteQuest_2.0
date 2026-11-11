@@ -1020,7 +1020,7 @@ export default function Arena({ activityId }: { activityId: string }) {
 
       {profile && (
         <p className="footer-note">
-          Signed in as {profile.pseudonym_id} · Level {profile.current_level} · {profile.xp_points} XP · Your code is saved safely with official attempts.
+          Signed in as @{profile.username} · Level {profile.current_level} · {profile.xp_points} XP · Your code is saved safely with official attempts.
         </p>
       )}
     </div>

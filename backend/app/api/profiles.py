@@ -22,6 +22,8 @@ from app.services.profile_attention import (
 from app.services.gamification.progression import XP_PER_LEVEL
 from app.services.gamification.sequencer import determine_track_recommendation
 from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.usernames import normalize_username
+from sqlalchemy.exc import IntegrityError
 from app.models.entities import (
     ActivityAttempt,
     AuditEvent,
@@ -54,6 +56,7 @@ class ProfileResponse(BaseModel):
 
     id: uuid.UUID
     pseudonym_id: str
+    username: str
     role: UserRole
     enrolled_language: ProgrammingLang
     year_level: int
@@ -74,6 +77,7 @@ class ProfileUpdateRequest(BaseModel):
 
     display_name: str | None = Field(default=None, max_length=120)
     bio: str | None = Field(default=None, max_length=500)
+    username: str | None = None
 
 
 def _require_student(profile: Profile) -> None:
@@ -111,7 +115,22 @@ def update_my_profile(
         bio = (fields["bio"] or "").strip()
         current_user.bio = bio or None
 
-    db.commit()
+    if "username" in fields:
+        if not fields["username"]:
+            raise HTTPException(status_code=422, detail="Username is required.")
+        try:
+            current_user.username = normalize_username(fields["username"])
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        if constraint == "profiles_username_lower_unique":
+            raise HTTPException(status_code=409, detail="That username is already taken.") from exc
+        raise
     db.refresh(current_user)
     return current_user
 
@@ -447,7 +466,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
     ]
 
     exam_rows = (
-        db.query(ExamAttempt, Exam.title, Exam.results_released_at)
+        db.query(ExamAttempt, Exam.title)
         .join(Exam, Exam.id == ExamAttempt.exam_id)
         .filter(ExamAttempt.student_id == user.id)
         .order_by(ExamAttempt.started_at.desc())
@@ -464,8 +483,8 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
             submitted_at=attempt.submitted_at,
             results_released=released,
         )
-        for attempt, title, released_at in exam_rows
-        for released in [bool(released_at and attempt.submitted_at and attempt.submitted_at <= released_at)]
+        for attempt, title in exam_rows
+        for released in [bool(attempt.result_released_at)]
     ]
 
     badge_rows = (

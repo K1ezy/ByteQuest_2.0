@@ -5,7 +5,7 @@ import { Suspense, useCallback, useEffect, useRef, useState, type ChangeEvent, t
 import { useRouter, useSearchParams } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
 import { apiRequest, ApiError, getErrorMessage } from "@/lib/api";
-import { Button, ConfirmDialog, Notice, StatCard, StatusChip, shortId } from "@/components/workspace/ui";
+import { Button, ConfirmDialog, Notice, StatCard, StatusChip } from "@/components/workspace/ui";
 import { useToast } from "@/components/toast";
 import { UserAvatar } from "@/components/user-avatar";
 import { usePasswordReset } from "@/hooks/use-password-reset";
@@ -617,7 +617,7 @@ function AccountPanel({
         <dl className="profile-account-details">
           <div><dt>Email</dt><dd>{profile.email || "No email is stored on this profile"}</dd></div>
           <div><dt>Role</dt><dd>{ROLE_LABEL[profile.role]}</dd></div>
-          <div><dt>Account ID</dt><dd><code>{profile.pseudonym_id}</code></dd></div>
+          <div><dt>Username</dt><dd>@{profile.username}</dd></div>
           <div><dt>Member since</dt><dd>{memberSince || "Not available"}</dd></div>
         </dl>
         <div className="profile-privacy-note">
@@ -727,8 +727,8 @@ function ProfilePageContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [editingField, setEditingField] = useState<"name" | "bio" | null>(null);
-  const editingRef = useRef<"name" | "bio" | null>(null);
+  const [editingField, setEditingField] = useState<"name" | "bio" | "username" | null>(null);
+  const editingRef = useRef<"name" | "bio" | "username" | null>(null);
   const [draft, setDraft] = useState("");
   const [savingField, setSavingField] = useState(false);
 
@@ -789,7 +789,7 @@ function ProfilePageContent() {
     void load();
   }, [load]);
 
-  const startEdit = (field: "name" | "bio", current: string) => {
+  const startEdit = (field: "name" | "bio" | "username", current: string) => {
     editingRef.current = field;
     setDraft(current);
     setEditingField(field);
@@ -814,10 +814,10 @@ function ProfilePageContent() {
     const value = draft.trim();
     setSavingField(true);
     try {
-      const updated = await updateMyProfile(field === "name" ? { display_name: value } : { bio: value });
+      const updated = await updateMyProfile(field === "name" ? { display_name: value } : field === "username" ? { username: value } : { bio: value });
       applyProfileUpdate(updated);
       setEditingField(null);
-      toast.show(field === "name" ? "Name updated" : "Bio updated", "success");
+      toast.show(field === "name" ? "Name updated" : field === "username" ? "Username updated" : "Bio updated", "success");
     } catch (caught) {
       editingRef.current = field;
       toast.show(getErrorMessage(caught), "error");
@@ -998,9 +998,24 @@ function ProfilePageContent() {
           </div>
 
           <p className="profile-header-meta">
-            Account ID <code>{shortId(profile.pseudonym_id)}</code>
+            @{profile.username}
             {memberSince ? <> · Member since {memberSince}</> : null}
           </p>
+          {editingField === "username" ? (
+            <div className="profile-inline-actions profile-username-edit">
+              <label htmlFor="profile-username">Username</label>
+              <input id="profile-username" className="profile-inline-input" autoFocus value={draft} maxLength={44}
+                disabled={savingField} onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") void saveField(); if (event.key === "Escape") cancelEdit(); }} />
+              <Button variant="primary" disabled={savingField} onClick={() => void saveField()}>Save username</Button>
+              <Button variant="quiet" disabled={savingField} onClick={cancelEdit}>Cancel</Button>
+              <span className="ws-muted">3–44 letters only. Usernames are public.</span>
+            </div>
+          ) : (
+            <button type="button" className="ws-inline-link" onClick={() => startEdit("username", profile.username)}>
+              Edit username
+            </button>
+          )}
 
           {profile.role === "student" ? (
             <p className="profile-header-meta">

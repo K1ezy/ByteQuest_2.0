@@ -16,6 +16,7 @@ from app.api.submission_jobs import router as submission_jobs_router
 from app.api.exams import router as exams_router
 from app.api.rag_instructor import router as rag_instructor_router
 from app.api.faculty import router as faculty_router
+from app.api.faculty_ml import router as faculty_ml_router
 from app.api.admin import router as admin_router
 from app.api.chat import router as chat_router
 from app.core.config import settings
@@ -120,6 +121,7 @@ app.include_router(quests_router)
 app.include_router(quest_groups_router)
 app.include_router(rag_instructor_router)
 app.include_router(faculty_router)
+app.include_router(faculty_ml_router)
 app.include_router(admin_router)
 app.include_router(ml_analytics_router)
 app.include_router(profiles_router)

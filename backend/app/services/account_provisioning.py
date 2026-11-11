@@ -96,9 +96,11 @@ async def delete_auth_user(user_id: uuid.UUID) -> None:
 
 
 def build_profile(user_id: uuid.UUID, email: str, role: UserRole, display_name: str | None) -> Profile:
+    from app.services.usernames import starter_username
     return Profile(
         id=user_id,
         pseudonym_id=f"usr_{user_id.hex[:20]}",
+        username=starter_username(user_id, display_name),
         role=role,
         enrolled_language=ProgrammingLang.python,
         year_level=1,

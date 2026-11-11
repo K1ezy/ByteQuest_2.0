@@ -1,11 +1,12 @@
 """Instructor-assigned, server-timed exams built from published activities."""
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -21,9 +22,13 @@ from app.models.entities import (
 from app.services.gamification.badges import evaluate_and_award_badges
 from app.services.gamification.progression import grant_xp
 from app.services.gamification.quiz_content import parse_quiz_questions
+from app.services.ml_predictor.exam_history import course_exam_ids
+from app.services.ml_predictor.shadow import record_shadow_prediction
+from app.services.ml_predictor.targets import next_course_activity
 from app.services.judge0.client import TestCaseInput, judge0_client
 
 router = APIRouter(prefix="/api/v1/exams", tags=["Exams"])
+logger = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
@@ -154,7 +159,7 @@ def instructor_exam_detail(exam_id: uuid.UUID, user: Profile = Depends(require_i
         ExamAttempt.exam_id == exam_id).group_by(ExamAttempt.student_id).all())
     return {"id": exam.id, "title": exam.title,
             "groups": [{"id": g.id, "name": g.name} for g in groups],
-            "students": [{"id": s.id, "alias": s.pseudonym_id,
+            "students": [{"id": s.id, "alias": s.username,
                           "attempts": attempt_counts.get(s.id, 0)} for s in students]}
 
 
@@ -207,7 +212,7 @@ def publish_exam(exam_id: uuid.UUID, user: Profile = Depends(require_instructor)
 
 
 @router.post("/instructor/{exam_id}/release")
-def release_exam(exam_id: uuid.UUID, user: Profile = Depends(require_instructor), db: Session = Depends(get_db)):
+def release_exam(exam_id: uuid.UUID, request: Request, user: Profile = Depends(require_instructor), db: Session = Depends(get_db)):
     exam = instructor_exam(db, exam_id, user)
     db.query(Exam).filter(Exam.id == exam_id).with_for_update().populate_existing().one()
     retake_close = db.query(func.max(ExamRetakeGrant.closes_at)).filter(ExamRetakeGrant.exam_id == exam.id).scalar()
@@ -219,15 +224,14 @@ def release_exam(exam_id: uuid.UUID, user: Profile = Depends(require_instructor)
         raise HTTPException(409, "Wait for all attempts to finish grading.")
     unreleased = db.query(ExamAttempt.id).filter(ExamAttempt.exam_id == exam.id,
         ExamAttempt.status == "submitted",
-        ExamAttempt.submitted_at > (exam.results_released_at or datetime.min.replace(tzinfo=timezone.utc))).first()
+        ExamAttempt.result_released_at.is_(None)).first()
     if unreleased:
-        previous_release = exam.results_released_at or datetime.min.replace(tzinfo=timezone.utc)
         release_time = utcnow()
         newly_released_attempts = db.query(ExamAttempt).filter(
             ExamAttempt.exam_id == exam.id,
             ExamAttempt.status == "submitted",
-            ExamAttempt.submitted_at > previous_release,
             ExamAttempt.submitted_at <= release_time,
+            ExamAttempt.result_released_at.is_(None),
         ).all()
         student_ids = {attempt.student_id for attempt in newly_released_attempts}
         for student_id in student_ids:
@@ -245,6 +249,8 @@ def release_exam(exam_id: uuid.UUID, user: Profile = Depends(require_instructor)
             evaluate_and_award_badges(db, student)
 
         exam.results_released_at = release_time
+        for released_attempt in newly_released_attempts:
+            released_attempt.result_released_at = release_time
         students = [(student_id,) for student_id in student_ids]
         for (student_id,) in students:
             db.add(NotificationOutbox(recipient_id=student_id,
@@ -252,7 +258,42 @@ def release_exam(exam_id: uuid.UUID, user: Profile = Depends(require_instructor)
                 subject=f"Exam results released: {exam.title}",
                 body=f"Results for {exam.title} are available in ByteQuest. Sign in to view them."))
         db.commit()
+        # The release is authoritative. Optional shadow scoring runs only after
+        # commit and cannot undo or delay the released results.
+        try:
+            _score_released_exam(db, request, exam, newly_released_attempts)
+        except Exception:
+            db.rollback()
+            logger.exception("Optional exam-release prediction failed after results were committed.")
     return {"released_at": exam.results_released_at}
+
+
+def _score_released_exam(db: Session, request: Request, exam: Exam, attempts: list[ExamAttempt]) -> None:
+    if getattr(request.app.state, "ml_shadow_status", "") != "ready":
+        return
+    item_courses = {course_id for (course_id,) in db.query(LearningActivity.course_id).join(
+        ExamItem, ExamItem.activity_id == LearningActivity.id
+    ).filter(ExamItem.exam_id == exam.id).all()}
+    if len(item_courses) != 1:
+        return
+    course_id = next(iter(item_courses))
+    if course_id is None or exam.id not in course_exam_ids(db, course_id):
+        return
+    latest_by_student: dict[uuid.UUID, ExamAttempt] = {}
+    for attempt in attempts:
+        previous = latest_by_student.get(attempt.student_id)
+        if previous is None or attempt.submitted_at > previous.submitted_at:
+            latest_by_student[attempt.student_id] = attempt
+    for student_id, released_attempt in latest_by_student.items():
+        student = db.get(Profile, student_id)
+        if student is None:
+            continue
+        target = next_course_activity(db, student, course_id)
+        record_shadow_prediction(
+            db, student=student, target_activity_id=target.id if target else None,
+            source_exam_attempt=released_attempt, as_of=released_attempt.result_released_at,
+            shadow_ready=True,
+        )
 
 
 class RetakeWindow(BaseModel):
@@ -304,8 +345,16 @@ def student_exams(user: Profile = Depends(get_current_user), db: Session = Depen
         QuestGroupMember, QuestGroupMember.group_id == ExamAssignment.group_id
     ).filter(QuestGroupMember.profile_id == user.id, Exam.published_at.is_not(None)).distinct().order_by(
         Exam.opens_at.desc()).limit(100).all()
+    latest_attempts = {}
+    if exams:
+        for attempt in db.query(ExamAttempt).filter(
+            ExamAttempt.student_id == user.id,
+            ExamAttempt.exam_id.in_([exam.id for exam in exams]),
+        ).order_by(ExamAttempt.attempt_number.desc()).all():
+            latest_attempts.setdefault(attempt.exam_id, attempt)
     return [{"id": e.id, "title": e.title, "opens_at": e.opens_at, "closes_at": e.closes_at,
-             "duration_minutes": e.duration_minutes, "results_released": e.results_released_at is not None}
+             "duration_minutes": e.duration_minutes,
+             "results_released": bool(latest_attempts.get(e.id) and latest_attempts[e.id].result_released_at)}
             for e in exams]
 
 
@@ -329,7 +378,7 @@ def student_exam(exam_id: uuid.UUID, user: Profile = Depends(get_current_user), 
             "can_start": can_start and opens_at <= utcnow() < closes_at,
             "latest_attempt_id": latest.id if latest else None,
             "latest_status": latest.status if latest else None,
-            "results_released": bool(exam.results_released_at and latest and latest.submitted_at and latest.submitted_at <= exam.results_released_at)}
+            "results_released": bool(latest and latest.result_released_at)}
 
 
 @router.post("/{exam_id}/start")
@@ -373,7 +422,7 @@ def get_attempt(attempt_id: uuid.UUID, user: Profile = Depends(get_current_user)
     attempt = own_attempt(db, attempt_id, user)
     exam = db.get(Exam, attempt.exam_id)
     items = db.query(ExamItem).filter(ExamItem.exam_id == exam.id).order_by(ExamItem.position).all()
-    released = bool(exam.results_released_at and attempt.submitted_at and attempt.submitted_at <= exam.results_released_at)
+    released = bool(attempt.result_released_at)
     return {"id": attempt.id, "exam_id": exam.id, "title": exam.title,
             "user_id": attempt.student_id, "student_id": attempt.student_id,
             "status": attempt.status, "due_at": attempt.due_at,

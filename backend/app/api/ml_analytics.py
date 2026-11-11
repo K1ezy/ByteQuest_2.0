@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Request
@@ -10,10 +11,16 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import require_instructor
-from app.models.entities import MLPrediction, Profile
+from app.core.security import get_current_user
+from app.models.entities import CourseMember, LearningActivity, MLPrediction, Profile
+from app.services.course_access import courses_for_user, require_course_instructor, resolve_workspace_course
+from app.services.ml_predictor.consent import consented_student_ids
 
 router = APIRouter(prefix="/api/v1/predict", tags=["ML Shadow Evaluation & Analytics"])
+
+
+def _faculty(user: Profile = Depends(get_current_user)) -> Profile:
+    return require_course_instructor(user)
 
 
 class ModelVersionCount(BaseModel):
@@ -42,10 +49,33 @@ class InstructorAnalyticsResponse(BaseModel):
 @router.get("/instructor/analytics", response_model=InstructorAnalyticsResponse)
 def get_ml_analytics_summary(
     request: Request,
-    current_user: Profile = Depends(require_instructor),
+    course_id: uuid.UUID | None = None,
+    current_user: Profile = Depends(_faculty),
     db: Session = Depends(get_db),
 ) -> InstructorAnalyticsResponse:
     """Return aggregate model quality for labeled shadow predictions only."""
+    allowed_course_ids = (
+        [resolve_workspace_course(db, current_user, course_id, allow_admin=False).id]
+        if course_id else [course.id for course in courses_for_user(db, current_user)]
+    )
+    eligible_students = [student_id for (student_id,) in db.query(CourseMember.profile_id).join(
+        Profile, Profile.id == CourseMember.profile_id,
+    ).filter(
+        CourseMember.course_id.in_(allowed_course_ids),
+        CourseMember.member_role == "student",
+        CourseMember.status == "active",
+        Profile.account_status == "active",
+    ).distinct().all()]
+    consented_ids = consented_student_ids(db, eligible_students)
+    scoped = (
+        db.query(MLPrediction)
+        .join(LearningActivity, LearningActivity.id == MLPrediction.target_activity_id)
+        .join(CourseMember, (CourseMember.course_id == LearningActivity.course_id)
+              & (CourseMember.profile_id == MLPrediction.student_id))
+        .filter(LearningActivity.course_id.in_(allowed_course_ids),
+                CourseMember.member_role == "student", CourseMember.status == "active",
+                MLPrediction.student_id.in_(consented_ids))
+    )
     summary = (
         db.query(
             func.count(MLPrediction.id),
@@ -73,6 +103,13 @@ def get_ml_analytics_summary(
                 )
             ),
         )
+        .select_from(MLPrediction)
+        .join(LearningActivity, LearningActivity.id == MLPrediction.target_activity_id)
+        .join(CourseMember, (CourseMember.course_id == LearningActivity.course_id)
+              & (CourseMember.profile_id == MLPrediction.student_id))
+        .filter(LearningActivity.course_id.in_(allowed_course_ids),
+                CourseMember.member_role == "student", CourseMember.status == "active",
+                MLPrediction.student_id.in_(consented_ids))
         .one()
     )
     (
@@ -86,7 +123,7 @@ def get_ml_analytics_summary(
     total_predictions = int(total_predictions or 0)
     labeled_count = int(labeled_count or 0)
     model_versions = (
-        db.query(MLPrediction.model_version, func.count(MLPrediction.id))
+        scoped.with_entities(MLPrediction.model_version, func.count(MLPrediction.id))
         .group_by(MLPrediction.model_version)
         .order_by(MLPrediction.model_version.asc())
         .all()
