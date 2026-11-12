@@ -402,6 +402,7 @@ export function ConfirmDialog({
   tone = "primary",
   busy = false,
   hideConfirm = false,
+  variant = "dialog",
   onConfirm,
   onCancel,
 }: {
@@ -413,6 +414,8 @@ export function ConfirmDialog({
   tone?: "primary" | "danger";
   busy?: boolean;
   hideConfirm?: boolean;
+  /** "drawer" docks the same dialog to the right edge on wide screens. */
+  variant?: "dialog" | "drawer";
   onConfirm?: () => void;
   onCancel: () => void;
 }) {
@@ -464,12 +467,18 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="ws-modal-backdrop"
+      className={`ws-modal-backdrop${variant === "drawer" ? " ws-drawer-backdrop" : ""}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onCancel();
       }}
     >
-      <div className="ws-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={dialogRef}>
+      <div
+        className={`ws-dialog${variant === "drawer" ? " ws-drawer" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        ref={dialogRef}
+      >
         <div className="ws-dialog-heading">
           <h2 id={titleId}>{title}</h2>
           <button type="button" className="ws-dialog-close" aria-label="Close dialog" onClick={onCancel} disabled={busy}>

@@ -44,6 +44,52 @@ class ModelBundle:
     random_forest: Any
     model_version: str
     selected_model: str
+    report: dict[str, Any]
+
+
+# Reported partitions and per-partition keys the faculty evaluation view may
+# show. Anything outside these lists — artifact paths, feature schemas, fitted
+# hyperparameters, training rows — never leaves the backend.
+_REPORT_PARTITIONS = ("validation", "test")
+_PARTITION_KEYS = (
+    "partition", "n_samples", "n_students", "positive_rate", "decision_threshold",
+    "accuracy", "precision", "recall", "f1_score", "roc_auc", "average_precision",
+    "brier_score", "confusion_matrix", "roc_curve", "pr_curve",
+)
+
+
+def _partition_report(scores: dict[str, Any]) -> dict[str, Any]:
+    return {
+        partition: {key: scores[partition][key] for key in _PARTITION_KEYS if key in scores[partition]}
+        for partition in _REPORT_PARTITIONS
+        if isinstance(scores.get(partition), dict)
+    }
+
+
+def _sanitized_report(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Allowlist the validated metrics summary for the faculty evaluation view."""
+    return {
+        "model_version": metrics.get("model_version"),
+        "dataset_source": metrics.get("dataset_source"),
+        "research_approved": metrics.get("research_approved"),
+        "generated_at": metrics.get("generated_at"),
+        "n_samples": metrics.get("n_samples"),
+        "n_students": metrics.get("n_students"),
+        "outcome_counts": metrics.get("outcome_counts") or {},
+        "protocol": metrics.get("protocol") or {},
+        "partitions": metrics.get("partitions") or {},
+        "selection": metrics.get("selection") or {},
+        "models": {
+            name: _partition_report(scores)
+            for name, scores in (metrics.get("models") or {}).items()
+            if isinstance(scores, dict)
+        },
+        "baselines": {
+            name: _partition_report(scores)
+            for name, scores in (metrics.get("baselines") or {}).items()
+            if isinstance(scores, dict)
+        },
+    }
 
 
 @dataclass(frozen=True)
@@ -212,6 +258,7 @@ def load_ml_models() -> ModelBundle:
                 random_forest=rf_model,
                 model_version=model_version,
                 selected_model=selected_model,
+                report=_sanitized_report(metrics),
             )
         except ModelArtifactsUnavailable:
             raise

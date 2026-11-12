@@ -6221,6 +6221,46 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
 .ws-dialog-body { display: grid; gap: 12px; color: var(--ink); font-size: 13.5px; line-height: 1.6; }
 .ws-dialog-body p { margin: 0; }
 .ws-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* ------------------------------------------------------ machine learning */
+.ml-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 14px 0 16px; border-bottom: 1px solid var(--line); }
+.ml-tab {
+  min-height: 44px;
+  padding: 9px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.ml-tab:hover { color: var(--ink); }
+.ml-tab.is-active { color: var(--green-dark); border-bottom-color: var(--green); }
+.ml-tab:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.ml-chart-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.ws-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+
+/* The learner drawer is the same dialog, docked to the right on wide screens;
+   below this width it stays the full-width dialog. */
+@media (min-width: 768px) {
+  .ws-drawer-backdrop { place-items: stretch; justify-items: end; padding: 0; }
+  .ws-dialog.ws-drawer {
+    width: min(100%, 560px);
+    height: 100dvh;
+    max-height: 100dvh;
+    border-width: 0 0 0 1px;
+    border-radius: 0;
+  }
+}
+@media (min-width: 768px) and (prefers-reduced-motion: no-preference) {
+  .ws-dialog.ws-drawer { animation: ws-drawer-in 180ms ease-out; }
+}
+@keyframes ws-drawer-in {
+  from { transform: translateX(14px); opacity: 0.55; }
+  to { transform: none; opacity: 1; }
+}
 .ws-approve-summary dl, .ws-summary-list { display: grid; gap: 8px; margin: 0; }
 .ws-approve-summary dl > div, .ws-summary-list > div { display: grid; grid-template-columns: 150px 1fr; gap: 10px; padding-bottom: 7px; border-bottom: 1px solid var(--line); }
 .ws-approve-summary dt, .ws-summary-list dt { color: var(--muted); font-size: 12px; font-weight: 700; }

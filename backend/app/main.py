@@ -37,6 +37,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting %s v%s [%s]", settings.PROJECT_NAME, settings.VERSION, settings.ENVIRONMENT)
     app.state.sequencer_mode = "rule_based"
     app.state.model_version = None
+    app.state.ml_model_report = None
 
     limits = httpx.Limits(
         max_connections=40,
@@ -63,6 +64,8 @@ async def lifespan(app: FastAPI):
                     model_bundle = load_ml_models()
                     app.state.ml_shadow_status = "ready"
                     app.state.model_version = model_bundle.model_version
+                    # Retained so faculty evaluation requests never reload artifacts.
+                    app.state.ml_model_report = model_bundle.report
                 except ModelArtifactsUnavailable as exc:
                     app.state.ml_shadow_status = "artifacts_unavailable"
                     logger.warning(
@@ -103,6 +106,7 @@ app = FastAPI(
 app.state.sequencer_mode = "rule_based"
 app.state.model_version = None
 app.state.ml_shadow_status = "disabled"
+app.state.ml_model_report = None
 
 app.add_middleware(RequestSizeLimitMiddleware)
 

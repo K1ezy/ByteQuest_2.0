@@ -610,7 +610,9 @@ def test_forecast_history_and_quality_never_cross_course_boundaries(workspace, m
 
     course_a = client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}", headers=_token(ids["faculty"]))
     assert course_a.status_code == 200, course_a.text
-    assert course_a.json()["model_quality"]["labeled_predictions"] == 0
+    evaluation_a = client.get(f"/api/v1/faculty/ml/evaluation?course_id={ids['course_a']}",
+                              headers=_token(ids["faculty"]))
+    assert evaluation_a.json()["observed"]["labeled_predictions"] == 0
     detail_a = client.get(f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_a']}",
                           headers=_token(ids["faculty"]))
     assert detail_a.status_code == 200
@@ -620,14 +622,17 @@ def test_forecast_history_and_quality_never_cross_course_boundaries(workspace, m
     assert aggregate_a.json()["total_predictions_logged"] == 0
     course_b = client.get(f"/api/v1/faculty/ml?course_id={ids['course_b']}", headers=_token(ids["other_faculty"]))
     assert course_b.status_code == 200, course_b.text
-    assert course_b.json()["model_quality"]["labeled_predictions"] == 1
-    assert course_b.json()["model_quality"]["accuracy_percent"] == 100.0
+    evaluation_b = client.get(f"/api/v1/faculty/ml/evaluation?course_id={ids['course_b']}",
+                              headers=_token(ids["other_faculty"])).json()["observed"]
+    assert evaluation_b["labeled_predictions"] == 1
+    assert evaluation_b["models"]["random_forest"]["accuracy_percent"] == 100.0
+    assert evaluation_b["models"]["logreg"]["accuracy_percent"] == 0.0
     with db_session() as db:
         db.add(ResearchConsent(student_id=ids["student"], document_version="test-v1", choice="declined"))
         db.commit()
-    revoked = client.get(f"/api/v1/faculty/ml?course_id={ids['course_b']}",
+    revoked = client.get(f"/api/v1/faculty/ml/evaluation?course_id={ids['course_b']}",
                          headers=_token(ids["other_faculty"]))
-    assert revoked.json()["model_quality"]["labeled_predictions"] == 0
+    assert revoked.json()["observed"]["labeled_predictions"] == 0
     revoked_aggregate = client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_b']}",
                                    headers=_token(ids["other_faculty"]))
     assert revoked_aggregate.json()["total_predictions_logged"] == 0
@@ -1066,3 +1071,182 @@ def test_monitoring_reports_real_states_and_audit_is_searchable(workspace):
     audit = client.get("/api/v1/admin/audit?search=setting", headers=headers)
     assert audit.status_code == 200
     assert isinstance(audit.json()["items"], list)
+
+
+def _consent(monkeypatch, db_session, student_id, version="test-v1"):
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_ACTIVE", True)
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_VERSION", version)
+    with db_session() as db:
+        db.add(ResearchConsent(student_id=student_id, document_version=version, choice="accepted"))
+        db.commit()
+
+
+def test_ml_period_filter_narrows_history_without_changing_eligibility(workspace):
+    client, db_session, ids = workspace
+    headers = _token(ids["faculty"])
+    with db_session() as db:
+        db.add(ActivityAttempt(
+            student_id=ids["student"], activity_id=ids["published"], attempt_number=2,
+            passed_test_cases=0, total_test_cases=1, score_percentage=10, is_successful=False,
+            created_at=datetime.now(timezone.utc) - timedelta(days=100)))
+        db.commit()
+
+    everything = client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}&period=all", headers=headers)
+    recent = client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}&period=7d", headers=headers)
+    assert everything.status_code == 200 and recent.status_code == 200
+    assert everything.json()["summary"]["graded_events"] == 2
+    assert recent.json()["summary"]["graded_events"] == 1
+    assert everything.json()["students"][0]["result_count"] == 2
+    assert recent.json()["students"][0]["result_count"] == 1
+    # Eligibility, target selection and model inputs ignore the reporting window.
+    assert (everything.json()["students"][0]["forecast_status"]
+            == recent.json()["students"][0]["forecast_status"])
+    assert recent.json()["aggregation_timezone"] == "UTC"
+    assert client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}&period=nonsense",
+                      headers=headers).status_code == 422
+
+
+def test_ml_student_detail_is_scoped_to_an_enrolled_learner(workspace):
+    client, _db, ids = workspace
+    headers = _token(ids["faculty"])
+    detail = client.get(
+        f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_a']}", headers=headers)
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["student"]["student_id"] == str(ids["student"])
+    assert body["evidence"]["topic_activities_required"] >= 1
+    assert "features_snapshot" not in detail.text and "pseudonym_id" not in detail.text
+
+    assert client.get(
+        f"/api/v1/faculty/ml/students/{ids['other_student']}?course_id={ids['course_a']}",
+        headers=headers).status_code == 404
+    assert client.get(
+        f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_b']}",
+        headers=headers).status_code == 403
+    assert client.get(
+        f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_a']}",
+        headers=_token(ids["student"])).status_code == 403
+    assert client.get(
+        f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_a']}",
+        headers=_token(ids["other_faculty"])).status_code == 403
+
+
+def test_ml_evaluation_keeps_model_versions_apart_and_scores_both_models(workspace, monkeypatch):
+    client, db_session, ids = workspace
+    headers = _token(ids["faculty"])
+    _consent(monkeypatch, db_session, ids["student"])
+    with db_session() as db:
+        db.add_all([
+            # Active version: one correct for logreg, wrong for the forest.
+            MLPrediction(student_id=ids["student"], target_activity_id=ids["published"],
+                         features_snapshot_json={}, logreg_prob=0.8, logreg_pred=True,
+                         rf_prob=0.2, rf_pred=False, model_version="v2-test",
+                         selected_model="logreg", actual_outcome=True),
+            # Active version, still pending: excluded from accuracy.
+            MLPrediction(student_id=ids["student"], target_activity_id=ids["published"],
+                         features_snapshot_json={}, logreg_prob=0.6, logreg_pred=True,
+                         rf_prob=0.6, rf_pred=True, model_version="v2-test",
+                         selected_model="logreg", actual_outcome=None),
+            # Older version must never be pooled with the active one.
+            MLPrediction(student_id=ids["student"], target_activity_id=ids["published"],
+                         features_snapshot_json={}, logreg_prob=0.1, logreg_pred=False,
+                         rf_prob=0.1, rf_pred=False, model_version="v1-test",
+                         selected_model="logreg", actual_outcome=True),
+        ])
+        db.commit()
+    monkeypatch.setattr(app.state, "model_version", "v2-test")
+
+    body = client.get(f"/api/v1/faculty/ml/evaluation?course_id={ids['course_a']}",
+                      headers=headers).json()
+    observed = body["observed"]
+    assert observed["selected_version"] == "v2-test"
+    assert sorted(observed["versions"]) == ["v1-test", "v2-test"]
+    assert observed["total_predictions"] == 2
+    assert observed["awaiting_outcome"] == 1
+    assert observed["labeled_predictions"] == 1
+    assert observed["unit"] == "prediction snapshots"
+    assert observed["models"]["logreg"]["accuracy_percent"] == 100.0
+    assert observed["models"]["random_forest"]["accuracy_percent"] == 0.0
+
+    older = client.get(
+        f"/api/v1/faculty/ml/evaluation?course_id={ids['course_a']}&model_version=v1-test",
+        headers=headers).json()
+    assert older["observed"]["total_predictions"] == 1
+    assert client.get(
+        f"/api/v1/faculty/ml/evaluation?course_id={ids['course_a']}&model_version=v9-missing",
+        headers=headers).status_code == 404
+    assert client.get(f"/api/v1/faculty/ml/evaluation?course_id={ids['course_b']}",
+                      headers=headers).status_code == 403
+    assert client.get(f"/api/v1/faculty/ml/evaluation?course_id={ids['course_a']}",
+                      headers=_token(ids["student"])).status_code == 403
+
+
+def test_ml_evaluation_excludes_learners_without_current_consent(workspace, monkeypatch):
+    client, db_session, ids = workspace
+    headers = _token(ids["faculty"])
+    _consent(monkeypatch, db_session, ids["student"])
+    with db_session() as db:
+        db.add(MLPrediction(student_id=ids["student"], target_activity_id=ids["published"],
+                            features_snapshot_json={}, logreg_prob=0.8, logreg_pred=True,
+                            rf_prob=0.8, rf_pred=True, model_version="v2-test",
+                            selected_model="logreg", actual_outcome=True))
+        db.commit()
+    assert client.get(f"/api/v1/faculty/ml/evaluation?course_id={ids['course_a']}",
+                      headers=headers).json()["observed"]["total_predictions"] == 1
+
+    # A newer consent document version withdraws the old acceptance.
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_VERSION", "test-v2")
+    assert client.get(f"/api/v1/faculty/ml/evaluation?course_id={ids['course_a']}",
+                      headers=headers).json()["observed"]["total_predictions"] == 0
+
+
+def test_ml_evaluation_is_honest_without_an_approved_model_report(workspace):
+    client, _db, ids = workspace
+    body = client.get(f"/api/v1/faculty/ml/evaluation?course_id={ids['course_a']}",
+                      headers=_token(ids["faculty"])).json()
+    assert body["offline"] == {"status": "unavailable", "report": None}
+    assert body["observed"]["versions"] == []
+    assert body["observed"]["selected_version"] is None
+    assert body["thresholds"]["decision"] == 0.5
+
+
+def test_ml_reads_never_record_a_prediction(workspace, monkeypatch):
+    client, db_session, ids = workspace
+    headers = _token(ids["faculty"])
+    _consent(monkeypatch, db_session, ids["student"])
+    with db_session() as db:
+        before = db.query(MLPrediction).count()
+    for path in (
+        f"/api/v1/faculty/ml?course_id={ids['course_a']}",
+        f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_a']}",
+        f"/api/v1/faculty/ml/evaluation?course_id={ids['course_a']}",
+    ):
+        assert client.get(path, headers=headers).status_code == 200
+    with db_session() as db:
+        assert db.query(MLPrediction).count() == before
+
+
+def test_offline_report_allowlist_drops_paths_and_training_internals():
+    from app.services.ml_predictor.predictor import _sanitized_report
+
+    report = _sanitized_report({
+        "model_version": "v2",
+        "artifact_directory": "runs/v2",
+        "features": ["prior_attempts"],
+        "scikit_learn_version": "1.5.0",
+        "selection": {"winner": "logreg"},
+        "models": {"logreg": {
+            "best_parameters": {"C": 1.0},
+            "train": {"accuracy": 1.0},
+            "validation": {"accuracy": 0.7},
+            "test": {"accuracy": 0.68, "confusion_matrix": [[1, 2], [3, 4]]},
+        }},
+        "baselines": {"most_frequent": {"test": {"accuracy": 0.6}}},
+    })
+    for leaked in ("artifact_directory", "features", "scikit_learn_version"):
+        assert leaked not in report
+    assert set(report["models"]["logreg"]) == {"validation", "test"}
+    assert "best_parameters" not in report["models"]["logreg"]
+    assert report["models"]["logreg"]["test"]["confusion_matrix"] == [[1, 2], [3, 4]]
+    assert report["baselines"]["most_frequent"]["test"]["accuracy"] == 0.6
+    assert report["selection"] == {"winner": "logreg"}
