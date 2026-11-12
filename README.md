@@ -53,11 +53,13 @@ ByteQuest_2.0/
 
 ## Quick start (Windows)
 
-**Prerequisites:** Docker Desktop, Supabase CLI (on `PATH`), Python, Node.js, and the private Judge0 Ubuntu VM reachable from this machine.
+**Prerequisites:** Docker Desktop, Supabase CLI **v2** (on `PATH`), Python 3.11, Node.js, PowerShell 7, and the private Judge0 Ubuntu VM. The first offline preparation run needs internet access to install or cache missing packages and Docker images.
 
 ### One-click
 
-Double-click [`START-BYTEQUEST.bat`](START-BYTEQUEST.bat) from the repo root. It starts Docker Desktop and local Supabase, boots the Judge0 VM and discovers its IP, then launches the API, frontend, and sign-in screen. Approve the Windows administrator prompt (needed to inspect the VM). See the [full startup guide](docs/LOCAL_E2E.md#one-click-windows-startup).
+While connected and plugged in, first run [`PREPARE-BYTEQUEST-OFFLINE.bat`](PREPARE-BYTEQUEST-OFFLINE.bat). It installs missing local dependencies, caches the Supabase containers, builds the frontend with a locally served code editor, checks published content and grading languages, and configures a host-only Judge0 link. The Ubuntu SSH and sudo steps may ask for the VM password; it is not saved.
+
+Then double-click [`START-BYTEQUEST.bat`](START-BYTEQUEST.bat) from the repo root, including on battery with Wi-Fi off. It reuses the frontend build and local data, starts the CPU-based services, checks database and grading readiness, and opens the sign-in screen. Windows asks for administrator access only if it must start the Judge0 VM. Startup errors identify the phase and are recorded under `logs/`. To verify with AC, Ethernet, and Wi-Fi disconnected, run [`TEST-BYTEQUEST-OFFLINE.bat`](TEST-BYTEQUEST-OFFLINE.bat); it writes `logs/offline-battery-acceptance.log`. See the [full startup guide](docs/LOCAL_E2E.md#one-click-windows-startup).
 
 ### Manual
 
@@ -76,7 +78,7 @@ Set-Location .\frontend
 npm install; npm run dev
 ```
 
-Open <http://localhost:3000/onboarding>. Supabase Studio is at <http://127.0.0.1:54323>.
+Open <http://127.0.0.1:3000/onboarding>. The one-click battery launcher skips Supabase Studio and other services unused by the learning flow; start the full local stack manually when you need Studio.
 
 If the Judge0 VM's IP changes, re-point the client with `.\infra\configure-judge0-vm.ps1` (add `-SetApiToken` to update a rotated token), then restart the API. `GEMINI_API_KEY` is required only for AI generation, not for the core coding flow.
 

@@ -369,7 +369,13 @@ authorization_url_path = "/oauth/consent"
 allow_dynamic_registration = false
 
 [edge_runtime]
-enabled = true
+# Disabled for local dev: this project ships no Supabase Edge Functions
+# (there is no supabase/functions directory), and the edge runtime container
+# crash-loops on the Docker Desktop WSL2 backend. While it is unhealthy the
+# CLI refuses to emit `supabase status --output env`, which blocks the
+# launcher even though DB/Auth/REST/Kong are fine. Re-enable this if and
+# when edge functions are actually added to the project.
+enabled = false
 # Supported request policies: `oneshot`, `per_worker`.
 # `per_worker` (default) — enables hot reload during local development.
 # `oneshot` — fallback mode if hot reload causes issues (e.g. in large repos or with symlinks).

@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { loader } from "@monaco-editor/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -12,6 +13,7 @@ const Editor = dynamic(() => import("@monaco-editor/react"), {
   ssr: false,
   loading: () => <div className="editor-loading">Loading code editor…</div>,
 });
+loader.config({ paths: { vs: "/monaco/vs" } });
 
 function draftKey(userId: string, activityId: string): string {
   return `bytequest:draft:${userId}:${activityId}`;
@@ -73,9 +75,10 @@ export default function Arena({ activityId }: { activityId: string }) {
   const [trackActivities, setTrackActivities] = useState<Quest[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [code, setCode] = useState("");
-  type SyncState = "synced" | "saving" | "offline-local" | "saved-local" | "error";
+  type SyncState = "synced" | "saving" | "saved-local" | "error";
   const [syncState, setSyncState] = useState<SyncState>("synced");
-  const [isOnline, setIsOnline] = useState(() => typeof navigator !== "undefined" ? navigator.onLine : true);
+  const [retryTick, setRetryTick] = useState(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showSolution, setShowSolution] = useState(false);
   const [draftLoaded, setDraftLoaded] = useState(false);
   const [draftStatus, setDraftStatus] = useState("Loading draft…");
@@ -107,12 +110,6 @@ export default function Arena({ activityId }: { activityId: string }) {
     async (nextCode: string) => {
       if (!questId || !userId) return;
 
-      if (typeof navigator !== "undefined" && !navigator.onLine) {
-        setSyncState("offline-local");
-        setDraftStatus("Offline — saved to device");
-        return;
-      }
-
       setSyncState("saving");
       setDraftStatus("Saving draft…");
       try {
@@ -128,30 +125,20 @@ export default function Arena({ activityId }: { activityId: string }) {
         const nowStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
         setSyncState("synced");
         setDraftStatus(`Synced to server at ${nowStr}`);
+        if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+        return true;
       } catch {
         setSyncState("saved-local");
-        setDraftStatus("Saved locally");
+        setDraftStatus("Local API unavailable — saved on this device; retrying");
+        return false;
       }
     },
     [userId, questId]
   );
 
-  useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-    };
-    const handleOffline = () => {
-      setIsOnline(false);
-      setSyncState("offline-local");
-      setDraftStatus("Offline — saved to device");
-    };
-
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
+  useEffect(() => () => {
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -229,7 +216,7 @@ export default function Arena({ activityId }: { activityId: string }) {
   }, [activityId]);
 
   useEffect(() => {
-    if (!questId || !draftLoaded || !isOnline) return;
+    if (!questId || !draftLoaded) return;
     latestCodeRef.current = code;
     const timer = window.setTimeout(() => {
       if (savingRef.current) return;
@@ -239,7 +226,12 @@ export default function Arena({ activityId }: { activityId: string }) {
           let lastSaved = lastSyncedCodeRef.current;
           while (lastSaved !== latestCodeRef.current) {
             const next = latestCodeRef.current;
-            await flushDraftToServer(next);
+            const saved = await flushDraftToServer(next);
+            if (!saved) {
+              if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+              retryTimerRef.current = setTimeout(() => setRetryTick((tick) => tick + 1), 5000);
+              break;
+            }
             lastSaved = next;
           }
         } finally {
@@ -248,7 +240,7 @@ export default function Arena({ activityId }: { activityId: string }) {
       })();
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [code, draftLoaded, isOnline, questId, flushDraftToServer]);
+  }, [code, draftLoaded, questId, flushDraftToServer, retryTick]);
 
   function handleCodeChange(newCode: string | undefined) {
     const updated = newCode ?? "";
@@ -259,13 +251,8 @@ export default function Arena({ activityId }: { activityId: string }) {
       setDraftStatus("Saved on this device — refresh to load server draft");
       return;
     }
-    if (typeof navigator !== "undefined" && !navigator.onLine) {
-      setSyncState("offline-local");
-      setDraftStatus("Offline — saved to device");
-    } else {
-      setSyncState("saving");
-      setDraftStatus("Saving draft…");
-    }
+    setSyncState("saving");
+    setDraftStatus("Saving draft…");
   }
 
   function handleResetCode() {
@@ -346,6 +333,10 @@ export default function Arena({ activityId }: { activityId: string }) {
 
   async function requestErrorExplanation() {
     if (!quest || !evaluation || evaluation.is_successful) return;
+    if (!navigator.onLine) {
+      setAiError("Gemini hints need an internet connection. Your code and local grading still work offline.");
+      return;
+    }
     setAiExplaining(true);
     setAiError("");
     try {
@@ -433,16 +424,15 @@ export default function Arena({ activityId }: { activityId: string }) {
 
   return (
     <div className="page-shell">
-      {/* Offline/Network Reconnect Banner */}
-      {!isOnline && (
+      {syncState === "saved-local" && (
         <div
           role="status"
           aria-live="assertive"
           className="mb-4 flex items-center justify-between rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-xs font-semibold text-amber-900 shadow-xs"
         >
-          <span>Connection lost — your code is being saved safely on this device and will sync automatically when reconnected.</span>
+          <span>The local ByteQuest API is unavailable. Your code is saved on this device and will retry automatically.</span>
           <span className="font-mono uppercase font-bold text-[10px] tracking-wider bg-amber-200/80 px-2 py-0.5 rounded">
-            Offline Mode
+            Retrying
           </span>
         </div>
       )}
@@ -572,8 +562,6 @@ export default function Arena({ activityId }: { activityId: string }) {
                         ? "bg-emerald-600"
                         : syncState === "saving"
                         ? "bg-amber-500 animate-pulse"
-                        : syncState === "offline-local"
-                        ? "bg-amber-600"
                         : "bg-slate-400"
                     }`}
                   />

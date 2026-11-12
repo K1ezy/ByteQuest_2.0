@@ -52,13 +52,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [isOnline, setIsOnline] = useState(true);
-
   const load = useCallback(async (initial = false) => {
-    if (!navigator.onLine) {
-      setLoading(false);
-      return;
-    }
     if (!initial) setRefreshing(true);
     setError("");
     try {
@@ -89,18 +83,9 @@ export default function DashboardPage() {
   }, [load]);
 
   useEffect(() => {
-    // Keep the first server and client render identical for hydration.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setIsOnline(navigator.onLine);
-    const handleOnline = () => { setIsOnline(true); void load(); };
-    const handleOffline = () => setIsOnline(false);
-    const handleFocus = () => { if (navigator.onLine) void load(); };
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
+    const handleFocus = () => { void load(); };
     window.addEventListener("focus", handleFocus);
     return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
       window.removeEventListener("focus", handleFocus);
     };
   }, [load]);
@@ -113,7 +98,7 @@ export default function DashboardPage() {
 
   return (
     <div className="page-shell pilot-dashboard dashboard-hub">
-      {!isOnline && <p className="notice" role="status">{data ? "You are offline. The information below is from your last successful load in this tab." : "You are offline. Reconnect to load your dashboard."}</p>}
+      {error && data && <p className="notice" role="status">The local ByteQuest service is unavailable. Showing your last loaded progress.</p>}
 
       <div className="dashboard-heading">
         <div>
@@ -121,7 +106,7 @@ export default function DashboardPage() {
           <h1>{profile ? "Welcome back, learner" : "Your dashboard"}</h1>
           <p className="pilot-lead">Pick up your next quest and keep every part of ByteQuest close by.</p>
         </div>
-        {data && <button className="dashboard-refresh" type="button" onClick={() => void load()} disabled={refreshing || !isOnline}>
+        {data && <button className="dashboard-refresh" type="button" onClick={() => void load()} disabled={refreshing}>
           {refreshing ? "Refreshing…" : "Refresh progress"}
         </button>}
       </div>

@@ -18,21 +18,6 @@ export default function SubmissionStatusPage() {
   const { id } = useParams<{ id: string }>();
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState("");
-  const [isOnline, setIsOnline] = useState(() => typeof navigator !== "undefined" ? navigator.onLine : true);
-
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, []);
-
-
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -69,15 +54,15 @@ export default function SubmissionStatusPage() {
 
   return (
     <div className="page-shell pilot-dashboard">
-      {!isOnline && (
+      {error && (
         <div
           role="status"
           aria-live="assertive"
           className="mb-4 flex items-center justify-between rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-xs font-semibold text-amber-900"
         >
-          <span>Connection lost — polling will automatically resume when network is restored.</span>
+          <span>The local ByteQuest API is unavailable. Polling will retry automatically.</span>
           <span className="font-mono uppercase font-bold text-[10px] tracking-wider bg-amber-200/80 px-2 py-0.5 rounded">
-            Offline
+            Retrying
           </span>
         </div>
       )}

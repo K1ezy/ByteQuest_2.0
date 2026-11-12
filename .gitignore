@@ -52,6 +52,7 @@ htmlcov/
 # Node.js & Next.js
 frontend/node_modules/
 frontend/.next/
+frontend/public/monaco/
 frontend/out/
 frontend/build/
 frontend/.turbo/
