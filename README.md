@@ -97,6 +97,8 @@ Apply `supabase/migrations/20261111154648_usernames_ml_dashboard.sql` and `supab
 
 Profile owners edit their username on `/profile`; the username is a public display handle, not a login credential. Faculty use **Machine Learning** in the workspace navigation to view historical course results and forecast states. The Performance page continues to show grades and attempt history.
 
+New students choose a unique public username when signing up. It must contain 3–44 letters and is stored in lowercase; sign-in still uses email. Apply `supabase/migrations/20261112144247_student_signup_username.sql` before deploying the new signup form. The Auth signup transaction creates the profile with the chosen username, while administrator-invited accounts continue to receive starter usernames.
+
 There is **no approved active model** in the repository. Historical charts work now; real probabilities require institution-approved de-identified training exports, a reviewed model run and activation manifest, research approval, and each learner's current consent. The [training export and review guide](ml_pipeline/README.md) documents the released-exam feature schema. Synthetic development runs must not be activated or presented as learner forecasts.
 
 ## Security

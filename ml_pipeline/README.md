@@ -36,7 +36,22 @@ identifying columns, email/UUID/numeric student identifiers, malformed rows,
 and non-chronological attempt sequences; these checks reduce accidental
 exposure but cannot prove that arbitrary identifiers are anonymous.
 
+Both export queries below require the named SQL parameter
+`:current_consent_version`. Bind it to the currently active backend
+`RESEARCH_CONSENT_VERSION` using a parameter-aware SQL client, after confirming
+`RESEARCH_CONSENT_ACTIVE` and institutional approval. In a SQL editor without
+named parameters, replace the parameter with a correctly quoted literal of
+that exact version before running either query. An unbound parameter fails;
+an unmatched version returns no rows. The latest consent event for each learner
+must accept that version. A past acceptance does not override a later decline
+or withdrawal. Use the same version for both exports.
+
 ```sql
+WITH latest_consent AS (
+    SELECT DISTINCT ON (student_id) student_id, choice, document_version
+    FROM public.research_consents
+    ORDER BY student_id, event_order DESC
+)
 SELECT
     aa.id::text AS id,
     p.pseudonym_id AS student_id,
@@ -57,6 +72,9 @@ SELECT
     aa.time_spent_seconds
 FROM public.activity_attempts AS aa
 JOIN public.profiles AS p ON p.id = aa.student_id
+JOIN latest_consent AS consent ON consent.student_id = p.id
+    AND consent.choice = 'accepted'
+    AND consent.document_version = :current_consent_version
 JOIN public.learning_activities AS la ON la.id = aa.activity_id
 WHERE aa.exam_attempt_id IS NULL AND la.course_id IS NOT NULL
 ORDER BY p.pseudonym_id, aa.created_at, aa.attempt_number, aa.id;
@@ -72,7 +90,11 @@ latest known exam release time so historical features cannot become available
 too early.
 
 ```sql
-WITH course_exams AS (
+WITH latest_consent AS (
+    SELECT DISTINCT ON (student_id) student_id, choice, document_version
+    FROM public.research_consents
+    ORDER BY student_id, event_order DESC
+), course_exams AS (
     SELECT ei.exam_id, max(la.course_id::text)::uuid AS course_id
     FROM public.exam_items AS ei
     JOIN public.learning_activities AS la ON la.id = ei.activity_id
@@ -89,6 +111,9 @@ FROM public.exam_attempts AS ea
 JOIN public.exams AS e ON e.id = ea.exam_id
 JOIN course_exams AS ce ON ce.exam_id = e.id
 JOIN public.profiles AS p ON p.id = ea.student_id
+JOIN latest_consent AS consent ON consent.student_id = p.id
+    AND consent.choice = 'accepted'
+    AND consent.document_version = :current_consent_version
 WHERE ea.status = 'submitted'
   AND ea.result_released_at IS NOT NULL
   AND ea.submitted_at <= ea.result_released_at

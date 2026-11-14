@@ -87,6 +87,8 @@ This helper only targets the project's running local Supabase container (`supaba
 
 Upload a lesson PDF, generate a challenge, confirm Judge0 reports the reference solution as verified, and publish it. The server rejects publishing if the reference solution did not pass.
 
+To grant local administrator access, sign up as a student, then run `.\infra\grant-local-instructor.ps1 -Role admin -Email 'your-login-email@example.test'` from the repository root. Sign out and back in after the grant.
+
 ## Student submission flow
 
 Sign back in with the student account, select the same language as the challenge, and open the published challenge from `/quests`. Edit the starter in Monaco, run the visible samples, then submit officially. A sample run evaluates visible cases only and does not create an `activity_attempts` row. An official submission evaluates the full test suite and appends an attempt with an increasing attempt number. Completion XP is awarded on the first passing official attempt only; failures and later passes are still recorded without duplicating that completion XP. The arena updates the displayed XP/level and quest completion after grading, shows visible case feedback and newly unlocked badges, and does not reveal hidden-case inputs or per-case results.

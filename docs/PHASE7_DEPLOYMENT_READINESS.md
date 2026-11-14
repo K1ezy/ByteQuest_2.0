@@ -73,6 +73,8 @@ The intended public ports are TCP 80 and 443 for Caddy and the configured SSH po
 
 ## Deployment order after the decisions are made
 
+Never run `supabase db reset --linked` because it runs `seed.sql` on production.
+
 1. Provision the VPS, record its public IP and SSH port, configure the DNS A/AAAA record, and check disk space before enabling the 4 GiB swap option in `infra/vps_bootstrap.sh`. After host setup and before deployment, run `bash ./preflight-host.sh` from `infra/`; it is read-only and reports host-local prerequisites only. Resolve any port 80/443 listener before the initial Caddy start.
 2. Create the production Supabase project, apply reviewed schema migrations, configure Auth redirect URLs and storage policies, and execute the [backup/restore runbook](PHASE7_BACKUP_RESTORE_RUNBOOK.md) in an isolated recovery project. Keep production data and classroom research records out of development rehearsals.
 3. Select the Judge0 image variant and VPS architecture. Create the three ignored VPS config files above, fill production values, replace all four example image tags with reviewed SHA-256 digest references, and generate two independent Judge0 passwords using `openssl rand -hex 32`. Confirm all placeholders are replaced and `ML_SHADOW_ENABLED=false` and `ML_SHADOW_RESEARCH_APPROVED=false` remain in force.
