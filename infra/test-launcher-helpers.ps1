@@ -243,6 +243,69 @@ else {
     }
 }
 
+Write-Host "`n[8] The frontend counts as ready only when its page scripts load"
+# Startup once opened every page stuck on "Loading...": an old `next start`
+# outlived a rebuild, so its HTML answered 200 but pointed at deleted chunks.
+$pageHtml = '<html><head><script src="/_next/static/chunks/main-a1.js" async=""></script>' +
+    '<link rel="preload" href="/_next/static/media/font.woff2"/></head><body>' +
+    '<script>self.__next_f.push([1,"2:I[\"/_next/static/chunks/page-b2.js\",\"/_next/static/chunks/main-a1.js\"]"])</script>' +
+    '<script src="/_next/static/chunks/dpl-c3.js?dpl=abc"></script>' +
+    '<a href="/_next/static/build/_buildManifest.json">x</a></body></html>'
+Assert-That 'collects src and RSC-payload scripts once, skipping fonts and json' {
+    ((Get-PageScriptPaths -Html $pageHtml) -join ',') -eq '/_next/static/chunks/main-a1.js,/_next/static/chunks/page-b2.js,/_next/static/chunks/dpl-c3.js'
+}
+Assert-That 'empty or null HTML yields no scripts' {
+    (Get-PageScriptPaths -Html '').Count -eq 0 -and (Get-PageScriptPaths -Html $null).Count -eq 0
+}
+
+# A fake site in place of the network, so the readiness decision is what is tested.
+$script:FakeSite = @{}
+function Invoke-WebRequest {
+    param($Uri, $TimeoutSec, [switch]$UseBasicParsing)
+    $path = ([uri]$Uri).PathAndQuery
+    if ($script:FakeSite.ContainsKey($path)) { return [pscustomobject]@{ StatusCode = 200; Content = $script:FakeSite[$path] } }
+    throw "404 Not Found: $path"
+}
+$pageUri = 'http://127.0.0.1:3000/onboarding?startup_auth=1'
+Assert-That 'page and every script load -> ready' {
+    $script:FakeSite = @{
+        '/onboarding?startup_auth=1'          = $pageHtml
+        '/_next/static/chunks/main-a1.js'     = 'js'
+        '/_next/static/chunks/page-b2.js'     = 'js'
+        '/_next/static/chunks/dpl-c3.js'      = 'js'
+    }
+    Test-FrontendAssets -Uri $pageUri
+}
+Assert-That 'page answers but a chunk is gone (stale server after rebuild) -> not ready' {
+    $script:FakeSite = @{
+        '/onboarding?startup_auth=1'      = $pageHtml
+        '/_next/static/chunks/main-a1.js' = 'js'
+        '/_next/static/chunks/dpl-c3.js'  = 'js'
+    }
+    -not (Test-FrontendAssets -Uri $pageUri)
+}
+Assert-That 'page does not answer -> not ready' {
+    $script:FakeSite = @{}
+    -not (Test-FrontendAssets -Uri $pageUri)
+}
+Assert-That 'page with no Next.js scripts -> not ready' {
+    $script:FakeSite = @{ '/onboarding?startup_auth=1' = '<html>Some other app</html>' }
+    -not (Test-FrontendAssets -Uri $pageUri)
+}
+Remove-Item Function:\Invoke-WebRequest
+
+Write-Host "`n[9] The launcher never serves a rebuilt .next from an old server"
+$buildAt = $launcherText.IndexOf('& npm run build')
+$stopBeforeBuildAt = $launcherText.LastIndexOf('Stop-ByteQuestFrontend', $buildAt)
+$assetGateAt = $launcherText.IndexOf('Test-FrontendAssets -Uri $frontendUrl')
+$openBrowserAt = $launcherText.IndexOf('Start-Process $frontendUrl')
+Assert-That 'the old frontend is stopped before the build replaces .next' {
+    $buildAt -gt 0 -and $stopBeforeBuildAt -gt $launcherText.IndexOf('Check the offline frontend build') -and $stopBeforeBuildAt -lt $buildAt
+}
+Assert-That 'page scripts are verified before the browser opens' {
+    $assetGateAt -gt 0 -and $openBrowserAt -gt $assetGateAt
+}
+
 # --------------------------------------------------------------------------
 Write-Host ""
 if ($script:Failures -gt 0) {

@@ -65,13 +65,13 @@ try {
     }
 
     $databaseUrl = [string]$settings["DATABASE_URL"]
-    if ($databaseUrl -notmatch '@127\.0\.0\.1:54322(?=/|\?|$)') {
+    if ($databaseUrl -notmatch '@127\.0\.0\.1:15432(?=/|\?|$)') {
         throw "DATABASE_URL is not the expected local Supabase endpoint. No container was started."
     }
-    $databaseUrl = $databaseUrl -replace '@127\.0\.0\.1:54322(?=/|\?|$)', '@db:5432'
+    $databaseUrl = $databaseUrl -replace '@127\.0\.0\.1:15432(?=/|\?|$)', '@db:5432'
 
     $supabaseUrl = [string]$settings["SUPABASE_URL"]
-    if ($supabaseUrl -ne "http://127.0.0.1:54321") {
+    if ($supabaseUrl -ne "http://127.0.0.1:15431") {
         throw "SUPABASE_URL is not the expected local Supabase endpoint. No container was started."
     }
 

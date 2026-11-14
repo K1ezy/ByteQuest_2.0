@@ -43,6 +43,43 @@ function Test-HttpReady {
     }
 }
 
+function Get-PageScriptPaths {
+    # The same-origin Next.js scripts an HTML page tells the browser to load.
+    # Matches both <script src="..."> and the escaped copies in the RSC payload;
+    # the lookahead keeps ".json" and similar paths out.
+    [OutputType([string[]])]
+    param([AllowNull()][AllowEmptyString()][string]$Html)
+
+    if ([string]::IsNullOrEmpty($Html)) { return , [string[]]@() }
+    return , [string[]]@(
+        [regex]::Matches($Html, '/_next/static/[A-Za-z0-9_\-./~%]+?\.js(?=[\\"''?\s>])') |
+        ForEach-Object { $_.Value } |
+        Select-Object -Unique
+    )
+}
+
+function Test-FrontendAssets {
+    # A page can answer 200 while the scripts it references no longer exist:
+    # a `next start` that outlived a rebuild keeps serving its old manifest, and
+    # every page then hangs on "Loading..." because its client code 404s. The
+    # frontend is only ready when the page AND every script it references load.
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [int]$TimeoutSeconds = 10
+    )
+
+    try { $response = Invoke-WebRequest -Uri $Uri -TimeoutSec $TimeoutSeconds -UseBasicParsing }
+    catch { return $false }
+    $scripts = Get-PageScriptPaths -Html ([string]$response.Content)
+    # A Next.js page always ships client scripts; none means the page is not ours.
+    if ($scripts.Count -eq 0) { return $false }
+    $origin = ([uri]$Uri).GetLeftPart([System.UriPartial]::Authority)
+    foreach ($path in $scripts) {
+        if (-not (Test-HttpReady -Uri "$origin$path" -TimeoutSeconds $TimeoutSeconds)) { return $false }
+    }
+    return $true
+}
+
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)

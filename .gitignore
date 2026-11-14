@@ -95,3 +95,6 @@ supabase/.temp/
 !.vscode/extensions.json
 *.sublime-project
 *.sublime-workspace
+
+# Pytest temporary directories created under the backend during test runs
+backend/pytest-of-*/

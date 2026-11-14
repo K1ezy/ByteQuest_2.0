@@ -208,6 +208,14 @@ function Get-ByteQuestSchemaFingerprint {
 $statusResult = Invoke-SupabaseStatusEnv
 $statusLines = $statusResult.Lines
 $firstStatusOk = ($statusResult.ExitCode -eq 0)
+if ($firstStatusOk -and (
+    $null -eq (Get-ByteQuestPublishedPort -Container "supabase_db_$projectId" -ContainerPort 5432) -or
+    $null -eq (Get-ByteQuestPublishedPort -Container "supabase_kong_$projectId" -ContainerPort 8000))) {
+    Write-Output "Supabase containers lost their host port mappings; recreating the local stack."
+    & supabase stop --project-id $projectId *> $null
+    if ($LASTEXITCODE -ne 0) { throw "Could not stop the broken local Supabase stack." }
+    $firstStatusOk = $false
+}
 if ($firstStatusOk) {
     Write-Output "Local Supabase is already running; reusing its containers."
     $startReportedFailure = $false
@@ -324,8 +332,8 @@ if ($missingSettings.Count -gt 0) {
     throw $detail
 }
 
-if ($localValues.API_URL -notmatch '^http://(127\.0\.0\.1|localhost):54321$' -or
-    $localValues.DB_URL -notmatch '^postgres(ql)?://[^@]+@(127\.0\.0\.1|localhost):54322/') {
+if ($localValues.API_URL -notmatch '^http://(127\.0\.0\.1|localhost):15431$' -or
+    $localValues.DB_URL -notmatch '^postgres(ql)?://[^@]+@(127\.0\.0\.1|localhost):15432/') {
     throw "Supabase returned a non-local endpoint; refusing to write local configuration."
 }
 
@@ -450,6 +458,7 @@ $frontendEnv = @(
     "NEXT_PUBLIC_API_URL=http://127.0.0.1:$apiPort/api/v1"
     "NEXT_PUBLIC_SUPABASE_URL=$($localValues.API_URL)"
     "NEXT_PUBLIC_SUPABASE_ANON_KEY=$($localValues.ANON_KEY)"
+    "NEXT_PUBLIC_LOCAL_STAFF_REGISTRATION=true"
 )
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 

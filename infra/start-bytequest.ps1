@@ -168,6 +168,36 @@ function Start-FrontendProcess {
         -RedirectStandardError (Join-Path $logs 'frontend.err.log') | Out-Null
 }
 
+function Stop-ByteQuestFrontend {
+    # Frees port 3000 when ByteQuest's own frontend holds it, so the next server
+    # serves the current build. Returns $true when the port is free afterwards.
+    param([Parameter(Mandatory)][string]$FrontendPath)
+
+    $listenerPidMap = Get-ListenerPidMap
+    $state = Get-FrontendListenerState -FrontendPath $FrontendPath -ListenerPidMap $listenerPidMap
+    if (-not $state.InUse) { return $true }
+
+    foreach ($process in $state.Processes) {
+        if ($process.ParentProcessId) {
+            Stop-Process -Id $process.ParentProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    if (@($state.Processes).Count -eq 0 -and
+        (Test-HttpReady -Uri 'http://127.0.0.1:3000/monaco/vs/loader.js' -TimeoutSeconds 3)) {
+        # Windows sometimes hides a listener's command line. A node.exe listener
+        # serving ByteQuest's own Monaco loader is ours; stop only that listener.
+        $details = Get-ProcessDetailMap -ProcessIds (Get-PortListenerPids -ListenerPidMap $listenerPidMap -Port 3000)
+        foreach ($process in @($details.Values | Where-Object { $_.Name -eq 'node.exe' })) {
+            Write-Host "Stopping the previous ByteQuest frontend (node.exe PID $($process.ProcessId))."
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+    return Wait-Until -TimeoutSeconds 10 -PollMilliseconds 200 -Condition {
+        (Get-PortListenerPids -ListenerPidMap (Get-ListenerPidMap) -Port 3000).Count -eq 0
+    }
+}
+
 function Start-FrontendWarmupJob {
     # Next.js compiles a route on its first request. Issuing that request in the
     # background lets the compile overlap with Supabase, Judge0 and FastAPI
@@ -407,6 +437,18 @@ if (-not $Development) {
     if (-not (Test-Path -LiteralPath (Join-Path $frontendPath '.next/BUILD_ID')) -or
         $builtFingerprint -ne $fingerprint) {
         Write-Host "Building the frontend from local packages. This is needed after source or local settings change."
+        # A running `next start` keeps serving the manifest it loaded, so after
+        # the build replaces .next its pages point at deleted scripts and hang on
+        # "Loading...". Stop it first; phase 3 starts a fresh one on the new build.
+        if ($frontendWarmupJob) {
+            Stop-Job -Job $frontendWarmupJob -ErrorAction SilentlyContinue
+            Remove-Job -Job $frontendWarmupJob -Force -ErrorAction SilentlyContinue
+            $frontendWarmupJob = $null
+        }
+        if (-not (Stop-ByteQuestFrontend -FrontendPath $frontendPath)) {
+            throw "Port 3000 is still in use, so the rebuilt frontend could not replace the old one. Stop the process using port 3000, then rerun this launcher."
+        }
+        $frontendStartedEarly = $false
         $buildLog = Join-Path $logPath 'frontend-build.log'
         Push-Location $frontendPath
         try { & npm run build *> $buildLog; $buildExitCode = $LASTEXITCODE }
@@ -425,6 +467,11 @@ if (-not $Development) {
 $phaseClock = [System.Diagnostics.Stopwatch]::StartNew()
 if (-not $frontendStartedEarly) {
     Write-Step "Start the Next.js frontend"
+    # A server that was not recognised in phase 1 would make this start fail with
+    # EADDRINUSE while the old server kept answering on the port.
+    if (-not (Stop-ByteQuestFrontend -FrontendPath $frontendPath)) {
+        throw "Port 3000 is already used by another process. Stop the process using port 3000, then rerun this launcher."
+    }
     Start-FrontendProcess -FrontendPath $frontendPath -Development:$Development
     $frontendWarmupJob = Start-FrontendWarmupJob -CommonPath $commonPath -Uri $frontendUrl
 }
@@ -435,16 +482,7 @@ elseif ($previousFrontendApiUrl -and $frontendApiUrl -and $previousFrontendApiUr
         Stop-Job -Job $frontendWarmupJob -ErrorAction SilentlyContinue
         Remove-Job -Job $frontendWarmupJob -Force -ErrorAction SilentlyContinue
     }
-    $refreshedState = Get-FrontendListenerState -FrontendPath $frontendPath -ListenerPidMap (Get-ListenerPidMap)
-    foreach ($process in $refreshedState.Processes) {
-        if ($process.ParentProcessId) {
-            Stop-Process -Id $process.ParentProcessId -Force -ErrorAction SilentlyContinue
-        }
-        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
-    }
-    $null = Wait-Until -TimeoutSeconds 5 -PollMilliseconds 200 -Condition {
-        (Get-PortListenerPids -ListenerPidMap (Get-ListenerPidMap) -Port 3000).Count -eq 0
-    }
+    $null = Stop-ByteQuestFrontend -FrontendPath $frontendPath
     Start-FrontendProcess -FrontendPath $frontendPath -Development:$Development
     $frontendWarmupJob = Start-FrontendWarmupJob -CommonPath $commonPath -Uri $frontendUrl
 }
@@ -538,20 +576,35 @@ Write-Step "Start FastAPI and the grading worker"
 $phaseClock = [System.Diagnostics.Stopwatch]::StartNew()
 
 $apiHealthUrl = "http://127.0.0.1:$apiPort/readyz"
-$apiAlreadyRunning = (Test-HttpReady -Uri $apiHealthUrl -TimeoutSeconds 3) -and
-    (@(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match "(?i)(?:-m\s+)?uvicorn\s+app\.main:app.*--port\s+$apiPort(?:\s|$)" }).Count -gt 0)
-
-if (-not $apiAlreadyRunning) {
-    $apiArguments = @('-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', "$apiPort")
-    if ($Development) { $apiArguments += '--reload' }
-    Start-Process -FilePath $backendPython -WorkingDirectory $backendPath -WindowStyle Hidden `
-        -ArgumentList $apiArguments `
-        -RedirectStandardOutput (Join-Path $logPath 'api.log') `
-        -RedirectStandardError (Join-Path $logPath 'api.err.log') | Out-Null
+# Always restart the API, as the worker below is. Reusing a healthy API kept the
+# previous backend code answering after every change, so a re-run applied nothing.
+$existingApis = @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match "(?i)(?:-m\s+)?uvicorn\s+app\.main:app.*--port\s+$apiPort(?:\s|$)" })
+foreach ($existingApi in $existingApis) {
+    Stop-Process -Id $existingApi.ProcessId -Force -ErrorAction SilentlyContinue
+}
+$apiPortFree = Wait-Until -TimeoutSeconds 10 -PollMilliseconds 250 -Condition {
+    -not (Test-TcpPort -ComputerName '127.0.0.1' -Port $apiPort -TimeoutMilliseconds 300)
+}
+if (-not $apiPortFree) {
+    throw "Port $apiPort is still held by a process the launcher could not stop (it may be running as administrator). Close it and run the launcher again, or it would keep serving old backend code."
 }
 
+$apiArguments = @('-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', "$apiPort")
+if ($Development) { $apiArguments += '--reload' }
+Start-Process -FilePath $backendPython -WorkingDirectory $backendPath -WindowStyle Hidden `
+    -ArgumentList $apiArguments `
+    -RedirectStandardOutput (Join-Path $logPath 'api.log') `
+    -RedirectStandardError (Join-Path $logPath 'api.err.log') | Out-Null
+
 New-Item -ItemType Directory -Path $logPath -Force | Out-Null
+# Stop the supervisor before its worker, or it would restart the one just killed.
+$workerSupervisorScript = Join-Path $PSScriptRoot 'run-grading-worker.ps1'
+$existingSupervisors = @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match '(?i)run-grading-worker\.ps1' })
+foreach ($existingSupervisor in $existingSupervisors) {
+    Stop-Process -Id $existingSupervisor.ProcessId -Force -ErrorAction SilentlyContinue
+}
 $existingWorkers = @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
     Where-Object {
         $_.ExecutablePath -eq $backendPython -and
@@ -561,10 +614,17 @@ foreach ($existingWorker in $existingWorkers) {
     Stop-Process -Id $existingWorker.ProcessId -Force -ErrorAction SilentlyContinue
 }
 
-$worker = Start-Process -FilePath $backendPython -ArgumentList @("-m", "app.services.submission_worker") `
-    -WorkingDirectory $backendPath -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput (Join-Path $logPath "submission-worker.log") `
-    -RedirectStandardError (Join-Path $logPath "submission-worker.err.log")
+# The worker runs under a supervisor that restarts it if it dies. Without one, a
+# crashed worker left every submission queued and the student on an endless spinner.
+$worker = Start-Process -FilePath (Get-Command pwsh.exe -ErrorAction Stop).Source `
+    -ArgumentList @(
+        "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $workerSupervisorScript,
+        "-Python", $backendPython,
+        "-WorkingDirectory", $backendPath,
+        "-OutLog", (Join-Path $logPath "submission-worker.log"),
+        "-ErrorLog", (Join-Path $logPath "submission-worker.err.log")
+    ) `
+    -WorkingDirectory $backendPath -WindowStyle Hidden -PassThru
 
 # Quarter-second polling: Uvicorn's import of the router tree finishes on no
 # particular boundary, and the old two-second sleep rounded every start up.
@@ -578,7 +638,16 @@ if (-not $apiReady) {
 if ($worker.HasExited) {
     throw "The grading worker exited during startup. Check logs/submission-worker.err.log."
 }
-Write-Host "Grading worker started cleanly (PID $($worker.Id))."
+# The supervisor is alive; confirm it actually got a worker running underneath it,
+# so a worker that cannot start at all still fails startup instead of looping quietly.
+$workerRunning = Wait-Until -TimeoutSeconds 30 -PollMilliseconds 500 -Condition {
+    @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '(?i)-m\s+app\.services\.submission_worker(?:\s|$)' }).Count -gt 0
+}
+if (-not $workerRunning) {
+    throw "The grading worker did not stay running. Check logs/submission-worker.err.log."
+}
+Write-Host "Grading worker started cleanly and is supervised (supervisor PID $($worker.Id))."
 Add-PhaseTiming -Name "FastAPI + worker" -Clock $phaseClock
 
 # ---------------------------------------------------------------------------
@@ -601,6 +670,21 @@ if (-not $frontendReady) {
 Write-Host "The frontend is responding at http://127.0.0.1:3000."
 if (-not (Test-HttpReady -Uri 'http://127.0.0.1:3000/monaco/vs/loader.js' -TimeoutSeconds 5)) {
     throw 'The local Monaco editor assets are missing. See logs/frontend-build.log and rerun offline preparation.'
+}
+# Answering is not enough: the page's scripts must load too, or every screen
+# stays on "Loading...". Whatever caused a mismatch, one fresh server fixes it.
+if (-not (Test-FrontendAssets -Uri $frontendUrl)) {
+    Write-Host "The frontend answered, but its page scripts did not load. Restarting it on the current build."
+    if (-not (Stop-ByteQuestFrontend -FrontendPath $frontendPath)) {
+        throw "Port 3000 is held by a process this launcher cannot restart. Stop the process using port 3000, then rerun this launcher."
+    }
+    Start-FrontendProcess -FrontendPath $frontendPath -Development:$Development
+    $assetsReady = Wait-Until -TimeoutSeconds 120 -PollMilliseconds 1000 -Condition {
+        Test-FrontendAssets -Uri $frontendUrl -TimeoutSeconds 60
+    }
+    if (-not $assetsReady) {
+        throw "The frontend page loads but its scripts are missing. Check logs/frontend.err.log and logs/frontend-build.log, then rerun this launcher."
+    }
 }
 Add-PhaseTiming -Name "Frontend ready" -Clock $phaseClock
 

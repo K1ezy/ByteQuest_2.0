@@ -9,8 +9,10 @@ POSTGRES_DB=judge0
 POSTGRES_USER=judge0
 POSTGRES_PASSWORD=REPLACE_WITH_A_DIFFERENT_LONG_RANDOM_POSTGRES_PASSWORD
 
-# One worker is a conservative starting point for a 4 GiB VPS.
-COUNT=1
+# Programs Judge0 runs at once. Keep it at vCPUs minus one so the API and
+# databases keep a core: 3 on a 4-vCPU VPS, 1 on a 2-vCPU VPS. Higher makes
+# the whole server stutter during a class-wide submit.
+COUNT=3
 MAX_QUEUE_SIZE=100
 CPU_TIME_LIMIT=5
 MAX_CPU_TIME_LIMIT=15
