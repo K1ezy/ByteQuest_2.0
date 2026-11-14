@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import anyio
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import or_
+from sqlalchemy.exc import OperationalError, TimeoutError
 from sqlalchemy.orm import Session
 
 from app.api.submissions import CodeSubmissionRequest, run_code_submission
@@ -105,13 +105,10 @@ def recover_stale_submission_jobs(db_session: Session | None = None) -> int:
 def claim() -> str | None:
     with SessionLocal() as db:
         recover_stale_submission_jobs(db)
-        cutoff = datetime.now(timezone.utc) - timedelta(
-            seconds=settings.SUBMISSION_STALE_TIMEOUT_SECONDS
-        )
-        job = db.query(SubmissionJob).filter(or_(
-            (SubmissionJob.status == "queued") & (SubmissionJob.next_attempt_at <= datetime.now(timezone.utc)),
-            (SubmissionJob.status == "running") & (SubmissionJob.updated_at < cutoff),
-        )).order_by(
+        job = db.query(SubmissionJob).filter(
+            SubmissionJob.status == "queued",
+            SubmissionJob.next_attempt_at <= datetime.now(timezone.utc),
+        ).order_by(
             SubmissionJob.created_at, SubmissionJob.id
         ).with_for_update(skip_locked=True).first()
         if job is None:
@@ -141,7 +138,8 @@ def run_one(job_id: str) -> None:
                 result = run_code_submission(
                     None,
                     CodeSubmissionRequest(activity_id=job.activity_id, source_code=job.source_code,
-                                          dry_run_only=job.dry_run_only),
+                                          dry_run_only=job.dry_run_only,
+                                          time_spent_seconds=job.time_spent_seconds or 0),
                     user, db, submission_job_id=job.id,
                 )
             job = db.get(SubmissionJob, job_id)
@@ -195,10 +193,18 @@ async def main() -> None:
             if active >= settings.SUBMISSION_WORKER_CONCURRENCY:
                 await anyio.sleep(0.1)
                 continue
-            exam_id = await anyio.to_thread.run_sync(claim_exam) if prefer_exam and not active_exam else None
-            job_id = await anyio.to_thread.run_sync(claim) if not exam_id else None
-            if not job_id and not exam_id and not active_exam:
-                exam_id = await anyio.to_thread.run_sync(claim_exam)
+            try:
+                exam_id = await anyio.to_thread.run_sync(claim_exam) if prefer_exam and not active_exam else None
+                job_id = await anyio.to_thread.run_sync(claim) if not exam_id else None
+                if not job_id and not exam_id and not active_exam and not prefer_exam:
+                    exam_id = await anyio.to_thread.run_sync(claim_exam)
+                sent = False
+                if not exam_id and not job_id and active == 0:
+                    sent = await anyio.to_thread.run_sync(deliver_one)
+            except (OperationalError, TimeoutError) as exc:
+                logger.warning("Worker database unavailable (%s). Retrying in 5 seconds.", type(exc).__name__)
+                await anyio.sleep(5)
+                continue
             prefer_exam = not prefer_exam
             if exam_id or job_id:
                 active += 1
@@ -206,7 +212,6 @@ async def main() -> None:
                     active_exam = True
                 tasks.start_soon(process, "exam" if exam_id else "job", exam_id or job_id)
             elif active == 0:
-                sent = await anyio.to_thread.run_sync(deliver_one)
                 if not sent:
                     await anyio.sleep(1)
             else:

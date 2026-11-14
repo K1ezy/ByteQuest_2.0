@@ -274,17 +274,23 @@ def class_snapshot(db: Session, course_id: uuid.UUID) -> dict:
             "average_score": None,
             "need_follow_up": len(students),
         }
+    # Same definitions as the Performance page: "mastered" needs a passing attempt;
+    # "started" (used for follow-up) needs any attempt.
     rows = (
         db.query(
             ActivityAttempt.student_id,
-            func.count(func.distinct(ActivityAttempt.activity_id)).label("completed"),
+            func.count(func.distinct(ActivityAttempt.activity_id)).label("started"),
+            func.count(func.distinct(ActivityAttempt.activity_id))
+            .filter(ActivityAttempt.is_successful.is_(True))
+            .label("mastered"),
         )
         .filter(ActivityAttempt.activity_id.in_(activity_ids))
         .group_by(ActivityAttempt.student_id)
         .all()
     )
-    completed_by_student = {row[0]: int(row[1]) for row in rows}
-    completions = [min(completed_by_student.get(student.id, 0), len(activity_ids)) for student in students]
+    started_by_student = {row[0]: int(row[1]) for row in rows}
+    mastered_by_student = {row[0]: int(row[2]) for row in rows}
+    completions = [min(mastered_by_student.get(student.id, 0), len(activity_ids)) for student in students]
     average_completion = round(
         (sum(completions) / max(len(completions), 1)) / len(activity_ids) * 100
     )
@@ -297,15 +303,19 @@ def class_snapshot(db: Session, course_id: uuid.UUID) -> dict:
     )
     average_score = None
     if latest_activity is not None:
-        average_score = (
-            db.query(func.avg(ActivityAttempt.score_percentage))
-            .filter(
-                ActivityAttempt.activity_id == latest_activity.id,
-                ActivityAttempt.is_successful.is_(True),
-            )
-            .scalar()
-        )
-    need_follow_up = sum(1 for student in students if completed_by_student.get(student.id, 0) == 0)
+        # Each student's latest score, passing or not: averaging only passes hid
+        # struggling students and left the number empty until someone passed.
+        latest_by_student: dict[uuid.UUID, float] = {}
+        for student_id, score in (
+            db.query(ActivityAttempt.student_id, ActivityAttempt.score_percentage)
+            .filter(ActivityAttempt.activity_id == latest_activity.id)
+            .order_by(ActivityAttempt.created_at.desc())
+        ):
+            latest_by_student.setdefault(student_id, score)
+        latest_scores = list(latest_by_student.values())
+        if latest_scores:
+            average_score = sum(latest_scores) / len(latest_scores)
+    need_follow_up = sum(1 for student in students if started_by_student.get(student.id, 0) == 0)
     return {
         "active_learners": len(students),
         "published_activities": len(activity_ids),

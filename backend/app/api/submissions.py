@@ -26,6 +26,7 @@ from app.services.judge0.client import (
     TestCaseInput,
     judge0_client,
 )
+from app.services.attempt_visibility import activity_has_opened, activity_is_closed
 from app.services.gamification.badges import evaluate_and_award_badges
 from app.services.gamification.progression import grant_xp
 from app.services.gamification.sequencer import determine_next_task_rule_based
@@ -98,8 +99,13 @@ def run_code_submission(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Published programming challenge not found.",
         )
-    if activity.closed_at is not None:
-        raise HTTPException(409, "This challenge is closed for submissions.")
+    # Persisted jobs passed the schedule checks when accepted. Queue delays,
+    # deadline edits and retries must not invalidate that decision.
+    if submission_job_id is None:
+        if not activity_has_opened(activity):
+            raise HTTPException(409, "This challenge has not opened yet.")
+        if not payload.dry_run_only and activity_is_closed(activity):
+            raise HTTPException(409, "This challenge is closed for submissions.")
 
     # Fetch test cases (only visible ones for dry_run_only, all cases for official submit)
     tc_query = db.query(TestCase).filter(TestCase.activity_id == activity.id)
@@ -259,14 +265,17 @@ def run_code_submission(
         job.result_json = response_payload
         job.status = "completed"
     db.commit()
-    db.refresh(new_attempt)
-    db.refresh(student)
-    record_shadow_prediction(
-        db,
-        student=student,
-        target_activity_id=recommendation.get("target_activity_id"),
-        source_attempt=new_attempt,
-        shadow_ready=_shadow_scoring_ready(request),
-    )
+    if _shadow_scoring_ready(request):
+        try:
+            record_shadow_prediction(
+                db,
+                student=student,
+                target_activity_id=recommendation.get("target_activity_id"),
+                source_attempt=new_attempt,
+                shadow_ready=True,
+            )
+        except Exception:
+            db.rollback()
+            logger.exception("Optional shadow scoring failed after the submission was committed.")
 
     return response_payload

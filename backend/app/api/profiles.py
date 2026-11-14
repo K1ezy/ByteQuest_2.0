@@ -68,6 +68,7 @@ class ProfileResponse(BaseModel):
     avatar_url: str | None = None
     email: str | None = None
     created_at: datetime | None = None
+    needs_track_setup: bool = False
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -78,6 +79,27 @@ class ProfileUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=120)
     bio: str | None = Field(default=None, max_length=500)
     username: str | None = None
+
+
+class StaffSetupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    school_id: str = Field(min_length=1, max_length=64)
+
+
+@router.put("/staff-setup", status_code=204)
+def complete_staff_setup(
+    payload: StaffSetupRequest,
+    current_user: Profile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    profile = db.query(Profile).filter(Profile.id == current_user.id).with_for_update().populate_existing().one()
+    if profile.role not in (UserRole.instructor, UserRole.admin) or profile.account_status != "active":
+        raise HTTPException(status_code=403, detail="Staff setup requires an active Faculty or Admin account.")
+    if profile.school_id is not None and profile.school_id != payload.school_id:
+        raise HTTPException(status_code=409, detail="A School ID is already saved for this account. Enter the same ID or contact your ByteQuest administrator.")
+    profile.school_id = payload.school_id
+    db.commit()
 
 
 def _require_student(profile: Profile) -> None:
@@ -94,6 +116,17 @@ def get_my_profile(
 ) -> ProfileResponse:
     """Return the authenticated user's application profile."""
     return current_user
+
+
+@router.get("/username-availability")
+def username_availability(username: str, db: Session = Depends(get_db)) -> dict[str, bool]:
+    """Public signup hint; the unique database index remains authoritative."""
+    try:
+        normalized = normalize_username(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    taken = db.query(Profile.id).filter(func.lower(Profile.username) == normalized).first()
+    return {"available": taken is None}
 
 
 @router.patch("/me", response_model=ProfileResponse)
@@ -146,6 +179,7 @@ def complete_student_onboarding(
     current_user.enrolled_language = payload.enrolled_language
     current_user.year_level = payload.year_level
     current_user.semester = payload.semester
+    current_user.track_selected_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(current_user)

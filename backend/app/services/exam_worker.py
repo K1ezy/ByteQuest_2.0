@@ -11,53 +11,47 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.entities import (
     ActivityAttempt, ActivityKind, Exam, ExamAttempt, ExamItem,
-    LearningActivity, ProgrammingLang,
+    Profile, ProgrammingLang,
 )
 from app.services.gamification.quiz_content import parse_quiz_questions
 from app.services.gamification.sequencer import CHALLENGE_MASTERY_SCORE, QUIZ_MASTERY_SCORE
 from app.services.judge0.client import TestCaseInput, judge0_client
 
 
-def sweep_expired_exam_attempts(db_session=None) -> int:
+def answer_grace() -> timedelta:
+    """How long after due_at an answer may still reach the server and count.
+
+    The browser locks editing at due_at and sends its last unsaved edits then;
+    this window covers that request while it is in transit. It is the single
+    exam cutoff: autosave rejects writes after it and grading starts after it.
     """
-    Checklist #5: Finds active exam attempts past their deadline (+ grace window for in-flight autosaves),
-    transitions status to 'grading', sets submitted_at, and commits so they are graded.
-    """
-    should_close = False
-    if db_session is None:
-        db_session = SessionLocal()
-        should_close = True
-    try:
-        now = datetime.now(timezone.utc)
-        grace_cutoff = now - timedelta(seconds=getattr(settings, "EXAM_AUTOSAVE_GRACE_SECONDS", 15))
-        expired = db_session.query(ExamAttempt).filter(
-            ExamAttempt.status == "active",
-            ExamAttempt.due_at <= grace_cutoff,
-        ).with_for_update(skip_locked=True).all()
-        for attempt in expired:
-            attempt.status = "grading"
-            attempt.submitted_at = now
-        count = len(expired)
-        if count > 0:
-            db_session.commit()
-        return count
-    finally:
-        if should_close:
-            db_session.close()
+    return timedelta(seconds=settings.EXAM_AUTOSAVE_GRACE_SECONDS)
+
+
+def answers_accepted_until(attempt: ExamAttempt) -> datetime:
+    return attempt.due_at + answer_grace()
+
+
+# Longer than grading a full exam takes. A claim older than this belongs to a
+# worker that stopped or failed, so the attempt may be claimed again.
+GRADING_LEASE = timedelta(minutes=10)
 
 
 def claim_exam() -> uuid.UUID | None:
     with SessionLocal() as db:
         now = datetime.now(timezone.utc)
+        lease_free = or_(ExamAttempt.grading_claimed_at.is_(None),
+                         ExamAttempt.grading_claimed_at <= now - GRADING_LEASE)
         attempt = db.query(ExamAttempt).filter(or_(
-            ExamAttempt.status == "grading",
-            (ExamAttempt.status == "active") & (ExamAttempt.due_at <= now),
+            (ExamAttempt.status == "grading") & lease_free,
+            (ExamAttempt.status == "active") & (ExamAttempt.due_at <= now - answer_grace()),
         )).order_by(ExamAttempt.due_at, ExamAttempt.id).with_for_update(skip_locked=True).first()
         if attempt is None:
             return None
         if attempt.status == "active":
             attempt.status = "grading"
             attempt.submitted_at = now
+        attempt.grading_claimed_at = now
         attempt_id = attempt.id
         db.commit()
         return attempt_id
@@ -104,6 +98,8 @@ def grade_exam(attempt_id: uuid.UUID) -> None:
         grades = [(item_id, activity_id, points, snapshot, answer, _grade_item(snapshot, answer))
                   for item_id, activity_id, points, snapshot, answer in work]
 
+        # Serialize activity attempt numbers with practice grading for this student.
+        db.query(Profile.id).filter(Profile.id == student_id).with_for_update().one()
         attempt = db.query(ExamAttempt).filter(ExamAttempt.id == attempt_id).with_for_update().one()
         if attempt.status == "submitted":
             db.rollback()
@@ -112,7 +108,6 @@ def grade_exam(attempt_id: uuid.UUID) -> None:
         pending_xp = 0
         result_items = []
         for item_id, activity_id, points, snapshot, answer, result in grades:
-            activity = db.get(LearningActivity, activity_id)
             existing = db.query(ActivityAttempt).filter(
                 ActivityAttempt.exam_attempt_id == attempt_id,
                 ActivityAttempt.exam_item_id == item_id).first()

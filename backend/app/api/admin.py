@@ -190,7 +190,7 @@ def admin_dashboard(request: Request, user: Profile = Depends(admin_user), db: S
             "availability_changes": len(availability),
             "service_status": overall,
             "healthy_services": len([service for service in services if service["status"] == "healthy"]),
-            "total_services": len(services),
+            "total_services": len([service for service in services if service["status"] != "off"]),
         },
         "action_queue": queue[:6],
         "recent_changes": [

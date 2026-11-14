@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_PDF_MB = 10
 
 
-def _max_upload_bytes(db: Session) -> int:
+def max_upload_bytes(db: Session) -> int:
     return get_setting_int(db, "pdf_upload_max_mb", DEFAULT_MAX_PDF_MB) * 1024 * 1024
 
 
@@ -161,7 +161,7 @@ async def upload_material(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "invalid_file", "field": "file", "message": "Choose a PDF file."},
         )
-    limit = _max_upload_bytes(db)
+    limit = max_upload_bytes(db)
     content = await file.read(limit + 1)
     if len(content) > limit:
         raise HTTPException(

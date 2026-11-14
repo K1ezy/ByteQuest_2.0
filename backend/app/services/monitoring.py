@@ -60,30 +60,51 @@ def _rag_health(db: Session) -> dict:
     return _status("healthy", "The last PDF indexing job completed.", last_checked=checked, trace_id=latest.trace_id)
 
 
-def _runner_health(db: Session) -> dict:
-    recent = (
-        db.query(SubmissionJob)
-        .order_by(SubmissionJob.created_at.desc())
-        .limit(50)
-        .all()
-    )
-    if not recent:
-        return _status("unavailable", "No code submission has been recorded yet.")
-    checked = as_aware(recent[0].created_at)
-    failed = [job for job in recent if job.status == "failed"]
-    running = [job for job in recent if job.status in {"queued", "running"}]
-    if failed and not running:
+# A submission normally finishes within a minute; one waiting longer means the
+# grading worker is down, which students feel long before any job "fails".
+QUEUE_STALL_AFTER = timedelta(minutes=3)
+
+
+def _minutes(delta: timedelta) -> str:
+    minutes = int(delta.total_seconds() // 60)
+    if minutes < 1:
+        return "under a minute"
+    if minutes < 120:
+        return f"{minutes} min"
+    hours = minutes // 60
+    return f"{hours} h" if hours < 48 else f"{hours // 24} days"
+
+
+def runner_status(jobs: list, now: datetime) -> dict:
+    """Judge the grading runner by what is happening now, not by old failures."""
+    if not jobs:
+        return _status("unavailable", "No code submission has been recorded yet.", last_checked=now)
+    finished = [job for job in jobs if job.status in {"completed", "failed"}]
+    failures = sum(job.status == "failed" for job in finished)
+    rate = f" {failures} of the last {len(finished)} finished jobs failed." if finished else ""
+    waiting_since = [as_aware(job.updated_at) for job in jobs if job.status in {"queued", "running"}]
+    if waiting_since and now - min(waiting_since) > QUEUE_STALL_AFTER:
         return _status(
-            "failed",
-            f"The most recent submission jobs include {len(failed)} failure(s). Students keep their prior grades.",
-            last_checked=checked,
+            "stale",
+            f"A submission has waited {_minutes(now - min(waiting_since))} without progress; "
+            f"the grading worker may be stopped.{rate}",
+            last_checked=now,
         )
-    if running:
-        oldest = as_aware(running[-1].created_at)
-        if oldest is not None and datetime.now(timezone.utc) - oldest > STALE_AFTER:
-            return _status("stale", "A submission job has been queued for a long time.", last_checked=checked)
-        return _status("healthy", "Submission jobs are being processed.", last_checked=checked)
-    return _status("healthy", "Recent submission jobs completed.", last_checked=checked)
+    if not finished:
+        return _status("healthy", "Submission jobs are being processed.", last_checked=now)
+    latest = max(finished, key=lambda job: as_aware(job.updated_at))
+    if latest.status == "failed":
+        return _status("failed", f"The most recent submission job failed.{rate}", last_checked=now)
+    return _status(
+        "healthy",
+        f"Last job completed {_minutes(now - as_aware(latest.updated_at))} ago.{rate}",
+        last_checked=now,
+    )
+
+
+def _runner_health(db: Session) -> dict:
+    recent = db.query(SubmissionJob).order_by(SubmissionJob.created_at.desc()).limit(50).all()
+    return runner_status(recent, datetime.now(timezone.utc))
 
 
 def _prediction_health(db: Session, app_state: Any) -> dict:
@@ -105,6 +126,9 @@ def _prediction_health(db: Session, app_state: Any) -> dict:
         "artifacts_invalid": "The model artifact failed validation.",
         "unavailable": "The prediction runtime is unavailable.",
     }
+    # Switched off on purpose is not a fault, so it must not turn the overview red.
+    if mode in {"disabled", "approval_required"}:
+        return _status("off", reasons[mode])
     return _status("unavailable", reasons.get(mode, "No saved prediction has been recorded yet."))
 
 

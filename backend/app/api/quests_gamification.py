@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -36,7 +36,11 @@ from app.services.gamification.sequencer import (
     determine_track_recommendation,
     determine_next_task_rule_based,
 )
-from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.attempt_visibility import (
+    activity_is_closed,
+    learner_visible_attempt_clause,
+    student_visible_activity_clause,
+)
 from app.services.ml_predictor.audit import record_prediction_outcome
 from app.services.ml_predictor.shadow import record_shadow_prediction
 
@@ -163,11 +167,15 @@ def list_published_quests(
     db: Session = Depends(get_db),
 ) -> list[QuestCard]:
     """List safe published quest details for every signed-in role."""
+    now = datetime.now(timezone.utc)
     query = db.query(LearningActivity).filter(
         LearningActivity.review_status == ReviewState.published,
     )
     if current_user.role == UserRole.student:
-        query = query.filter(LearningActivity.language == current_user.enrolled_language)
+        query = query.filter(
+            LearningActivity.language == current_user.enrolled_language,
+            student_visible_activity_clause(current_user.id, now),
+        )
     activities = (
         query
         .order_by(
@@ -223,7 +231,7 @@ def list_published_quests(
                 problem_statement=activity.problem_statement,
                 starter_code=activity.starter_code,
                 is_completed=activity.id in completed_activity_ids,
-                is_closed=activity.closed_at is not None,
+                is_closed=activity_is_closed(activity, now),
                 quiz_questions=public_questions,
             )
         )

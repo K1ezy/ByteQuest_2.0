@@ -18,6 +18,8 @@ from app.core.security import get_current_user
 from app.models.entities import ActivityKind, LearningActivity, Profile, ReviewState, UserRole
 from app.services.ai_rag.gemini_client import GeminiConfigurationError
 from app.services.ai_rag.llm import GeminiAPIError, gemini_service
+from app.services.attempt_visibility import student_visible_activity_clause
+from app.services.course_access import active_membership_course_ids
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +66,13 @@ def _safe_public_activity_context(
     activity_id: uuid.UUID,
 ) -> str:
     """Return only public activity metadata; never grading or answer material."""
-    activity = db.get(LearningActivity, activity_id)
+    if current_user.role == UserRole.student:
+        activity = db.query(LearningActivity).filter(
+            LearningActivity.id == activity_id,
+            student_visible_activity_clause(current_user.id),
+        ).first()
+    else:
+        activity = db.get(LearningActivity, activity_id)
     if activity is None or activity.review_status != ReviewState.published:
         raise HTTPException(status_code=404, detail="Activity context is unavailable.")
     if (
@@ -139,6 +147,15 @@ async def create_chat_message(
     db: Session = Depends(get_db),
 ) -> ChatMessageResponse:
     """Return one bounded tutoring reply; no transcript is persisted."""
+    if current_user.role == UserRole.student and not active_membership_course_ids(db, current_user.id, "student"):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "enrollment_required",
+                "message": "The learning assistant is available once your instructor adds you to a class block.",
+            },
+        )
+
     activity_context = (
         _safe_public_activity_context(db, current_user, payload.activity_id)
         if payload.activity_id

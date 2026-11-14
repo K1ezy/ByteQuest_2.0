@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from typing import Optional
 import httpx
@@ -14,6 +15,7 @@ from app.core.database import get_db
 from app.models.entities import Profile, ProgrammingLang, UserRole
 
 security = HTTPBearer(auto_error=False)
+_jwks_client: jwt.PyJWKClient | None = None
 
 
 class TokenPayload(BaseModel):
@@ -27,6 +29,7 @@ async def get_current_user_payload(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> TokenPayload:
     """Verifies the Supabase JWT token and extracts user claims (Rule 4)."""
+    global _jwks_client
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -55,7 +58,36 @@ async def get_current_user_payload(
         except PyJWTError:
             pass  # Fallback to Supabase Auth API
 
-    # 2. Fallback: Verify directly against Supabase Auth API
+    # 2. Attempt local verification with Supabase's asymmetric signing keys.
+    if settings.SUPABASE_URL:
+        try:
+            header = jwt.get_unverified_header(token)
+            if header.get("alg") in ("ES256", "RS256") and header.get("kid"):
+                if _jwks_client is None:
+                    _jwks_client = jwt.PyJWKClient(
+                        f"{settings.SUPABASE_URL}/auth/v1/.well-known/jwks.json",
+                        cache_keys=True,
+                        lifespan=600,
+                        timeout=settings.SUPABASE_AUTH_TIMEOUT_SECONDS,
+                    )
+                key = await asyncio.to_thread(_jwks_client.get_signing_key_from_jwt, token)
+                payload = jwt.decode(
+                    token,
+                    key,
+                    algorithms=["ES256", "RS256"],
+                    audience="authenticated",
+                    options={"require": ["exp", "sub"]},
+                )
+                return TokenPayload(
+                    sub=payload["sub"],
+                    email=payload.get("email"),
+                    role=payload.get("role", "authenticated"),
+                )
+        except Exception:
+            # An unusable token or key set still goes through Supabase Auth.
+            pass
+
+    # 3. Fallback: Verify directly against Supabase Auth API
     if settings.SUPABASE_URL:
         url = f"{settings.SUPABASE_URL}/auth/v1/user"
         headers = {

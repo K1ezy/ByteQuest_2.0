@@ -106,6 +106,8 @@ class Profile(Base):
     username = Column(String(44), nullable=False, default=_starter_username)
     role = Column(Enum(UserRole, name="userrole"), nullable=False, default=UserRole.student)
     year_level = Column(Integer, nullable=False, default=1)
+    school_id = Column(String(64), nullable=True)
+    block_section = Column(String(1), nullable=True)
     semester = Column(Integer, nullable=False, default=1)
     enrolled_language = Column(
         Enum(ProgrammingLang, name="programminglang"),
@@ -114,6 +116,9 @@ class Profile(Base):
     )
     xp_points = Column(Integer, nullable=False, default=0)
     current_level = Column(Integer, nullable=False, default=1)
+    # NULL until the student saves their track. enrolled_language cannot answer this:
+    # the signup trigger always writes a default, so it looks chosen from the start.
+    track_selected_at = Column(DateTime(timezone=True), nullable=True)
     account_status = Column(String(20), nullable=False, default="active", server_default=text("'active'"))
     deactivated_at = Column(DateTime(timezone=True), nullable=True)
     display_name = Column(String(120), nullable=True)
@@ -124,6 +129,11 @@ class Profile(Base):
     updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False)
 
     attempts = relationship("ActivityAttempt", back_populates="student", cascade="all, delete-orphan")
+
+    @property
+    def needs_track_setup(self) -> bool:
+        """The server owns this rule so every entry point routes the same way."""
+        return self.role == UserRole.student and self.track_selected_at is None
 
 
 # ============================================================================
@@ -349,7 +359,12 @@ class ActivityAttempt(Base):
     error_category = Column(String(50), default="none", nullable=False)
     time_spent_seconds = Column(Integer, default=0, nullable=False)
     xp_awarded = Column(Integer, default=0, nullable=False)
-    submission_job_id = Column(UUID(as_uuid=True), unique=True, nullable=True)
+    submission_job_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("submission_jobs.id", ondelete="SET NULL"),
+        unique=True,
+        nullable=True,
+    )
     result_json = Column(JSONB, nullable=True)
     exam_attempt_id = Column(UUID(as_uuid=True), ForeignKey("exam_attempts.id", ondelete="SET NULL"), nullable=True)
     exam_item_id = Column(UUID(as_uuid=True), ForeignKey("exam_items.id", ondelete="SET NULL"), nullable=True)
@@ -380,6 +395,7 @@ class SubmissionJob(Base):
     idempotency_key = Column(String(100), nullable=False)
     source_code = Column(Text, nullable=False)
     dry_run_only = Column(Boolean, nullable=False, default=False)
+    time_spent_seconds = Column(Integer, nullable=False, server_default=text("0"))
     status = Column(String(20), nullable=False, default="queued", index=True)
     result_json = Column(JSONB, nullable=True)
     error_message = Column(Text, nullable=True)
@@ -471,6 +487,7 @@ class ExamAttempt(Base):
     started_at = Column(DateTime(timezone=True), nullable=False)
     due_at = Column(DateTime(timezone=True), nullable=False)
     submitted_at = Column(DateTime(timezone=True), nullable=True)
+    grading_claimed_at = Column(DateTime(timezone=True), nullable=True)
     result_released_at = Column(DateTime(timezone=True), nullable=True)
     last_saved_at = Column(DateTime(timezone=True), nullable=True)
     answers_json = Column(JSONB, nullable=False, default=dict)

@@ -9,7 +9,7 @@ from pathlib import PurePath
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import func, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
@@ -34,6 +34,8 @@ from app.services.ai_rag.pdf_processor import extract_chunks_from_pdf
 from app.services.gamification.quiz_content import parse_quiz_questions
 from app.services.judge0.client import TestCaseInput, judge0_client
 from app.services.course_access import default_instructor_course_id, may_manage_course
+from app.services.activity_publishing import apply_publish_rules
+from app.services.materials import max_upload_bytes
 from app.services.settings_service import get_setting_int
 from app.services.storage.supabase_storage import StorageError, pdf_storage
 
@@ -479,15 +481,18 @@ def _get_owned_document(db: Session, document_id: uuid.UUID, current_user: Profi
     return document
 
 
-async def _read_and_prepare_pdf(file: UploadFile, account_id: uuid.UUID) -> tuple[bytes, list[dict], list[list[float]]]:
+async def _read_and_prepare_pdf(
+    file: UploadFile, account_id: uuid.UUID, limit: int,
+) -> tuple[bytes, list[dict], list[list[float]]]:
     filename = file.filename or ""
     if PurePath(filename).suffix.casefold() != ".pdf":
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
-    content = await file.read(MAX_PDF_BYTES + 1)
-    if len(content) > MAX_PDF_BYTES:
+    content = await file.read(limit + 1)
+    if len(content) > limit:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="PDF files must be 10 MiB or smaller.",
+            detail={"code": "file_too_large", "field": "file",
+                    "message": f"The PDF must be {limit // (1024 * 1024)} MiB or smaller."},
         )
     if not content.startswith(b"%PDF-"):
         raise HTTPException(status_code=400, detail="The selected file is not a valid PDF document.")
@@ -972,11 +977,12 @@ async def upload_and_process_pdf(
     if len(title.strip()) < 2:
         raise HTTPException(status_code=422, detail="Document title must contain at least 2 non-space characters.")
     uploaded_by = current_user.id
+    limit = max_upload_bytes(db)
     # The instructor dependency has completed its authorization query. Release
     # that read transaction before PDF parsing and remote embedding calls.
     db.rollback()
     try:
-        content, chunks, embeddings = await _read_and_prepare_pdf(file, uploaded_by)
+        content, chunks, embeddings = await _read_and_prepare_pdf(file, uploaded_by, limit)
         doc_record = await _save_pdf_document(
             db=db,
             uploaded_by=uploaded_by,
@@ -1041,10 +1047,11 @@ async def create_document_version(
         raise HTTPException(status_code=422, detail="Document title must contain at least 2 non-space characters.")
     supersedes_document_id = previous.id
     uploaded_by = current_user.id
+    limit = max_upload_bytes(db)
     # Do not occupy a DB connection while extracting PDF text or indexing it.
     db.rollback()
     try:
-        content, chunks, embeddings = await _read_and_prepare_pdf(file, uploaded_by)
+        content, chunks, embeddings = await _read_and_prepare_pdf(file, uploaded_by, limit)
         document = await _save_pdf_document(
             db=db,
             uploaded_by=uploaded_by,
@@ -1468,46 +1475,7 @@ async def publish_learning_activity(
     if activity.reviewed_by is None:
         raise HTTPException(status_code=409, detail="Review the saved activity and confirm review before publishing.")
 
-    if (
-        activity.activity_type == ActivityKind.challenge
-        and not activity.judge0_verified
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot publish challenge: reference solution failed Judge0 automated pre-validation.",
-        )
-
-    if activity.activity_type == ActivityKind.quiz:
-        try:
-            questions = parse_quiz_questions(activity.quiz_questions_json)
-            if not 3 <= len(questions) <= 10:
-                raise ValueError("A published quiz must contain between 3 and 10 questions.")
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot publish quiz: question content is incomplete or invalid.",
-            ) from exc
-
-    # Serialize track sequence allocation so concurrently published activities
-    # cannot claim the same next position.
-    sequence_lock_key = f"bytequest:activity-sequence:{activity.language.value}"
-    db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key)::bigint)"),
-        {"lock_key": sequence_lock_key},
-    )
-    highest_sequence = (
-        db.query(func.max(LearningActivity.sequence_order))
-        .filter(
-            LearningActivity.language == activity.language,
-            LearningActivity.review_status == ReviewState.published,
-        )
-        .scalar()
-        or 0
-    )
-    activity.sequence_order = highest_sequence + 1
-    activity.review_status = ReviewState.published
-    activity.reviewed_by = current_user.id
-    activity.published_at = datetime.now(timezone.utc)
+    apply_publish_rules(db, activity, current_user)
     db.commit()
     activity = _get_owned_activity(db, activity_id, current_user)
     serialized = _serialize_quiz(activity) if activity.activity_type == ActivityKind.quiz else _serialize_challenge(activity)

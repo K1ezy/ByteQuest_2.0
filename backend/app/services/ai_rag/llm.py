@@ -46,7 +46,7 @@ class GeminiLLMService:
                     system_instruction=system_instruction,
                     temperature=temperature,
                     response_mime_type="application/json",
-                    response_schema=response_schema,
+                    response_json_schema=response_schema.model_json_schema(),
                 ),
             )
 

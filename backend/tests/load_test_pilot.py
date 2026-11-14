@@ -1,7 +1,8 @@
-"""Load test with 30 real synthetic student sessions and a published challenge.
+"""Load test with synthetic student sessions and a published challenge.
 
-Set BYTEQUEST_STUDENT_TOKENS_FILE to a JSON array of 30 distinct access tokens,
+Set BYTEQUEST_STUDENT_TOKENS_FILE to a JSON array of distinct access tokens,
 BYTEQUEST_ACTIVITY_ID, and BYTEQUEST_SOURCE_FILE to a passing solution.
+Set BYTEQUEST_LOAD_STUDENTS to match the token count (default: 30).
 Never commit tokens or use real students for this test.
 """
 
@@ -16,6 +17,7 @@ from pathlib import Path
 import httpx
 
 BASE = os.environ.get("BYTEQUEST_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+STUDENTS = int(os.environ.get("BYTEQUEST_LOAD_STUDENTS", "30"))
 
 
 async def student(client, token, activity_id, code, index):
@@ -49,8 +51,8 @@ async def main():
     if not all((tokens_path, activity_id, source_path)):
         raise SystemExit("Set BYTEQUEST_STUDENT_TOKENS_FILE, BYTEQUEST_ACTIVITY_ID, and BYTEQUEST_SOURCE_FILE.")
     tokens = json.loads(Path(tokens_path).read_text(encoding="utf-8"))
-    if not isinstance(tokens, list) or len(tokens) != 30 or len(set(tokens)) != 30:
-        raise SystemExit("The token file must contain 30 distinct synthetic student tokens.")
+    if not isinstance(tokens, list) or len(tokens) != STUDENTS or len(set(tokens)) != STUDENTS:
+        raise SystemExit(f"The token file must contain {STUDENTS} distinct synthetic student tokens.")
     uuid.UUID(activity_id)
     code = Path(source_path).read_text(encoding="utf-8")
     async with httpx.AsyncClient(timeout=20) as client:
@@ -60,10 +62,10 @@ async def main():
         print(item if not isinstance(item, Exception) else f"request failure: {type(item).__name__}: {item}")
     completed = [r for r in results if isinstance(r, dict) and r["status"] == "completed"]
     within_30 = sum(r["seconds"] <= 30 for r in completed)
-    print(f"Completed: {len(completed)}/30; within 30s: {within_30}/30")
+    print(f"Completed: {len(completed)}/{STUDENTS}; within 30s: {within_30}/{STUDENTS}")
     if completed:
         print(f"Median grading wait: {statistics.median(r['seconds'] for r in completed):.2f}s")
-    if len(completed) != 30 or within_30 < 27:
+    if len(completed) != STUDENTS or within_30 * 10 < STUDENTS * 9:
         raise SystemExit(1)
 
 

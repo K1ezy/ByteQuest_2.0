@@ -1,3 +1,6 @@
+INSERT INTO bytequest_private.local_staff_registration (enabled) VALUES (true)
+ON CONFLICT DO NOTHING;
+
 INSERT INTO public.badges (code, name, description, icon_url, xp_bonus, criteria_json)
 VALUES
     ('FIRST_BLOOD', 'First Steps', 'Complete your first learning activity.', '/badges/first-steps.svg', 25, '{"successful_activities": 1}'::jsonb),

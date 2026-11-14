@@ -5,6 +5,7 @@ These guard failure modes the API-flow tests cannot see, because they live in th
 column types and constraints rather than in request handling.
 """
 
+import json
 import os
 import threading
 import time
@@ -53,6 +54,31 @@ def _make_profile(db: Session) -> uuid.UUID:
         {"id": user_id, "pseudonym": f"T-{user_id.hex[:10]}", "username": starter_username(user_id)},
     )
     return user_id
+
+
+@pytest.mark.parametrize("role", ["admin", "instructor", "student"])
+def test_signup_roles_with_local_staff_registration_enabled(db: Session, role: str) -> None:
+    db.execute(text("INSERT INTO bytequest_private.local_staff_registration VALUES (true) ON CONFLICT DO NOTHING"))
+    user_id = uuid.uuid4()
+    insert = text(
+        "INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES (:id, :email, CAST(:metadata AS jsonb))"
+    )
+    params = {
+        "id": user_id,
+        "email": f"{user_id.hex}@example.test",
+        "metadata": json.dumps({
+            "username": starter_username(user_id), "school_id": user_id.hex,
+            "year_level": "1", "block_section": "A", "registration_role": role,
+        }),
+    }
+    if role == "admin":
+        with pytest.raises(DataError, match="Administrator accounts are granted, not registered") as raised:
+            db.execute(insert, params)
+        assert raised.value.orig.pgcode == "22023"
+    else:
+        db.execute(insert, params)
+        assert db.execute(text("SELECT role FROM public.profiles WHERE id = :id"),
+                          {"id": user_id}).scalar_one() == role
 
 
 def test_core_timestamps_are_aware_and_comparable(db: Session) -> None:

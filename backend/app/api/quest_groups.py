@@ -6,6 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -82,34 +83,48 @@ def _published_activities(
     return activities
 
 
-def _group_view(db: Session, group: QuestGroup, current_user: Profile) -> QuestGroupView:
-    is_owner = current_user.role == UserRole.admin or (
-        current_user.role == UserRole.instructor and group.created_by == current_user.id
+def _group_views(db: Session, groups: list[QuestGroup], current_user: Profile) -> list[QuestGroupView]:
+    """Build views for many workshops with two queries in total, not two per workshop."""
+    group_ids = [group.id for group in groups]
+    if not group_ids:
+        return []
+    member_counts = dict(
+        db.query(QuestGroupMember.group_id, func.count(QuestGroupMember.profile_id))
+        .filter(QuestGroupMember.group_id.in_(group_ids))
+        .group_by(QuestGroupMember.group_id)
+        .all()
     )
-    member_count = db.query(QuestGroupMember).filter(QuestGroupMember.group_id == group.id).count()
-    activity_ids = [
-        activity_id
-        for (activity_id,) in (
-            db.query(QuestGroupActivity.activity_id)
-            .join(LearningActivity, LearningActivity.id == QuestGroupActivity.activity_id)
-            .filter(
-                QuestGroupActivity.group_id == group.id,
-                LearningActivity.review_status == ReviewState.published,
-            )
-            .order_by(LearningActivity.sequence_order, LearningActivity.id)
-            .all()
+    activity_ids: dict[uuid.UUID, list[uuid.UUID]] = {group_id: [] for group_id in group_ids}
+    for group_id, activity_id in (
+        db.query(QuestGroupActivity.group_id, QuestGroupActivity.activity_id)
+        .join(LearningActivity, LearningActivity.id == QuestGroupActivity.activity_id)
+        .filter(
+            QuestGroupActivity.group_id.in_(group_ids),
+            LearningActivity.review_status == ReviewState.published,
         )
-    ]
-    return QuestGroupView(
-        id=group.id,
-        name=group.name,
-        description=group.description,
-        language=group.language,
-        is_owner=is_owner,
-        join_code=group.join_code if is_owner else None,
-        member_count=member_count,
-        activity_ids=activity_ids,
-    )
+        .order_by(LearningActivity.sequence_order, LearningActivity.id)
+    ):
+        activity_ids[group_id].append(activity_id)
+    views = []
+    for group in groups:
+        is_owner = current_user.role == UserRole.admin or (
+            current_user.role == UserRole.instructor and group.created_by == current_user.id
+        )
+        views.append(QuestGroupView(
+            id=group.id,
+            name=group.name,
+            description=group.description,
+            language=group.language,
+            is_owner=is_owner,
+            join_code=group.join_code if is_owner else None,
+            member_count=member_counts.get(group.id, 0),
+            activity_ids=activity_ids[group.id],
+        ))
+    return views
+
+
+def _group_view(db: Session, group: QuestGroup, current_user: Profile) -> QuestGroupView:
+    return _group_views(db, [group], current_user)[0]
 
 
 @router.get("", response_model=list[QuestGroupView])
@@ -125,7 +140,7 @@ def list_quest_groups(
         .limit(100)
         .all()
     )
-    return [_group_view(db, group, current_user) for group in groups]
+    return _group_views(db, groups, current_user)
 
 
 @router.post("", response_model=QuestGroupView, status_code=status.HTTP_201_CREATED)

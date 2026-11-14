@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.quotas import reserve
 from app.core.security import get_current_user
+from app.services.attempt_visibility import activity_is_closed, student_visible_activity_clause
 from app.models.entities import (
     ActivityKind, LearningActivity, Profile, ReviewState, SubmissionJob, UserRole,
 )
@@ -25,6 +26,9 @@ class SubmitJob(BaseModel):
     activity_id: uuid.UUID
     source_code: str = Field(min_length=1, max_length=50_000)
     dry_run_only: bool = False
+    # Carried to the recorded attempt: the worker is a separate process and has no
+    # other way to learn how long the student actually worked.
+    time_spent_seconds: int = Field(default=0, ge=0, le=86_400)
 
 
 def view(job: SubmissionJob, is_instructor: bool = False) -> dict:
@@ -80,18 +84,26 @@ def submit_job(
     if recent_dup:
         return view(recent_dup)
 
+    accepted_at = datetime.now(timezone.utc)
     activity = db.query(LearningActivity).filter(
         LearningActivity.id == body.activity_id,
         LearningActivity.activity_type == ActivityKind.challenge,
         LearningActivity.review_status == ReviewState.published,
         LearningActivity.language == user.enrolled_language,
+        student_visible_activity_clause(user.id, accepted_at),
     ).first()
     if activity is None:
         raise HTTPException(404, "Published challenge not found on your track.")
-    reserve("practice_code", user.id)
+    if not body.dry_run_only and activity_is_closed(activity, accepted_at):
+        raise HTTPException(409, "This challenge is closed for submissions.")
+    # Practice and official work hold separate budgets, so sample runs can never
+    # use up the submissions a student needs near a deadline.
+    reserve("practice_code" if body.dry_run_only else "official_submit", user.id, session=db)
     job = SubmissionJob(student_id=user.id, activity_id=body.activity_id,
                         idempotency_key=idempotency_key, source_code=body.source_code,
-                        dry_run_only=body.dry_run_only, status="queued")
+                        dry_run_only=body.dry_run_only, status="queued",
+                        time_spent_seconds=body.time_spent_seconds,
+                        created_at=accepted_at)
     db.add(job)
     db.commit()
     db.refresh(job)

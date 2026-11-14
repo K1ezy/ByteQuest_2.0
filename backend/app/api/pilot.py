@@ -23,7 +23,11 @@ from app.models.entities import (
 from app.services.ai_rag.error_explainer import explain_code_error
 from app.services.ai_rag.gemini_client import GeminiConfigurationError
 from app.services.gamification.sequencer import determine_track_recommendation
-from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.attempt_visibility import (
+    activity_is_closed,
+    learner_visible_attempt_clause,
+    student_visible_activity_clause,
+)
 
 router = APIRouter(prefix="/api/v1/pilot", tags=["Classroom Pilot"])
 
@@ -39,6 +43,7 @@ def challenge(db: Session, activity_id: uuid.UUID, user: Profile) -> LearningAct
         LearningActivity.activity_type == ActivityKind.challenge,
         LearningActivity.review_status == ReviewState.published,
         LearningActivity.language == user.enrolled_language,
+        student_visible_activity_clause(user.id),
     ).first()
     if activity is None:
         raise HTTPException(404, "Published challenge not found on your track.")
@@ -62,10 +67,12 @@ def dashboard(user: Profile = Depends(get_current_user), db: Session = Depends(g
         learner_visible_attempt_clause(),
         LearningActivity.language == user.enrolled_language,
         LearningActivity.review_status == ReviewState.published,
+        student_visible_activity_clause(user.id),
     ).scalar() or 0
     total = db.query(func.count(LearningActivity.id)).filter(
         LearningActivity.language == user.enrolled_language,
         LearningActivity.review_status == ReviewState.published,
+        student_visible_activity_clause(user.id),
     ).scalar() or 0
     pending = db.query(SubmissionJob).filter(
         SubmissionJob.student_id == user.id, SubmissionJob.status.in_(["queued", "running"])
@@ -266,7 +273,7 @@ def solution(activity_id: uuid.UUID, user: Profile = Depends(get_current_user), 
         ActivityAttempt.is_successful.is_(True), learner_visible_attempt_clause(),
     ).first()
     if not passed:
-        if activity.closed_at is None:
+        if not activity_is_closed(activity):
             raise HTTPException(403, "The solution unlocks after you pass or the instructor closes the challenge.")
     return {"source_code": activity.reference_solution_code}
 

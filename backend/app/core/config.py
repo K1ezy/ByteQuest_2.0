@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     
     # Database (Supabase PostgreSQL + pgvector)
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:54322/postgres"
+    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:15432/postgres"
     # SQLAlchemy pools are per Uvicorn worker process. Keep these bounded so
     # replicas cannot exhaust the managed PostgreSQL connection allowance.
     DB_POOL_SIZE: int = Field(default=5, ge=1, le=20)

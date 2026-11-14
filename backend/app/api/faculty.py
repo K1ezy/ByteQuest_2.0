@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
@@ -33,6 +33,7 @@ from app.models.entities import (
     TestCase,
 )
 from app.services.audit import record_audit
+from app.services.activity_publishing import apply_publish_rules
 from app.services.course_access import (
     courses_for_user,
     require_course_instructor,
@@ -287,7 +288,7 @@ def faculty_dashboard(
                 "severity": "bad",
                 "course": _course_brief(course),
                 "updated_at": iso(document.created_at),
-                "href": f"/faculty/materials?course={course.id}&material={document.id}",
+                "href": f"/instructor/materials?course={course.id}&material={document.id}",
             }
         )
     for activity in sorted(open_drafts, key=lambda item: as_aware(item.created_at) or now):
@@ -301,7 +302,7 @@ def faculty_dashboard(
                 "severity": "wait",
                 "course": _course_brief(course),
                 "updated_at": iso(activity.created_at),
-                "href": f"/faculty/review/{activity.id}?course={course.id}",
+                "href": f"/instructor/review/{activity.id}?course={course.id}",
             }
         )
     for activity in upcoming:
@@ -316,7 +317,7 @@ def faculty_dashboard(
                 "severity": "info",
                 "course": _course_brief(course),
                 "updated_at": iso(activity.created_at),
-                "href": f"/faculty/activities/{activity.id}?course={course.id}",
+                "href": f"/instructor/activities/{activity.id}?course={course.id}",
             }
         )
 
@@ -346,10 +347,10 @@ def faculty_dashboard(
         },
         "action_queue": queue[:8],
         "queue_hrefs": {
-            "drafts": f"/faculty/review?course={course.id}&status=open",
-            "materials": f"/faculty/materials?course={course.id}&status=attention",
-            "activities": f"/faculty/activities?course={course.id}&status=scheduled",
-            "performance": f"/faculty/performance?course={course.id}",
+            "drafts": f"/instructor/review?course={course.id}&status=open",
+            "materials": f"/instructor/materials?course={course.id}&status=attention",
+            "activities": f"/instructor/activities?course={course.id}&status=scheduled",
+            "performance": f"/instructor/performance?course={course.id}",
         },
         "upcoming": [
             {
@@ -359,7 +360,7 @@ def faculty_dashboard(
                 "opens_at": iso(item.opens_at),
                 "closes_at": iso(item.closes_at),
                 "state": activity_state(item),
-                "href": f"/faculty/activities/{item.id}?course={course.id}",
+                "href": f"/instructor/activities/{item.id}?course={course.id}",
             }
             for item in upcoming
         ],
@@ -646,64 +647,6 @@ def reject_draft(
     }
 
 
-def _publish_activity(db: Session, activity: LearningActivity, actor: Profile) -> None:
-    if activity.activity_type == ActivityKind.challenge:
-        if not activity.test_cases:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "missing_tests", "field": "test_cases", "message": "Add at least one grading case before publishing."},
-            )
-        if not activity.judge0_verified:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "code": "not_verified",
-                    "message": "The saved reference solution has not passed Judge0 validation yet.",
-                },
-            )
-    if activity.activity_type == ActivityKind.quiz:
-        from app.services.gamification.quiz_content import parse_quiz_questions
-
-        try:
-            questions = parse_quiz_questions(activity.quiz_questions_json)
-            if not 3 <= len(questions) <= 10:
-                raise ValueError("A published quiz must contain between 3 and 10 questions.")
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "invalid_quiz", "message": f"Cannot publish this quiz: {exc}"},
-            ) from exc
-    opens_at = as_aware(activity.opens_at)
-    closes_at = as_aware(activity.closes_at)
-    if opens_at and closes_at and closes_at <= opens_at:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_schedule", "field": "closes_at", "message": "The closing time must be after the opening time."},
-        )
-    db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key)::bigint)"),
-        {"lock_key": f"bytequest:activity-sequence:{getattr(activity.language, 'value', activity.language)}"},
-    )
-    highest = (
-        db.query(func.max(LearningActivity.sequence_order))
-        .filter(
-            LearningActivity.language == activity.language,
-            LearningActivity.review_status == ReviewState.published,
-        )
-        .scalar()
-        or 0
-    )
-    activity.sequence_order = highest + 1
-    activity.review_status = ReviewState.published
-    activity.reviewed_by = actor.id
-    activity.published_at = datetime.now(timezone.utc)
-    activity.rejection_reason = None
-    if activity.version_of is not None:
-        previous = db.query(LearningActivity).filter(LearningActivity.id == activity.version_of).first()
-        if previous is not None and previous.archived_at is None and previous.id != activity.id:
-            previous.archived_at = datetime.now(timezone.utc)
-
-
 @router.post("/drafts/{activity_id}/approve")
 def approve_draft(
     activity_id: uuid.UUID,
@@ -726,7 +669,7 @@ def approve_draft(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "already_published", "message": "This draft is already published."},
         )
-    _publish_activity(db, activity, user)
+    apply_publish_rules(db, activity, user)
     record_audit(
         db,
         actor=user,
@@ -1409,7 +1352,7 @@ def publish_activity(
         )
     if activity.review_status != ReviewState.draft:
         raise HTTPException(status_code=409, detail={"code": "already_published", "message": "This activity is already published."})
-    _publish_activity(db, activity, user)
+    apply_publish_rules(db, activity, user)
     record_audit(
         db,
         actor=user,

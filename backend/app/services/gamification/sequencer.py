@@ -12,7 +12,7 @@ from app.models.entities import (
     Profile,
     ReviewState,
 )
-from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.attempt_visibility import learner_visible_attempt_clause, student_visible_activity_clause
 
 MAX_MASTERY_ATTEMPTS = 2
 QUIZ_MASTERY_SCORE = 75.0
@@ -71,6 +71,7 @@ def determine_next_task_rule_based(
             .filter(
                 LearningActivity.language == completed_activity.language,
                 LearningActivity.review_status == ReviewState.published,
+                student_visible_activity_clause(student.id),
                 LearningActivity.sequence_order > completed_activity.sequence_order,
                 ~successful_activity,
             )
@@ -102,6 +103,7 @@ def determine_next_task_rule_based(
             LearningActivity.language == completed_activity.language,
             LearningActivity.topic_concept == completed_activity.topic_concept,
             LearningActivity.review_status == ReviewState.published,
+            student_visible_activity_clause(student.id),
             LearningActivity.difficulty_level <= completed_activity.difficulty_level,
             LearningActivity.id != completed_activity.id,
             ~successful_activity,
@@ -147,6 +149,7 @@ def determine_track_recommendation(
     track_activities = db.query(LearningActivity).filter(
         LearningActivity.language == student.enrolled_language,
         LearningActivity.review_status == ReviewState.published,
+        student_visible_activity_clause(student.id),
     )
     first_uncompleted = (
         track_activities.filter(~successful_activity)
@@ -165,6 +168,7 @@ def determine_track_recommendation(
             ActivityAttempt.student_id == student.id,
             LearningActivity.language == student.enrolled_language,
             LearningActivity.review_status == ReviewState.published,
+            student_visible_activity_clause(student.id),
             learner_visible_attempt_clause(),
         )
         .order_by(ActivityAttempt.created_at.desc(), ActivityAttempt.id.desc())

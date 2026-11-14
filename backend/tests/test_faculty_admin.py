@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.api import admin as admin_api
 from app.api import exams as exams_api
@@ -535,7 +536,7 @@ def test_material_list_and_dashboard_counts_agree(workspace):
     body = dashboard.json()
     assert body["counts"]["drafts_awaiting_review"] == 1
     assert body["counts"]["materials_needing_attention"] == 1
-    assert body["queue_hrefs"]["drafts"] == f"/faculty/review?course={ids['course_a']}&status=open"
+    assert body["queue_hrefs"]["drafts"] == f"/instructor/review?course={ids['course_a']}&status=open"
 
     drafts = client.get(f"/api/v1/faculty/drafts?course_id={ids['course_a']}&status=open", headers=headers).json()
     assert len(drafts["items"]) == body["counts"]["drafts_awaiting_review"]
@@ -728,6 +729,83 @@ def test_usernames_are_editable_unique_and_alphabetic_for_every_role(workspace):
     assert admin_edit.status_code == 200 and admin_edit.json()["username"] == "adminhandle"
     with db_session() as db:
         assert db.get(Profile, ids["student"]).pseudonym_id.startswith("test_student_")
+
+
+def test_staff_school_id_is_private_and_can_only_be_set_once(workspace):
+    client, db_session, ids = workspace
+    endpoint = "/api/v1/profile/staff-setup"
+    assert client.put(endpoint, headers=_token(ids["student"]), json={"school_id": "00123"}).status_code == 403
+    for role in ("faculty", "admin"):
+        headers = _token(ids[role])
+        assert client.put(endpoint, headers=headers, json={"school_id": "  "}).status_code == 422
+        assert client.put(endpoint, headers=headers, json={"school_id": "  00123  "}).status_code == 204
+        assert client.put(endpoint, headers=headers, json={"school_id": "00123"}).status_code == 204
+        assert client.put(endpoint, headers=headers, json={"school_id": "00124"}).status_code == 409
+        assert "school_id" not in client.get("/api/v1/profile/me", headers=headers).json()
+        with db_session() as db:
+            assert db.get(Profile, ids[role]).school_id == "00123"
+
+
+def test_public_signup_username_is_reserved_with_auth_user(workspace):
+    client, db_session, ids = workspace
+    endpoint = "/api/v1/profile/username-availability"
+    assert client.get(endpoint, params={"username": "FreshHandle"}).json() == {"available": True}
+    # A second client can see "available" before either signup claims the name.
+    assert client.get(endpoint, params={"username": "freshhandle"}).json() == {"available": True}
+    with db_session() as db:
+        existing_username = db.get(Profile, ids["admin"]).username
+    assert client.get(endpoint, params={"username": existing_username.upper()}).json() == {"available": False}
+    assert client.get(endpoint, params={"username": "name123"}).status_code == 422
+
+    created = uuid.uuid4()
+    duplicate = uuid.uuid4()
+    sql = text("""
+        INSERT INTO auth.users (id, instance_id, aud, role, email, encrypted_password, raw_user_meta_data)
+        VALUES (:id, '00000000-0000-0000-0000-000000000000', 'authenticated',
+                'authenticated', :email, '', CAST(:metadata AS jsonb))
+    """)
+    with db_session() as db:
+        db.execute(sql, {"id": created, "email": f"signup-{created}@example.test",
+                         "metadata": '{"username":"FreshHandle","bytequest_role":"admin","school_id":" 00123 ","year_level":3,"block_section":"F"}'})
+        db.commit()
+        profile = db.get(Profile, created)
+        assert profile.username == "freshhandle"
+        assert profile.role == UserRole.student
+        assert profile.enrolled_language == ProgrammingLang.cpp
+        assert profile.pseudonym_id == f"stu_{created.hex}"
+        assert (profile.school_id, profile.year_level, profile.block_section) == ("00123", 3, "F")
+
+    assert client.get(endpoint, params={"username": "FRESHHANDLE"}).json() == {"available": False}
+    with db_session() as db:
+        with pytest.raises(IntegrityError):
+            db.execute(sql, {"id": duplicate, "email": f"signup-{duplicate}@example.test",
+                             "metadata": '{"username":"freshhandle","school_id":" 00123 ","year_level":3,"block_section":"F"}'})
+        db.rollback()
+
+    with db_session() as db:
+        with pytest.raises(DBAPIError):
+            db.execute(sql, {"id": duplicate, "email": f"signup-{duplicate}@example.test",
+                             "metadata": '{"username":"name123","school_id":" 00123 ","year_level":3,"block_section":"F"}'})
+        db.rollback()
+
+    with db_session() as db:
+        with pytest.raises(DBAPIError, match="Invalid student registration fields"):
+            db.execute(sql, {"id": duplicate, "email": f"signup-{duplicate}@example.test",
+                             "metadata": '{"username":"SecondHandle","school_id":"00123","year_level":3,"block_section":"G"}'})
+        db.rollback()
+
+    with db_session() as db:
+        db.execute(sql, {"id": duplicate, "email": f"signup-{duplicate}@example.test",
+                         "metadata": '{"username":"SecondHandle","school_id":"00123","year_level":4,"block_section":"A"}'})
+        db.commit()
+        assert db.get(Profile, duplicate).username == "secondhandle"
+
+    # Admin invitations omit username metadata and continue through provisioning.
+    invited = uuid.uuid4()
+    with db_session() as db:
+        db.execute(sql, {"id": invited, "email": f"invite-{invited}@example.test", "metadata": '{}'})
+        db.commit()
+        assert db.get(Profile, invited) is None
 
 
 def test_ml_exam_history_waits_for_release_and_uses_overall_score_once(workspace):
@@ -1062,7 +1140,12 @@ def test_monitoring_reports_real_states_and_audit_is_searchable(workspace):
     assert rag["trace_id"]
     assert body["job_counts"]["failed"] >= 2
     states = {service["status"] for service in body["services"]}
-    assert states <= {"healthy", "stale", "failed", "unavailable"}
+    assert states <= {"healthy", "stale", "failed", "unavailable", "off"}
+    # Shadow scoring is disabled on purpose here: that is "off", not a fault.
+    prediction = next(service for service in body["services"] if service["service"] == "prediction")
+    assert prediction["status"] == "off"
+    counts = client.get("/api/v1/admin/dashboard", headers=headers).json()["counts"]
+    assert counts["total_services"] == len(body["services"]) - 1, "an 'off' service is not counted as unhealthy"
 
     filtered = client.get("/api/v1/admin/monitoring?status=failed", headers=headers).json()
     assert all(job["status"] == "failed" for job in filtered["jobs"])

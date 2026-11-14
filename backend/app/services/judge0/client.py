@@ -169,7 +169,9 @@ def classify_judge0_status(status_id: int) -> str:
       4  -> 'logic_error' (Wrong Answer)
       5  -> 'timeout' (Time Limit Exceeded)
       6  -> 'syntax_error' (Compilation Error)
-      7+ -> 'runtime_error' (SIGSEGV, SIGFPE, NZEC, etc.)
+      7-12 -> 'runtime_error' (SIGSEGV, SIGFPE, NZEC, etc.)
+    Status 13 and above are sandbox failures, not program outcomes, and are
+    rejected in _parse_completed_result before they can reach this mapping.
     """
     if status_id == 3:
         return "none"
@@ -192,6 +194,12 @@ def _parse_completed_result(raw: Any) -> Tuple[int, str, float, float]:
     status_id = status.get("id") if isinstance(status, dict) else None
     if isinstance(status_id, bool) or not isinstance(status_id, int) or status_id < 3:
         raise Judge0UnavailableError("Judge0 returned an invalid completed status.")
+    # Status 13 (Internal Error), 14 (Exec Format Error) and anything beyond are
+    # the sandbox failing, not the student's program. Grading them would charge
+    # the attempt and write a "did not pass" row into the ML dataset, so treat
+    # them as unavailability and let the worker retry.
+    if status_id >= 13:
+        raise Judge0UnavailableError(f"Judge0 reported an internal failure (status {status_id}).")
 
     description = status.get("description")
     if not isinstance(description, str) or not description.strip():

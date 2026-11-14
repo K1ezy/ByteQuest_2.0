@@ -26,6 +26,7 @@ from app.services.ml_predictor.exam_history import course_exam_ids
 from app.services.ml_predictor.shadow import record_shadow_prediction
 from app.services.ml_predictor.targets import next_course_activity
 from app.services.judge0.client import TestCaseInput, judge0_client
+from app.services.exam_worker import answers_accepted_until
 
 router = APIRouter(prefix="/api/v1/exams", tags=["Exams"])
 logger = logging.getLogger(__name__)
@@ -426,6 +427,7 @@ def get_attempt(attempt_id: uuid.UUID, user: Profile = Depends(get_current_user)
     return {"id": attempt.id, "exam_id": exam.id, "title": exam.title,
             "user_id": attempt.student_id, "student_id": attempt.student_id,
             "status": attempt.status, "due_at": attempt.due_at,
+            "answers_accepted_until": answers_accepted_until(attempt),
             "server_now": utcnow(),
             "revision": attempt.revision, "last_saved_at": attempt.last_saved_at,
             "answers": attempt.answers_json, "items": [public_item(i) for i in items],
@@ -447,8 +449,9 @@ def save_answers(attempt_id: uuid.UUID, body: SaveAnswers,
         ExamAttempt.student_id == user.id).with_for_update().first()
     if attempt is None:
         raise HTTPException(404, "Exam attempt not found.")
-    if attempt.status != "active" or utcnow() >= attempt.due_at:
-        raise HTTPException(409, "Exam time has ended; the latest saved work will be submitted.")
+    if attempt.status != "active" or utcnow() >= answers_accepted_until(attempt):
+        raise HTTPException(409, detail={"code": "attempt_expired",
+            "message": "Exam time has ended; the latest saved work will be submitted."})
     if attempt.revision != body.expected_revision:
         raise HTTPException(409, "A newer answer version is saved. Reload before editing.")
     items = db.query(ExamItem).filter(ExamItem.exam_id == attempt.exam_id).all()
