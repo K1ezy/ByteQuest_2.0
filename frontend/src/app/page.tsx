@@ -4,7 +4,7 @@ import { HomeRedirect } from "@/components/home-redirect";
 
 export default function HomePage() {
   return (
-    <div className="home-shell">
+    <main id="main-content" className="home-shell">
       <HomeRedirect />
       <section className="hero">
         <div className="hero-copy">
@@ -27,6 +27,6 @@ export default function HomePage() {
         <article><span className="feature-number">02</span><h2>Practice without risk</h2><p>Try visible examples in a sandbox before making an official submission.</p></article>
         <article><span className="feature-number">03</span><h2>Progress you can see</h2><p>Earn experience, unlock milestones, and follow a steady learning path.</p></article>
       </section>
-    </div>
+    </main>
   );
 }

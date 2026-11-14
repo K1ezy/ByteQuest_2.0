@@ -109,6 +109,21 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   return body as T;
 }
 
+export async function checkUsernameAvailability(username: string): Promise<boolean> {
+  if (!apiBaseUrl) throw new Error("Set NEXT_PUBLIC_API_URL in frontend/.env.local.");
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}/profile/username-availability?username=${encodeURIComponent(username)}`, {
+      cache: "no-store",
+    });
+  } catch {
+    throw new Error("ByteQuest could not check the username. Please try again.");
+  }
+  if (!response.ok) throw new Error("ByteQuest could not check the username. Please try again.");
+  const body = await response.json() as { available: boolean };
+  return body.available;
+}
+
 export function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }

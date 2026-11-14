@@ -536,7 +536,7 @@ export interface AdminDashboard {
 export interface ServiceHealth {
   service: string;
   label: string;
-  status: "healthy" | "stale" | "failed" | "unavailable";
+  status: "healthy" | "stale" | "failed" | "unavailable" | "off";
   detail: string;
   last_checked_at: string | null;
   trace_id: string | null;
@@ -856,6 +856,7 @@ export const serviceStateLabel: Record<string, string> = {
   stale: "Stale",
   failed: "Failed",
   unavailable: "Unavailable",
+  off: "Off",
 };
 
 export function friendlyLoadError(message: string): string {

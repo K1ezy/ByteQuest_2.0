@@ -16,6 +16,8 @@ export interface Profile {
   avatar_url?: string | null;
   email?: string | null;
   created_at?: string | null;
+  /** True until a student saves their learning track; always false for staff. */
+  needs_track_setup?: boolean;
 }
 
 export interface QuizOption {

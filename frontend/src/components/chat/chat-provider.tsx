@@ -101,7 +101,9 @@ function mapChatError(error: unknown): ChatError {
     if (error.status === 403) {
       return {
         kind: "forbidden",
-        message: "This account cannot use the learning assistant.",
+        message: error.code === "enrollment_required"
+          ? error.message
+          : "This account cannot use the learning assistant.",
         retryable: false,
       };
     }

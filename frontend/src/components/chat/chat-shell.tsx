@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useChat } from "@/components/chat/chat-provider";
 
 const ChatConversation = dynamic(
@@ -41,16 +42,7 @@ export function ChatShell() {
 
   const isChatPage = pathname === "/chat";
   const isExamRoute = pathname === "/exams" || pathname.startsWith("/exams/");
-  const isDisallowed =
-    pathname === "/" ||
-    pathname === "/onboarding" ||
-    pathname === "/faculty" ||
-    pathname.startsWith("/faculty/") ||
-    pathname === "/admin" ||
-    pathname.startsWith("/admin/") ||
-    pathname.startsWith("/account") ||
-    isExamRoute ||
-    isChatPage;
+  const isDisallowed = isExamRoute || isChatPage;
   const canShow = signedIn === true && !isDisallowed;
 
   useEffect(() => {
@@ -122,15 +114,16 @@ export function ChatShell() {
   useEffect(() => {
     if (!open || !isMobile) return;
     const main = document.getElementById("main-content");
-    const header = document.querySelector<HTMLElement>(".site-header-redesign");
+    const header = document.querySelector<HTMLElement>(".bq-app-topbar");
+    const navigation = document.getElementById("app-navigation");
     const skipLink = document.querySelector<HTMLElement>(".skip-to-content");
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    [main, header, skipLink].forEach((element) =>
+    [main, header, navigation, skipLink].forEach((element) =>
       element?.setAttribute("inert", ""),
     );
     return () => {
-      [main, header, skipLink].forEach((element) =>
+      [main, header, navigation, skipLink].forEach((element) =>
         element?.removeAttribute("inert"),
       );
       document.body.style.overflow = previousOverflow;
@@ -147,16 +140,16 @@ export function ChatShell() {
 
   return (
     <>
-      {!open && (
         <button
           ref={launcherRef}
           type="button"
-          className="chat-launcher"
-          aria-label="Open Chat Assistant"
-          onClick={() => setOpen(true)}
+          className="button button-outline bq-chat-action"
+          aria-label={open ? "Close Chat Assistant" : "Open Chat Assistant"}
+          aria-expanded={open}
+          onClick={() => open ? closePanel() : setOpen(true)}
         >
           <svg
-            className="chat-launcher-icon"
+            className="bq-chat-icon"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -168,11 +161,10 @@ export function ChatShell() {
             <path d="M21 11.5a8 8 0 0 1-8 8H7l-4 3v-5.6A8 8 0 0 1 11 5h2a8 8 0 0 1 8 6.5Z" />
             <path d="M8 11h.01M12 11h.01M16 11h.01" />
           </svg>
-          <span className="chat-launcher-label">Chat</span>
+          <span className="chat-launcher-label">Chat Assistant</span>
         </button>
-      )}
 
-      {open && (
+      {open && createPortal(
         <>
           {isMobile && (
             <div
@@ -254,7 +246,7 @@ export function ChatShell() {
             </header>
             <ChatConversation variant="compact" />
           </section>
-        </>
+        </>, document.body
       )}
     </>
   );

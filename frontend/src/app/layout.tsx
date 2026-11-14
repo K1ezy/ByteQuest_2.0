@@ -1,11 +1,8 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { Suspense } from "react";
-import { SiteHeader } from "@/components/site-header";
 import { AppTooltips } from "@/components/app-tooltips";
 import { AccessibilityProvider } from "@/components/accessibility-provider";
 import { ChatProvider } from "@/components/chat/chat-provider";
-import { ChatShell } from "@/components/chat/chat-shell";
 import { ToastProvider } from "@/components/toast";
 import "./globals.css";
 
@@ -31,12 +28,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
               <a href="#main-content" className="skip-to-content">
                 Skip to main workspace
               </a>
-              <SiteHeader />
-              <main id="main-content" tabIndex={-1}>{children}</main>
+              {children}
               <AppTooltips />
-              <Suspense fallback={null}>
-                <ChatShell />
-              </Suspense>
             </ChatProvider>
           </ToastProvider>
         </AccessibilityProvider>

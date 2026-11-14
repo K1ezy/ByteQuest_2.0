@@ -49,8 +49,26 @@ export function useApi<T>(path: string | null) {
 export function useNow(intervalMs = 30_000): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), intervalMs);
-    return () => window.clearInterval(timer);
+    let timer: number;
+    const refresh = () => setNow(new Date());
+    const schedule = () => {
+      const delay = Math.min(intervalMs, 60_000 - Date.now() % 60_000 + 50);
+      timer = window.setTimeout(() => {
+        refresh();
+        schedule();
+      }, delay);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    schedule();
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [intervalMs]);
   return now;
 }

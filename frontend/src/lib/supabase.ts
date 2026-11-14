@@ -1,10 +1,23 @@
 "use client";
 
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { AuthClient, type GoTrueClient } from "@supabase/auth-js";
 
-let client: SupabaseClient | undefined;
+// The browser only uses Supabase Auth. The full supabase-js client also bundled
+// Realtime, PostgREST, Storage and Functions (about 60 KB gzip) into every page.
+export interface SupabaseBrowser {
+  auth: GoTrueClient;
+}
 
-export function getSupabase(): SupabaseClient {
+let client: SupabaseBrowser | undefined;
+let pendingInviteCallback = false;
+
+export function consumeInviteCallback(): boolean {
+  const pending = pendingInviteCallback;
+  pendingInviteCallback = false;
+  return pending;
+}
+
+export function getSupabase(): SupabaseBrowser {
   if (client) return client;
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -18,6 +31,7 @@ export function getSupabase(): SupabaseClient {
   // Remove legacy drafts without a user ID and old persistent auth tokens.
   // Account-scoped offline drafts must survive a browser restart until synced.
   if (typeof window !== "undefined") {
+    pendingInviteCallback = new URLSearchParams(window.location.hash.slice(1)).get("type") === "invite";
     try {
       for (const key of Object.keys(window.localStorage)) {
         if (
@@ -32,15 +46,22 @@ export function getSupabase(): SupabaseClient {
     }
   }
 
-  client = createClient(url, anonKey, {
-    auth: {
+  // Same settings supabase-js applied, including the session key it derived from
+  // the URL, so people who are signed in stay signed in across this change.
+  const base = new URL(url.endsWith("/") ? url : `${url}/`);
+  client = {
+    auth: new AuthClient({
+      url: new URL("auth/v1", base).href,
+      headers: { Authorization: `Bearer ${anonKey}`, apikey: anonKey },
+      storageKey: `sb-${base.hostname.split(".")[0]}-auth-token`,
       autoRefreshToken: true,
       persistSession: true,
       detectSessionInUrl: true,
+      flowType: "implicit",
       storage:
         typeof window !== "undefined" ? window.sessionStorage : undefined,
-    },
-  });
+    }),
+  };
   return client;
 }
 

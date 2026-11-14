@@ -2,9 +2,10 @@ import Link from "next/link";
 
 export type LegalKind = "terms" | "privacy";
 
-export function LegalDocument({ kind }: { kind: LegalKind }) {
+export function LegalDocument({ kind, embedded = false }: { kind: LegalKind; embedded?: boolean }) {
+  const Title = embedded ? "h2" : "h1";
   return <article className="legal-document text-slate-800">
-    <h1 className="text-2xl font-bold sm:text-3xl">{kind === "terms" ? "ByteQuest Terms of Service" : "ByteQuest Privacy Policy"}</h1>
+    <Title className="text-2xl font-bold sm:text-3xl">{kind === "terms" ? "ByteQuest Terms of Service" : "ByteQuest Privacy Policy"}</Title>
     <p className="mt-2 text-sm text-slate-600">Effective October 29, 2026</p>
     <div className="mt-6 space-y-6 leading-relaxed">
       {kind === "terms" ? <>

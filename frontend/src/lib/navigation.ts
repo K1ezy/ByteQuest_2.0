@@ -1,0 +1,82 @@
+import type { Profile } from "@/lib/types";
+
+export const roleLabels = { student: "Student", instructor: "Instructor", admin: "Administrator" };
+
+export const primaryNavigation = {
+  student: [
+    ["/dashboard", "Dashboard"], ["/quests", "Quest Map"], ["/exams", "Exams"],
+    ["/workshops", "Workshops"], ["/leaderboard", "Leaderboard"],
+  ],
+  instructor: [
+    ["/instructor", "My Courses"], ["/instructor/activities", "Quest & Workshop Builder"],
+    ["/instructor/performance", "Student Progress & Submissions"], ["/instructor/exams", "Exams"],
+  ],
+  admin: [
+    ["/admin", "System Overview"], ["/admin/courses", "Course & Instructor Management"],
+    ["/admin/accounts", "User & Role Management"], ["/admin/activities", "Content & Track Repository"],
+    ["/admin/teaching", "Instructor Workspace"],
+  ],
+} as const;
+
+const studentOnly = /^\/(dashboard|quests|leaderboard|exams|arena|quiz|submissions)(?:\/|$)/;
+export const belongsTo = (path: string, root: string) => path === root || path.startsWith(root + "/");
+
+export function canOpenPath(role: Profile["role"], path: string): boolean {
+  if (belongsTo(path, "/admin")) return role === "admin";
+  if (belongsTo(path, "/instructor")) return role === "instructor";
+  if (studentOnly.test(path)) return role === "student";
+  return true;
+}
+
+export function internalPath(value: string | null): URL | null {
+  if (!value?.startsWith("/") || value.startsWith("//") || /[\\\u0000-\u0020]/.test(value)) return null;
+  try {
+    const url = new URL(value, "https://bytequest.invalid");
+    if (url.origin === "https://bytequest.invalid" && !/%(?:2f|5c)/i.test(url.pathname)) return url;
+  } catch { /* Invalid URL. */ }
+  return null;
+}
+
+export function authReturnTo(profile: Profile, value: string | null): string | null {
+  const url = internalPath(value);
+  if (!url) return null;
+  if (url.pathname === "/faculty/accessibility" || url.pathname === "/admin/accessibility") {
+    url.pathname = "/account/accessibility";
+  } else if (belongsTo(url.pathname, "/faculty")) {
+    url.pathname = "/instructor" + url.pathname.slice("/faculty".length);
+  }
+  if (!canOpenPath(profile.role, url.pathname)) return null;
+  const roots = [...primaryNavigation[profile.role].map(([path]) => path), "/profile", "/account", "/chat", "/workshops"];
+  if (profile.role === "student") roots.push("/arena", "/quiz", "/submissions");
+  return roots.some((path) => belongsTo(url.pathname, path)) ? url.pathname + url.search + url.hash : null;
+}
+
+export function questRedirect(params: URLSearchParams, role?: Profile["role"]): string | null {
+  const view = params.get("view");
+  const fixed: Record<string, string> = {
+    leaderboard: "/leaderboard", journey: "/dashboard", "activity-hub": "/workshops",
+    accessibility: "/account/accessibility",
+  };
+  const target = view === "faculty" && role
+    ? ({ student: "/quests", instructor: "/instructor", admin: "/admin/teaching" })[role]
+    : view && Object.hasOwn(fixed, view) ? fixed[view] : params.has("group") ? "/workshops" : null;
+  if (!target) return null;
+  const query = new URLSearchParams(params);
+  query.delete("view");
+  return query.size ? target + "?" + query : target;
+}
+
+export function pageLabel(path: string): string {
+  for (const entries of Object.values(primaryNavigation)) {
+    for (const [href, label] of entries) if (href === path) return label;
+  }
+  const label = path.split("/").filter(Boolean).at(-1) || "";
+  if (belongsTo(path, "/instructor/review") && label !== "review") return "Review Draft";
+  if (belongsTo(path, "/instructor/activities") && label !== "activities") return "Activity Editor";
+  if (belongsTo(path, "/arena")) return "Coding Arena";
+  if (belongsTo(path, "/quiz")) return "Concept Check";
+  if (belongsTo(path, "/exams")) return "Exam";
+  const labels: Record<string, string> = { ml: "Machine Learning", review: "Review Queue", research: "Research Participation", chat: "Chat Assistant", preview: "Student Preview", studio: "Authoring Studio", onboarding: "Learning Track", assignments: "Course Assignments" };
+  if (belongsTo(path, "/submissions")) return "Submission Status";
+  return labels[label] ?? (label.charAt(0).toUpperCase() + label.slice(1));
+}
