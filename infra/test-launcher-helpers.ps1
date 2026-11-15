@@ -96,6 +96,8 @@ Assert-That 'real PIDs come back in order'                 { ((Get-PortListenerP
 Assert-That 'string port argument resolves'                { ((Get-PortListenerPids -ListenerPidMap @{ 3000 = @(900) } -Port '3000') -join ',') -eq '900' }
 Assert-That 'string-keyed map resolves'                    { ((Get-PortListenerPids -ListenerPidMap @{ '3000' = @(900) } -Port 3000) -join ',') -eq '900' }
 Assert-That 'scalar (unwrapped) value resolves'            { ((Get-PortListenerPids -ListenerPidMap @{ 3000 = 900 } -Port 3000) -join ',') -eq '900' }
+Assert-That 'loopback and all-address listeners block'     { @('127.0.0.1', '0.0.0.0', '::', '[::]', '[::1]' | Where-Object { -not (Test-BlocksLoopbackListener -Address $_) }).Count -eq 0 }
+Assert-That 'a ZeroTier-only listener does not block'      { -not (Test-BlocksLoopbackListener -Address '10.210.245.210') }
 
 Write-Host "`n[4] Get-ProcessDetail returns null instead of throwing"
 Assert-That 'null PID'          { $null -eq (Get-ProcessDetail -DetailMap @{ 5 = 'x' } -ProcessId $null) }

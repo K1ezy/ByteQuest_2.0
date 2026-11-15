@@ -9,6 +9,25 @@ export interface SupabaseBrowser {
 }
 
 let client: SupabaseBrowser | undefined;
+
+// Same rule as reachableServiceUrl in lib/network.ts: on a phone opened through the
+// ZeroTier relay, 127.0.0.1 means the phone itself, so use the page's host instead.
+// It is repeated here because scripts/test-recovery.mjs runs this file directly in
+// Node, which cannot resolve "@/" imports; keep the two in step.
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+function supabaseUrlForThisPage(url: string): string {
+  if (typeof window === "undefined") return url;
+  try {
+    const target = new URL(url);
+    const pageHost = window.location.hostname;
+    if (LOOPBACK_HOSTS.has(target.hostname) && !LOOPBACK_HOSTS.has(pageHost)) target.hostname = pageHost;
+    return target.toString().replace(/\/$/, "");
+  } catch {
+    return url;
+  }
+}
+
 let pendingInviteCallback = false;
 
 export function consumeInviteCallback(): boolean {
@@ -20,7 +39,8 @@ export function consumeInviteCallback(): boolean {
 export function getSupabase(): SupabaseBrowser {
   if (client) return client;
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const configuredUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const url = configuredUrl ? supabaseUrlForThisPage(configuredUrl) : undefined;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anonKey) {
     throw new Error(

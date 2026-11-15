@@ -403,7 +403,15 @@ $backendSettings["SUPABASE_JWT_SECRET"] = $localValues.JWT_SECRET
 $backendSettings["SUPABASE_ANON_KEY"] = $localValues.ANON_KEY
 $backendSettings["SUPABASE_SERVICE_ROLE_KEY"] = $localValues.SERVICE_ROLE_KEY
 $backendSettings["SUPABASE_SECRET_KEY"] = ""
-$backendSettings["CORS_ORIGINS"] = '["http://localhost:3000","http://127.0.0.1:3000"]'
+# Also allow this PC's private ZeroTier address, so the app opened through
+# infra/start-zerotier-relay.ps1 (from a phone on the same ZeroTier network) can call the API.
+$corsOrigins = @("http://localhost:3000", "http://127.0.0.1:3000")
+$zeroTierAddresses = @(Get-NetAdapter -ErrorAction SilentlyContinue |
+    Where-Object { $_.InterfaceDescription -like "ZeroTier*" -and $_.Status -eq "Up" } |
+    ForEach-Object { Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue } |
+    ForEach-Object { $_.IPAddress })
+foreach ($address in $zeroTierAddresses) { $corsOrigins += "http://${address}:3000" }
+$backendSettings["CORS_ORIGINS"] = "[" + (($corsOrigins | ForEach-Object { '"' + $_ + '"' }) -join ",") + "]"
 $backendEnv = foreach ($key in $backendSettings.Keys) {
     "$key=$($backendSettings[$key])"
 }

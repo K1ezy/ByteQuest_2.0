@@ -1,6 +1,9 @@
 "use client";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
+import { reachableServiceUrl } from "@/lib/network";
+
+const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
+const apiBaseUrl = configuredApiUrl ? reachableServiceUrl(configuredApiUrl) : undefined;
 
 export class ApiError extends Error {
   public readonly status: number;

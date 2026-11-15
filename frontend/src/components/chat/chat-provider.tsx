@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { ApiError, apiRequest } from "@/lib/api";
+import { newRequestId } from "@/lib/network";
 
 export type ChatRole = "user" | "assistant";
 
@@ -61,12 +62,7 @@ interface ChatContextValue {
 
 const ChatContext = createContext<ChatContextValue | null>(null);
 
-function createMessageId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
+const createMessageId = newRequestId;
 
 function isSafeReturnPath(path: string): boolean {
   return (

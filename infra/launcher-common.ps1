@@ -121,14 +121,24 @@ function Read-EnvValue {
     return $null
 }
 
+function Test-BlocksLoopbackListener {
+    # ByteQuest binds every service to 127.0.0.1, so only a loopback or all-address
+    # listener can block it. One bound to a single other address (the ZeroTier phone
+    # relay on 10.x.x.x:3000) coexists, and must not be mistaken for a port conflict.
+    param([AllowNull()][string]$Address)
+    return ("$Address".Trim('[', ']')) -in @('127.0.0.1', '0.0.0.0', '::', '::1')
+}
+
 function Get-ListenerPidMap {
     # One socket enumeration for every listening port. Get-NetTCPConnection
     # can omit live listeners on some Windows power states; netstat fills gaps.
     # Returns @{ port = @(pid) }
     # with [int] keys and no null or non-positive PIDs, so callers can trust
-    # both the key type and the contents.
+    # both the key type and the contents. Only listeners that can block a
+    # 127.0.0.1 bind are included (see Test-BlocksLoopbackListener).
     $map = @{}
     foreach ($connection in (Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue)) {
+        if (-not (Test-BlocksLoopbackListener -Address $connection.LocalAddress)) { continue }
         $port = $connection.LocalPort -as [int]
         $processId = $connection.OwningProcess -as [int]
         if ($null -eq $port -or $port -le 0) { continue }
@@ -141,9 +151,10 @@ function Get-ListenerPidMap {
         }
     }
     foreach ($line in (& netstat.exe -ano -p tcp)) {
-        if ($line -notmatch '^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$') { continue }
-        $port = [int]$Matches[1]
-        $processId = [int]$Matches[2]
+        if ($line -notmatch '^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$') { continue }
+        if (-not (Test-BlocksLoopbackListener -Address $Matches[1])) { continue }
+        $port = [int]$Matches[2]
+        $processId = [int]$Matches[3]
         if ($processId -le 0) { continue }
         if (-not $map.ContainsKey($port)) {
             $map[$port] = [System.Collections.Generic.List[int]]::new()
