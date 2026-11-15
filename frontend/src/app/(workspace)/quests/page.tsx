@@ -2,10 +2,14 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, Suspense, type CSSProperties } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { apiRequest, getErrorMessage } from "@/lib/api";
 import { useShellProfile } from "@/components/app-shell";
+import { ActivityDateFilter } from "@/components/activity-date-filter";
+import { activityDateMatches, formatActivityDate } from "@/lib/activity-date";
+import { SolveStars } from "@/components/solve-stars";
+import { MasteryMap } from "@/components/mastery-map";
 import type { ProgrammingLanguage, Quest, QuestGroup } from "@/lib/types";
 
 type QuestStatusFilter = "all" | "next" | "completed";
@@ -30,8 +34,11 @@ function QuestsPageContent() {
   const searchParams = useSearchParams();
   const profile = useShellProfile();
   const workshops = pathname === "/workshops";
-  const categoryParam = searchParams.get("category"); // "code-challenge" | "lessons-review" | null
+  const categoryParam = searchParams.get("category");
+  const category = categoryParam === "code-challenge" || categoryParam === "lessons-review" ? categoryParam : "";
   const groupParam = workshops ? searchParams.get("group") : null;
+  const isStudent = profile?.role === "student";
+  const showMastery = isStudent && !workshops && searchParams.get("view") === "map";
   const [quests, setQuests] = useState<Quest[]>([]);
   const [groups, setGroups] = useState<QuestGroup[]>([]);
   const [groupError, setGroupError] = useState("");
@@ -50,7 +57,19 @@ function QuestsPageContent() {
   const [isError, setIsError] = useState(false);
   const [questFilter, setQuestFilter] = useState<QuestStatusFilter>("all");
   const [search, setSearch] = useState("");
+  const [selectedConcept, setSelectedConcept] = useState<string | null>(null);
+  const [dateRange, setDateRange] = useState({ from: "", to: "" });
   const searchInput = useRef<HTMLInputElement>(null);
+  const focusSearch = useRef(false);
+
+  useEffect(() => {
+    if (!showMastery && focusSearch.current) {
+      if (searchInput.current) {
+        searchInput.current.focus();
+        focusSearch.current = false;
+      }
+    }
+  }, [showMastery, loading]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -87,12 +106,11 @@ function QuestsPageContent() {
     : 0;
   const selectedGroup = groups.find((group) => group.id === groupParam);
   const canCreateQuest = profile?.role === "instructor" || profile?.role === "admin";
-  const isStudent = profile?.role === "student";
 
   // Interactive selection state (Von Restorff + Direct Manipulation)
   const [selectedQuestId, setSelectedQuestId] = useState<string | null>(null);
 
-  // Click whitespace/background to remove green highlight from cards
+  // Click outside the quest controls to clear the card selection.
   useEffect(() => {
     function handleBackgroundClick(e: MouseEvent) {
       const target = e.target as HTMLElement | null;
@@ -120,25 +138,25 @@ function QuestsPageContent() {
         (questFilter === "next" && !quest.is_completed);
 
       // Search filter
-      const matchesSearch =
-        !normalizedSearch ||
-        `${quest.title ?? ""} ${quest.topic_concept} ${quest.activity_type}`
+      const matchesSearch = selectedConcept !== null
+        ? quest.topic_concept === selectedConcept
+        : !normalizedSearch || `${quest.title ?? ""} ${quest.topic_concept} ${quest.activity_type}`
           .toLocaleLowerCase()
           .includes(normalizedSearch);
 
-      return matchesStatus && matchesSearch;
+      return matchesStatus && matchesSearch && activityDateMatches(quest.added_at, dateRange.from, dateRange.to);
     });
-  }, [quests, groupParam, selectedGroup, questFilter, search]);
+  }, [quests, groupParam, selectedGroup, questFilter, search, selectedConcept, dateRange]);
 
-  const challengeCount = filteredQuests.filter((quest) => quest.activity_type === "challenge").length;
-  const visibleQuests = filteredQuests.filter((quest) => categoryParam === "code-challenge"
-    ? quest.activity_type === "challenge" : categoryParam === "lessons-review"
+  const visibleQuests = filteredQuests.filter((quest) => category === "code-challenge"
+    ? quest.activity_type === "challenge" : category === "lessons-review"
       ? quest.activity_type === "quiz" : true);
+  const hasFilters = Boolean(category || search.trim() || questFilter !== "all" || dateRange.from || dateRange.to);
 
   // Keyboard navigation & activation (Enter launches selected card; arrows navigate grid)
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (showMastery || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
       const target = e.target as HTMLElement | null;
       if (actionMode) {
         if (e.key === "Escape") setActionMode(null);
@@ -203,7 +221,7 @@ function QuestsPageContent() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedQuestId, visibleQuests, router, isStudent, actionMode]);
+  }, [selectedQuestId, visibleQuests, router, isStudent, actionMode, showMastery]);
 
   function openAction(mode: "create" | "join" | "add") {
     setActionMode(mode);
@@ -215,6 +233,29 @@ function QuestsPageContent() {
     const query = new URLSearchParams(searchParams);
     if (category) query.set("category", category);
     else query.delete("category");
+    router.push(query.size ? pathname + "?" + query : pathname, { scroll: false });
+  }
+
+  function clearFilters() {
+    setQuestFilter("all");
+    setSearch("");
+    setSelectedConcept(null);
+    setDateRange({ from: "", to: "" });
+    if (categoryParam) handleCategorySelect("");
+  }
+
+  function changeView(view: "list" | "map", concept?: string) {
+    const query = new URLSearchParams(searchParams);
+    if (view === "map") query.set("view", "map");
+    else query.delete("view");
+    if (concept !== undefined) {
+      setSearch(concept);
+      setSelectedConcept(concept);
+      setQuestFilter("all");
+      setDateRange({ from: "", to: "" });
+      query.delete("category");
+      focusSearch.current = true;
+    }
     router.push(query.size ? pathname + "?" + query : pathname, { scroll: false });
   }
 
@@ -281,19 +322,28 @@ function QuestsPageContent() {
   );
 
   return (
-    <div className="bq-quest-page">
-      {loading ? <section className="panel" role="status">Loading {workshops ? "workshops" : "quest map"}…</section>
-      : isError ? <section className="panel"><p role="alert">{message}</p><button type="button" className="button button-outline" onClick={() => void loadData()}>Retry</button></section>
+    <div className={workshops ? "bq-quest-page" : "bq-quest-page bq-quest-map"}>
+      {!showMastery && loading ? <section className="panel" role="status">Loading {workshops ? "workshops" : "quest map"}…</section>
+      : !showMastery && isError ? <section className="panel"><p role="alert">{message}</p><button type="button" className="button button-outline" onClick={() => void loadData()}>Retry</button></section>
       : (
-        <div className="quests-workspace-expanded qm-panel" id="quest-groups">
+        <div className={workshops ? "quests-workspace-expanded qm-panel" : "quests-workspace-expanded"} id="quest-groups">
           <div className="qm-panel-heading">
             <div>
               <h1>{selectedGroup?.name || (workshops ? "Workshops" : "Quest Map")}</h1>
               <p>{selectedGroup ? `${selectedGroup.language.toUpperCase()} · ${selectedGroup.member_count} members · ${selectedGroup.activity_ids.length} activities` : workshops ? "Join a workshop or open one you already belong to." : "Explore the published activities in your track."}</p>
             </div>
+            {(!workshops || selectedGroup || groups.length > 0 || groupError) && (isStudent || canCreateQuest) &&
+              <button type="button" className={`button ${isStudent ? "button-outline" : "button-primary"}`}
+                data-tooltip={isStudent ? "Enter the workshop code shared by your instructor." : "Create a workshop learners can join with an invite code."}
+                onClick={() => openAction(isStudent ? "join" : "create")}>{isStudent ? "Join Workshop" : "Create Workshop"}</button>}
           </div>
-          {(!workshops || selectedGroup || groups.length > 0 || groupError) && (isStudent || canCreateQuest) &&
-            <button type="button" className="button button-outline" onClick={() => openAction(isStudent ? "join" : "create")}>{isStudent ? "Join Workshop" : "Create Workshop"}</button>}
+          {isStudent && !workshops ? (
+            <div className="profile-tabs mastery-view-toggle" role="group" aria-label="Quest view">
+              <button type="button" aria-pressed={!showMastery} onClick={() => changeView("list")}>List</button>
+              <button type="button" aria-pressed={showMastery} onClick={() => changeView("map")}>Mastery map</button>
+            </div>
+          ) : null}
+          {showMastery ? <MasteryMap onSelect={(concept) => changeView("list", concept)} /> : null}
           {groupError && <p className="notice warning" role="status">Quest groups are unavailable: {groupError}</p>}
           {selectedGroup && <div className="qm-group-info">
             {selectedGroup.description && <p>{selectedGroup.description}</p>}
@@ -320,18 +370,18 @@ function QuestsPageContent() {
             <h2>No workshops yet</h2>
             <p>{canCreateQuest ? "Create a workshop to group published activities." : "Use the code shared by your instructor."}</p>
             <div className="qm-empty-actions">
-              {canCreateQuest && <button type="button" className="qm-empty-action" data-tooltip="Like Google Classroom: create a workshop space that students join with a code." onClick={() => openAction("create")}>Create Workshop</button>}
-              {isStudent && <button type="button" className="qm-empty-action" data-tooltip="Like Google Classroom: join a workshop using the code your instructor shared." onClick={() => openAction("join")}>Join Workshop</button>}
+              {canCreateQuest && <button type="button" className="qm-empty-action" data-tooltip="Create a workshop learners can join with an invite code." onClick={() => openAction("create")}>Create Workshop</button>}
+              {isStudent && <button type="button" className="qm-empty-action" data-tooltip="Enter the workshop code shared by your instructor." onClick={() => openAction("join")}>Join Workshop</button>}
             </div>
           </div>}
-          {message && (
+          {!showMastery && message && (
             <p className={`notice ${isError ? "error" : ""}`} role="status">
               {message}
             </p>
           )}
 
           {workshops && groupParam && !selectedGroup && !groupError && <p role="status">This workshop is unavailable. <Link href="/workshops">Back to workshops</Link></p>}
-          {(!workshops || selectedGroup) && (
+          {!showMastery && (!workshops || selectedGroup) && (
           <>
           {quests.length === 0 || (selectedGroup && selectedGroup.activity_ids.length === 0) ? (
             selectedGroup ? <div className="qm-activity-empty">
@@ -362,7 +412,7 @@ function QuestsPageContent() {
                   aria-valuemax={100}
                   aria-valuenow={progressPercent}
                 >
-                  <span style={{ width: `${progressPercent}%` }} />
+                  <span style={{ "--value": `${progressPercent}%` } as CSSProperties} />
                 </div>
                 <p className="quest-progress-next">
                   {nextQuest ? (
@@ -375,42 +425,44 @@ function QuestsPageContent() {
                 </p>
               </section>}
 
-              {/* Toolbar: Search, Status Filters & Leaderboard Link */}
-              <div className="quest-toolbar">
-                <label className="quest-search">
-                  <span className="sr-only">Search quests</span>
-                  <input
-                    ref={searchInput}
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search quests or concepts"
-                    type="search"
-                  />
-                </label>
-                <div className="quest-filters" role="group" aria-label="Activity type">
-                  {([["", "All", filteredQuests.length], ["code-challenge", "Code Challenges", challengeCount],
-                    ["lessons-review", "Concept Checks", filteredQuests.length - challengeCount]] as const).map(([value, label, count]) => (
-                    <button type="button" key={value} className={`filter-button${(categoryParam || "") === value ? " selected" : ""}`}
-                      aria-pressed={(categoryParam || "") === value} onClick={() => handleCategorySelect(value)}>{label} ({count})</button>
-                  ))}
+              <div className="quest-toolbar quest-map-toolbar">
+                <div className="quest-browse-controls">
+                  <div className="quest-filters" role="group" aria-label="Activity type">
+                    {([["", "All quests"],
+                      ["code-challenge", "Code challenges", "Show activities where you write and test code."],
+                      ["lessons-review", "Concept checks", "Show short quizzes on programming concepts."]] as const).map(([value, label, description]) => (
+                      <button type="button" key={value} className="filter-button"
+                        data-tooltip={description}
+                        aria-pressed={category === value} onClick={() => { if (category !== value) handleCategorySelect(value); }}>{label}</button>
+                    ))}
+                  </div>
+                  <div className="quest-refine-controls">
+                    <label className="quest-search">
+                      <span className="sr-only">Search quests</span>
+                      <input
+                        ref={searchInput}
+                        value={search}
+                        onChange={(event) => { setSelectedConcept(null); setSearch(event.target.value); }}
+                        placeholder="Search quests"
+                        type="search"
+                      />
+                    </label>
+                    {isStudent && <select className="quest-status-select" aria-label="Completion status"
+                      value={questFilter} onChange={(event) => setQuestFilter(event.target.value as QuestStatusFilter)}>
+                      <option value="all">All statuses</option>
+                      <option value="next">To do</option>
+                      <option value="completed">Completed</option>
+                    </select>}
+                  </div>
+                  <ActivityDateFilter from={dateRange.from} to={dateRange.to}
+                    onChange={(from, to) => setDateRange({ from, to })} />
                 </div>
-                {isStudent && <div className="quest-filters" role="group" aria-label="Filter quests">
-                  {(["all", "next", "completed"] as const).map((filter) => (
-                    <button
-                      key={filter}
-                      type="button"
-                      className={`filter-button${questFilter === filter ? " selected" : ""}`}
-                      aria-pressed={questFilter === filter}
-                      onClick={() => setQuestFilter(filter)}
-                    >
-                      {filter === "all"
-                        ? `All ${quests.length}`
-                        : filter === "next"
-                        ? `To do ${quests.length - completedCount}`
-                        : `Done ${completedCount}`}
-                    </button>
-                  ))}
-                </div>}
+                <div className="quest-results-summary">
+                  <p className="quest-result-count" role="status">
+                    {visibleQuests.length} {visibleQuests.length === 1 ? "quest" : "quests"} found
+                  </p>
+                  {hasFilters && visibleQuests.length > 0 && <button type="button" className="text-button" onClick={clearFilters}>Clear filters</button>}
+                </div>
               </div>
 
               {/* Quest Card Grid: Decluttered, balanced 2-column layout */}
@@ -421,11 +473,7 @@ function QuestsPageContent() {
                   <button
                     className="button button-outline"
                     type="button"
-                    onClick={() => {
-                      setQuestFilter("all");
-                      setSearch("");
-                      if (categoryParam) handleCategorySelect("");
-                    }}
+                    onClick={clearFilters}
                   >
                     Show all quests
                   </button>
@@ -463,6 +511,7 @@ function QuestsPageContent() {
                         <div className="quest-card-body">
                           <div className="quest-card-head">
                             <div className="quest-card-badges">
+                              <span className="activity-number">Quest #{quest.sequence_order}</span>
                               <span className="tag">
                                 {quest.activity_type === "quiz"
                                   ? "CONCEPT CHECK"
@@ -476,6 +525,7 @@ function QuestsPageContent() {
                               {quest.is_completed && (
                                 <span className="completion">✓ Complete</span>
                               )}
+                              {quest.stars ? <SolveStars stars={quest.stars} /> : null}
                             </div>
                             {/* Miller's Law: Chunk metadata into at most 3 scannable pills */}
                             <div className="quest-meta">
@@ -486,6 +536,10 @@ function QuestsPageContent() {
                           </div>
 
                           <h2>{quest.title || quest.topic_concept}</h2>
+                          {quest.added_at && <p className="activity-added-date">
+                            {quest.added_at_estimated ? "Added around " : "Added "}
+                            <time dateTime={quest.added_at}>{formatActivityDate(quest.added_at)}</time>
+                          </p>}
                           <p className="quest-card-desc">{getBriefDescription(quest)}</p>
                         </div>
 
@@ -500,11 +554,10 @@ function QuestsPageContent() {
                               className={`button ${
                                 isNext
                                   ? "button-primary"
-                                  : quest.is_completed
-                                  ? "button-outline"
-                                  : "button-primary"
+                                  : "button-outline"
                               }`}
                               href={`/arena/${quest.id}`}
+                              data-tooltip={quest.is_completed ? "Reopen the editor to practice this challenge again." : undefined}
                             >
                               {quest.is_completed
                                 ? "Practice again"
@@ -517,11 +570,10 @@ function QuestsPageContent() {
                               className={`button ${
                                 isNext
                                   ? "button-primary"
-                                  : quest.is_completed
-                                  ? "button-outline"
-                                  : "button-primary"
+                                  : "button-outline"
                               }`}
                               href={`/quiz/${quest.id}`}
+                              data-tooltip={quest.is_completed ? "Reopen the concept quiz to review what you learned." : undefined}
                             >
                               {quest.is_completed
                                 ? "Review quiz"

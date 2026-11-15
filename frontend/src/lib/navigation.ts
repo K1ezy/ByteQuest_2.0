@@ -2,23 +2,28 @@ import type { Profile } from "@/lib/types";
 
 export const roleLabels = { student: "Student", instructor: "Instructor", admin: "Administrator" };
 
+/**
+ * Each entry is [path, full label, short label]. The full label names the page in the
+ * desktop sidebar; the short label fits the phone tab bar, where five tabs share the width.
+ */
 export const primaryNavigation = {
   student: [
-    ["/dashboard", "Dashboard"], ["/quests", "Quest Map"], ["/exams", "Exams"],
-    ["/workshops", "Workshops"], ["/leaderboard", "Leaderboard"],
+    ["/dashboard", "Dashboard", "Home"], ["/quests", "Quest Map", "Quests"], ["/exams", "Exams", "Exams"],
+    ["/workshops", "Workshops", "Workshops"], ["/leaderboard", "Leaderboard", "Ranks"],
   ],
   instructor: [
-    ["/instructor", "My Courses"], ["/instructor/activities", "Quest & Workshop Builder"],
-    ["/instructor/performance", "Student Progress & Submissions"], ["/instructor/exams", "Exams"],
+    ["/instructor", "My Courses", "Courses"], ["/instructor/activities", "Quest & Workshop Builder", "Builder"],
+    ["/instructor/performance", "Student Progress & Submissions", "Progress"], ["/instructor/gamification", "Gamification Insights", "Insights"],
+    ["/instructor/exams", "Exams", "Exams"],
   ],
   admin: [
-    ["/admin", "System Overview"], ["/admin/courses", "Course & Instructor Management"],
-    ["/admin/accounts", "User & Role Management"], ["/admin/activities", "Content & Track Repository"],
-    ["/admin/teaching", "Instructor Workspace"],
+    ["/admin", "System Overview", "Overview"], ["/admin/courses", "Course & Instructor Management", "Courses"],
+    ["/admin/accounts", "User & Role Management", "Users"], ["/admin/activities", "Content & Track Repository", "Content"],
+    ["/admin/teaching", "Instructor Workspace", "Teaching"],
   ],
 } as const;
 
-const studentOnly = /^\/(dashboard|quests|leaderboard|exams|arena|quiz|submissions)(?:\/|$)/;
+const studentOnly = /^\/(dashboard|quests|leaderboard|exams|arena|quiz|submissions|reviews)(?:\/|$)/;
 export const belongsTo = (path: string, root: string) => path === root || path.startsWith(root + "/");
 
 export function canOpenPath(role: Profile["role"], path: string): boolean {
@@ -47,7 +52,7 @@ export function authReturnTo(profile: Profile, value: string | null): string | n
   }
   if (!canOpenPath(profile.role, url.pathname)) return null;
   const roots = [...primaryNavigation[profile.role].map(([path]) => path), "/profile", "/account", "/chat", "/workshops"];
-  if (profile.role === "student") roots.push("/arena", "/quiz", "/submissions");
+  if (profile.role === "student") roots.push("/arena", "/quiz", "/submissions", "/reviews");
   return roots.some((path) => belongsTo(url.pathname, path)) ? url.pathname + url.search + url.hash : null;
 }
 
@@ -67,6 +72,7 @@ export function questRedirect(params: URLSearchParams, role?: Profile["role"]): 
 }
 
 export function pageLabel(path: string): string {
+  if (belongsTo(path, "/reviews")) return "Recall Quest";
   for (const entries of Object.values(primaryNavigation)) {
     for (const [href, label] of entries) if (href === path) return label;
   }

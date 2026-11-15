@@ -18,6 +18,8 @@ export interface Profile {
   created_at?: string | null;
   /** True until a student saves their learning track; always false for staff. */
   needs_track_setup?: boolean;
+  /** False while the account still has its generated starter handle; the server owns this rule. */
+  handle_chosen?: boolean;
 }
 
 export interface QuizOption {
@@ -39,6 +41,10 @@ export interface Quest {
   topic_concept: string;
   difficulty_level: number;
   sequence_order: number;
+  added_at: string;
+  added_at_estimated: boolean;
+  /** Best solve-quality stars (1-3) on a solved code challenge; null otherwise. */
+  stars?: number | null;
   xp_reward: number;
   problem_statement: string | null;
   starter_code: string | null;
@@ -89,3 +95,70 @@ export interface ErrorExplanation {
   hints: string[];
   pedagogical_tip: string;
 }
+export type PracticeError = "syntax_error" | "logic_error" | "runtime_error" | "timeout";
+export type CodexRecovery = { category: PracticeError; label: string };
+export type CodexCategory = CodexRecovery & {
+  recoveries: number;
+  tier: number;
+  next_tier_at: number | null;
+  topics: string[];
+  first_recovered_at: string | null;
+};
+export type CodexResponse = {
+  locked: boolean;
+  day: number;
+  unlock: MechanicUnlock;
+  categories: CodexCategory[];
+  total_recoveries: number | null;
+  comebacks: number | null;
+};
+
+export type MasteryConcept = {
+  concept: string;
+  total: number;
+  completed: number;
+  mastery_percent: number;
+  state: "not_started" | "in_progress" | "mastered";
+  average_stars: number | null;
+  weak_spot: PracticeError | null;
+  activity_ids: string[];
+  memory?: MemoryConcept | null;
+};
+export type MasteryMapResponse = { track: ProgrammingLanguage; concepts: MasteryConcept[] };
+
+export type MemoryState = "fresh" | "due" | "fading" | "long_term";
+export type MemoryConcept = {
+  concept: string;
+  stage: number;
+  state: MemoryState;
+  due_at: string;
+  open_review_id: string | null;
+};
+export type MechanicUnlock = { unlocked: boolean; unlock_day: number; unlocks_on: string | null };
+export type ReviewOverview = {
+  locked: boolean;
+  day: number;
+  unlock: MechanicUnlock;
+  concepts: MemoryConcept[];
+  due_count: number;
+};
+export type ReviewResult = {
+  correct: number;
+  total: number;
+  passed: boolean;
+  xp_awarded: number;
+  new_total_xp: number;
+  new_level: number;
+  level_up: boolean;
+  new_badges_unlocked: string[];
+  next_due_at: string;
+  next_check_days: number;
+  stage: number;
+};
+export type RecallReview = {
+  id: string;
+  concept: string;
+  stage: number;
+  questions: QuizQuestion[];
+  result: ReviewResult | null;
+};

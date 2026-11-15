@@ -21,6 +21,7 @@ from app.services.profile_attention import (
 )
 from app.services.gamification.progression import XP_PER_LEVEL
 from app.services.gamification.sequencer import determine_track_recommendation
+from app.services.gamification.solve_quality import help_pattern
 from app.services.attempt_visibility import learner_visible_attempt_clause
 from app.services.usernames import normalize_username
 from sqlalchemy.exc import IntegrityError
@@ -69,6 +70,7 @@ class ProfileResponse(BaseModel):
     email: str | None = None
     created_at: datetime | None = None
     needs_track_setup: bool = False
+    handle_chosen: bool = True
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -330,6 +332,16 @@ class NextAction(BaseModel):
     kind: str | None = None
 
 
+class HelpPattern(BaseModel):
+    """How the student solves challenges and seeks help; descriptive, never scored."""
+
+    challenges_solved: int
+    self_solved: int
+    three_star: int
+    hinted_challenges: int
+    tried_before_hint: int
+
+
 class StudentAnalytics(BaseModel):
     total_attempts: int
     successful_attempts: int
@@ -354,6 +366,7 @@ class StudentAnalytics(BaseModel):
     score_trend: list[TrendPoint]
     exam_history: list[ExamHistoryEntry]
     badges: list[BadgeEntry]
+    help_pattern: HelpPattern
 
 
 class AuditEntry(BaseModel):
@@ -594,6 +607,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
             kind=_enum_value(target.activity_type) if target else None,
         ),
         badge_count=len(badges),
+        help_pattern=HelpPattern(**help_pattern(db, user.id)),
         by_type=by_type,
         by_topic=by_topic,
         score_trend=score_trend,

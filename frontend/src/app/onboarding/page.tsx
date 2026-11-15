@@ -612,7 +612,7 @@ function OnboardingContent() {
                     disabled={busy}
                     className="auth-action auth-primary-button"
                   >
-                    {busy ? "Please wait…" : authMode === "signup" ? "Continue" : "Sign in"}
+                    {busy ? (authMode === "signup" ? "Please wait…" : "Signing in…") : authMode === "signup" ? "Continue" : "Sign in"}
                   </button>
 
                   <div className="space-y-2 pt-1 text-center text-xs text-slate-600">

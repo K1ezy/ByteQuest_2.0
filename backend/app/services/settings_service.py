@@ -22,6 +22,7 @@ SERVICE_LABELS = {
     "rag": "RAG indexing",
     "prediction": "Prediction",
     "assessment": "Assessment runner",
+    "gamification": "Gamification",
 }
 
 
@@ -38,13 +39,17 @@ def _typed_value(setting: PlatformSetting) -> Any:
 
 
 def get_setting_int(db: Session, key: str, default: int) -> int:
-    setting = db.query(PlatformSetting).filter(PlatformSetting.key == key).first()
-    if setting is None:
-        return default
-    try:
-        return int(setting.value)
-    except (TypeError, ValueError):
-        return default
+    return get_settings_int(db, {key: default})[key]
+
+
+def get_settings_int(db: Session, defaults: dict[str, int]) -> dict[str, int]:
+    values = defaults.copy()
+    for key, value in db.query(PlatformSetting.key, PlatformSetting.value).filter(PlatformSetting.key.in_(defaults)):
+        try:
+            values[key] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return values
 
 
 def serialize_setting(setting: PlatformSetting, editor: Profile | None = None) -> dict:

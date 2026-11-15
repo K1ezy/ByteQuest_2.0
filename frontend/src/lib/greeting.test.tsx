@@ -1,15 +1,15 @@
 import { expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { useNow } from "@/components/workspace/ui";
-import { facultyGreeting } from "./greeting";
+import { timeGreeting } from "./greeting";
 
 it("uses the chosen username and changes the greeting at local day boundaries", () => {
   const at = (hour: number) => new Date(2026, 10, 12, hour, 0);
-  expect(facultyGreeting("kieser", at(4))).toBe("Good evening, Kieser!");
-  expect(facultyGreeting("kieser", at(5))).toBe("Good morning, Kieser!");
-  expect(facultyGreeting("kieser", at(11))).toBe("Good morning, Kieser!");
-  expect(facultyGreeting("kieser", at(12))).toBe("Good afternoon, Kieser!");
-  expect(facultyGreeting("kieser", at(18))).toBe("Good evening, Kieser!");
+  expect(timeGreeting("kieser", at(4))).toBe("Good evening, Kieser!");
+  expect(timeGreeting("kieser", at(5))).toBe("Good morning, Kieser!");
+  expect(timeGreeting("kieser", at(11))).toBe("Good morning, Kieser!");
+  expect(timeGreeting("kieser", at(12))).toBe("Good afternoon, Kieser!");
+  expect(timeGreeting("kieser", at(18))).toBe("Good evening, Kieser!");
 });
 
 it("refreshes at the minute boundary and after a tab regains focus", () => {
@@ -17,7 +17,7 @@ it("refreshes at the minute boundary and after a tab regains focus", () => {
   try {
     vi.setSystemTime(new Date(2026, 10, 12, 11, 59, 30));
     function Greeting() {
-      return <h1>{facultyGreeting("kieser", useNow())}</h1>;
+      return <h1>{timeGreeting("kieser", useNow())}</h1>;
     }
     render(<Greeting />);
     expect(screen.getByRole("heading").textContent).toBe("Good morning, Kieser!");
@@ -30,4 +30,8 @@ it("refreshes at the minute boundary and after a tab regains focus", () => {
     cleanup();
     vi.useRealTimers();
   }
+});
+
+it("omits the name when none is available", () => {
+  expect(timeGreeting("", new Date(2026, 10, 12, 9, 0))).toBe("Good morning!");
 });

@@ -42,7 +42,11 @@ export function ChatConversation({ variant }: ChatConversationProps) {
   const noticeId = `chat-notice-${variant}`;
 
   useEffect(() => {
-    inputRef.current?.focus();
+    // On touch screens, focusing the box opens the keyboard over half the chat before
+    // the student has read the suggestions, so only mouse and keyboard users get it.
+    if (window.matchMedia?.("(hover: hover) and (pointer: fine)").matches ?? true) {
+      inputRef.current?.focus();
+    }
   }, []);
 
   useEffect(() => {
@@ -250,6 +254,7 @@ export function ChatConversation({ variant }: ChatConversationProps) {
           <button
             type="submit"
             className="chat-send-btn"
+            data-tooltip="Send your message to the AI tutor."
             disabled={pending || !draft.trim()}
           >
             Send
@@ -264,6 +269,7 @@ export function ChatConversation({ variant }: ChatConversationProps) {
             <button
               type="button"
               className="chat-clear-btn"
+              data-tooltip="Remove the messages in this conversation."
               onClick={() => setConfirmClear(true)}
             >
               Clear conversation

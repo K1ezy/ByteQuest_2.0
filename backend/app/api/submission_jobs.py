@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.core.quotas import reserve
 from app.core.security import get_current_user
 from app.services.attempt_visibility import activity_is_closed, student_visible_activity_clause
+from app.services.gamification.rollout import mechanic_state
 from app.models.entities import (
     ActivityKind, LearningActivity, Profile, ReviewState, SubmissionJob, UserRole,
 )
@@ -31,10 +32,12 @@ class SubmitJob(BaseModel):
     time_spent_seconds: int = Field(default=0, ge=0, le=86_400)
 
 
-def view(job: SubmissionJob, is_instructor: bool = False) -> dict:
+def view(job: SubmissionJob, db: Session, student: Profile) -> dict:
     result = job.result_json
-    if not is_instructor and result is not None:
+    if result is not None:
         result = sanitize_grading_result_for_student(result)
+        if result.get("codex_recoveries") and not mechanic_state(db, student).codex.unlocked:
+            result["codex_recoveries"] = []
     return {
         "id": job.id, "activity_id": job.activity_id, "status": job.status,
         "dry_run_only": job.dry_run_only, "result": result,
@@ -70,7 +73,7 @@ def submit_job(
             existing.next_attempt_at = datetime.now(timezone.utc)
             db.commit()
             db.refresh(existing)
-        return view(existing)
+        return view(existing, db, user)
 
     # 15-second duplicate click window protection (Explicitly excludes failed jobs)
     recent_dup = db.query(SubmissionJob).filter(
@@ -82,7 +85,7 @@ def submit_job(
         SubmissionJob.created_at >= datetime.now(timezone.utc) - timedelta(seconds=15),
     ).order_by(SubmissionJob.created_at.desc()).first()
     if recent_dup:
-        return view(recent_dup)
+        return view(recent_dup, db, user)
 
     accepted_at = datetime.now(timezone.utc)
     activity = db.query(LearningActivity).filter(
@@ -107,7 +110,7 @@ def submit_job(
     db.add(job)
     db.commit()
     db.refresh(job)
-    return view(job)
+    return view(job, db, user)
 
 
 @router.get("/{job_id}")
@@ -117,4 +120,4 @@ def get_job(job_id: uuid.UUID, user: Profile = Depends(get_current_user), db: Se
     ).first()
     if job is None:
         raise HTTPException(404, "Submission not found.")
-    return view(job)
+    return view(job, db, user)

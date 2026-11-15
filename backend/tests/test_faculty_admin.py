@@ -47,6 +47,8 @@ from app.models.entities import (
     ReviewState,
     TestCase as GradingCase,
     UserRole,
+    ConceptReview,
+    HintUse,
 )
 from app.services.ml_predictor.exam_history import course_exam_ids, released_exam_history
 from app.services.ml_predictor.audit import record_prediction_outcome
@@ -1333,3 +1335,77 @@ def test_offline_report_allowlist_drops_paths_and_training_internals():
     assert report["models"]["logreg"]["test"]["confusion_matrix"] == [[1, 2], [3, 4]]
     assert report["baselines"]["most_frequent"]["test"]["accuracy"] == 0.6
     assert report["selection"] == {"winner": "logreg"}
+
+
+def test_gamification_insights_are_course_scoped_class_aggregates(workspace):
+    client, new_session, ids = workspace
+    now = datetime.now(timezone.utc)
+    with new_session() as db:
+        def challenge(topic: str, order: int) -> LearningActivity:
+            activity = LearningActivity(
+                course_id=ids["course_a"], created_by=ids["faculty"], activity_type=ActivityKind.challenge,
+                language=ProgrammingLang.python, topic_concept=topic, title=f"{topic} task",
+                problem_statement="Practice task.", reference_solution_code="print(1)", difficulty_level=1,
+                xp_reward=40, review_status=ReviewState.published, judge0_verified=True, sequence_order=order,
+            )
+            db.add(activity)
+            db.flush()
+            return activity
+
+        def attempt(activity, number, passed, category, at):
+            db.add(ActivityAttempt(student_id=ids["student"], activity_id=activity.id, attempt_number=number,
+                                   passed_test_cases=int(passed), total_test_cases=1, score_percentage=100 if passed else 0,
+                                   is_successful=passed, error_category=category, created_at=at))
+
+        loops, strings = challenge("loops", 2), challenge("strings", 3)
+        attempt(loops, 1, False, "logic_error", now - timedelta(days=8))     # first practice day: week 0
+        attempt(loops, 2, False, "runtime_error", now - timedelta(days=1))   # still not passed: stuck
+        attempt(strings, 1, False, "syntax_error", now - timedelta(days=3))
+        db.add(HintUse(student_id=ids["student"], activity_id=strings.id, request_key="insight-hint-0001",
+                       source="reviewed", body="Check your quotes.", created_at=now - timedelta(days=2)))
+        attempt(strings, 2, True, "none", now - timedelta(days=1))           # recovery after trying, then a hint
+
+        def review(concept, stage, status, xp=0):
+            done = status != "open"
+            db.add(ConceptReview(
+                student_id=ids["student"], language=ProgrammingLang.python, concept=concept, stage=stage, status=status,
+                question_refs=[{"activity_id": str(uuid.uuid4()), "question_index": index} for index in range(3)],
+                total=3, correct=(3 if status == "passed" else 1) if done else None, xp_awarded=xp,
+                answers_json={"answers": {}} if done else None, submitted_at=now - timedelta(days=1) if done else None,
+            ))
+
+        review("loops", 0, "passed", xp=10)
+        review("loops", 1, "not_passed")
+        review("strings", 0, "open")            # open recalls are not results yet
+        review("not in this course", 0, "passed", xp=10)
+        db.commit()
+
+    headers = _token(ids["faculty"])
+    response = client.get(f"/api/v1/faculty/gamification-insights?course_id={ids['course_a']}", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["enrolled"], body["active"]) == (1, 1)
+    # Week 0: two failures. Week 1: a failure, two passes (fixture pass included) and two recalls.
+    assert [(row["week"], row["eligible"], row["active"], row["events"]) for row in body["weekly"]] == [
+        (0, 1, 1, 2), (1, 1, 1, 5)]
+    assert body["solve_quality"] == {"solved": 2, "stars": {"1": 1, "2": 0, "3": 1}, "self_solved_rate": 0.5}
+    assert body["help_seeking"] == {"hinted": 1, "tried_before_hint": 1, "rate": 1.0}
+    topics = {row["topic"]: row for row in body["topics"]}
+    assert [row["topic"] for row in body["topics"]] == ["loops", "strings"]  # stuck learners first
+    assert (topics["loops"]["students_struggling"], topics["loops"]["students_stuck"]) == (1, 1)
+    loops_counts = {row["category"]: (row["failed_tries"], row["recoveries"]) for row in topics["loops"]["categories"]}
+    assert loops_counts["logic_error"] == (1, 0) and loops_counts["runtime_error"] == (1, 0)
+    strings_counts = {row["category"]: (row["failed_tries"], row["recoveries"]) for row in topics["strings"]["categories"]}
+    assert strings_counts["syntax_error"] == (1, 1) and topics["strings"]["students_stuck"] == 0
+    assert (body["memory"]["submitted"], body["memory"]["passed"], body["memory"]["pass_rate"]) == (2, 1, 0.5)
+    assert [(row["stage"], row["submitted"], row["passed"]) for row in body["memory"]["stages"][:2]] == [(0, 1, 1), (1, 1, 0)]
+
+    # Aggregates only: no student identity is ever in the payload.
+    for secret in (str(ids["student"]), "test_student", "Student"):
+        assert secret not in response.text
+    # Same scope as Performance: assigned instructors only, never another course, a student or an admin.
+    assert client.get(f"/api/v1/faculty/gamification-insights?course_id={ids['course_b']}", headers=headers).status_code == 403
+    assert client.get(f"/api/v1/faculty/gamification-insights?course_id={ids['course_a']}",
+                      headers=_token(ids["student"])).status_code == 403
+    assert client.get(f"/api/v1/faculty/gamification-insights?course_id={ids['course_a']}",
+                      headers=_token(ids["admin"])).status_code == 403

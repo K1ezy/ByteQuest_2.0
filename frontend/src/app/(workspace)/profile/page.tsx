@@ -18,8 +18,6 @@ import {
   formatDateTime,
   getMyAnalytics,
   getMyProfile,
-  updateMyProfile,
-  updateMyTrack,
   uploadMyAvatar,
   type AdminAnalytics,
   type InstructorAnalytics,
@@ -27,27 +25,12 @@ import {
   type ProfileAnalytics,
   type ProfileAuditEntry,
   type StudentAnalytics,
+  type HelpPattern,
   type TrendPoint,
 } from "@/lib/workspace";
-import type { Profile, ProgrammingLanguage } from "@/lib/types";
-
-const LANGUAGES: { value: ProgrammingLanguage; label: string }[] = [
-  { value: "python", label: "Python" },
-  { value: "cpp", label: "C++" },
-  { value: "java", label: "Java" },
-];
-
-const ROLE_LABEL: Record<Profile["role"], string> = {
-  student: "Student",
-  instructor: "Instructor",
-  admin: "Administrator",
-};
-
-const LANGUAGE_LABEL: Record<string, string> = {
-  python: "Python",
-  cpp: "C++",
-  java: "Java",
-};
+import type { Profile } from "@/lib/types";
+import { ProfileHeader, ROLE_LABEL } from "@/components/profile/profile-header";
+import { DebuggerCodex } from "@/components/profile/debugger-codex";
 
 /** Inline score-trend sparkline (0–100%), oldest → newest. */
 function Sparkline({ points }: { points: TrendPoint[] }) {
@@ -152,6 +135,38 @@ function StudentOverview({ a }: { a: StudentAnalytics }) {
   );
 }
 
+// Informational feedback on process (independence, trying before asking), never a score or a penalty.
+function habitsMessage(p: HelpPattern): string {
+  if (p.challenges_solved === 0 && p.hinted_challenges === 0) return "Solve a coding challenge to see how you approach problems.";
+  if (p.hinted_challenges > 0 && p.tried_before_hint * 2 < p.hinted_challenges) {
+    return "Tip: a sample run often reveals the bug on its own. Try one before opening a hint.";
+  }
+  return "Trying first and asking for help when stuck is a strong learning habit. Hints are always there when you need them.";
+}
+
+function SolvingHabits({ pattern }: { pattern: HelpPattern }) {
+  return (
+    <section className="ws-panel" aria-labelledby="solving-habits-title">
+      <div className="ws-panel-head">
+        <div>
+          <p className="eyebrow-label">PROBLEM SOLVING</p>
+          <h2 id="solving-habits-title">How you solve challenges</h2>
+        </div>
+      </div>
+      <div className="ws-stat-grid">
+        <StatCard label="Self-solved" value={`${pattern.self_solved} of ${pattern.challenges_solved}`}
+          hint="Challenges passed without opening a hint" icon="★" tone="good" />
+        <StatCard label="3-star solves" value={pattern.three_star}
+          hint="No hints, within 2 attempts" icon="✦" tone="info" />
+        <StatCard label="Tried before asking"
+          value={pattern.hinted_challenges ? `${pattern.tried_before_hint} of ${pattern.hinted_challenges}` : "—"}
+          hint={pattern.hinted_challenges ? "Hinted challenges where you ran code first" : "No hints used yet"} icon="↻" tone="info" />
+      </div>
+      <p className="profile-activity-note">{habitsMessage(pattern)}</p>
+    </section>
+  );
+}
+
 function StudentSections({ a }: { a: StudentAnalytics }) {
   const typeLabel = (t: string) => (t === "quiz" ? "Quizzes" : t === "challenge" ? "Coding challenges" : t);
   return (
@@ -179,6 +194,8 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
         </ol>
         <p className="profile-activity-note">Activity is counted by calendar day in Asia/Manila. Breaks are normal—this view celebrates consistency without penalizing time away.</p>
       </section>
+
+      {a.help_pattern ? <SolvingHabits pattern={a.help_pattern} /> : null}
 
       <div className="ws-columns">
         <section className="ws-panel" aria-labelledby="trend-title">
@@ -577,13 +594,9 @@ interface ConsentStatus {
 function AccountPanel({
   profile,
   memberSince,
-  profileTipsDismissed,
-  onRestoreProfileTips,
 }: {
   profile: Profile;
   memberSince: string | null;
-  profileTipsDismissed: boolean;
-  onRestoreProfileTips: () => void;
 }) {
   const { isLoading: resetBusy, error: resetError, statusMessage: resetStatus, requestResetLink } = usePasswordReset();
   const { isSigningOut, error: signOutError, signOut } = useSignOut();
@@ -617,7 +630,7 @@ function AccountPanel({
         <dl className="profile-account-details">
           <div><dt>Email</dt><dd>{profile.email || "No email is stored on this profile"}</dd></div>
           <div><dt>Role</dt><dd>{ROLE_LABEL[profile.role]}</dd></div>
-          <div><dt>Username</dt><dd>@{profile.username}</dd></div>
+          <div><dt>Public handle</dt><dd>{profile.handle_chosen === false ? "Not chosen yet" : `@${profile.username}`}</dd></div>
           <div><dt>Member since</dt><dd>{memberSince || "Not available"}</dd></div>
         </dl>
         <div className="profile-privacy-note">
@@ -673,13 +686,6 @@ function AccountPanel({
           </div>
           <Link className="button button-outline" href="/account/accessibility">Open settings</Link>
         </div>
-        <div className="profile-setting-row">
-          <div>
-            <strong>Profile tips</strong>
-            <p>{profileTipsDismissed ? "Show the optional setup guidance on Overview again." : "Optional setup guidance is currently available on Overview."}</p>
-          </div>
-          <Button variant="outline" disabled={!profileTipsDismissed} onClick={onRestoreProfileTips}>Show tips again</Button>
-        </div>
       </section>
 
       {profile.role === "student" ? (
@@ -707,15 +713,6 @@ function AccountPanel({
   );
 }
 
-const COMPLETE_STEPS = [
-  { key: "name", label: "Add your name" },
-  { key: "bio", label: "Add a bio" },
-] as const;
-
-function setupDismissalKey(profileId: string) {
-  return `bytequest:profile-setup-dismissed:${profileId}`;
-}
-
 function ProfilePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -727,20 +724,8 @@ function ProfilePageContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [editingField, setEditingField] = useState<"name" | "bio" | "username" | null>(null);
-  const editingRef = useRef<"name" | "bio" | "username" | null>(null);
-  const [draft, setDraft] = useState("");
-  const [savingField, setSavingField] = useState(false);
-
-  const [trackOpen, setTrackOpen] = useState(false);
-  const [language, setLanguage] = useState<ProgrammingLanguage>("python");
-  const [yearLevel, setYearLevel] = useState(1);
-  const [semester, setSemester] = useState(1);
-  const [trackSaving, setTrackSaving] = useState(false);
-
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  const [profileTipsDismissed, setProfileTipsDismissed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const tabParam = searchParams.get("tab");
@@ -769,9 +754,7 @@ function ProfilePageContent() {
         return;
       }
       void loadAnalytics();
-      const currentProfile = await getMyProfile();
-      setProfile(currentProfile);
-      setProfileTipsDismissed(window.localStorage.getItem(setupDismissalKey(currentProfile.id)) === "true");
+      setProfile(await getMyProfile());
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
         router.replace("/onboarding");
@@ -783,61 +766,22 @@ function ProfilePageContent() {
     }
   }, [loadAnalytics, router]);
 
+  // The ?edit=handle deep link is consumed once the header has mounted, so a refresh
+  // does not reopen the editor.
+  const editParam = searchParams.get("edit");
+  useEffect(() => {
+    if (profile && editParam) router.replace(activeTab === "overview" ? "/profile" : `/profile?tab=${activeTab}`, { scroll: false });
+  }, [profile, editParam, activeTab, router]);
+
   useEffect(() => {
     // Kicking off the initial load is the effect's whole purpose here.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
 
-  const startEdit = (field: "name" | "bio" | "username", current: string) => {
-    editingRef.current = field;
-    setDraft(current);
-    setEditingField(field);
-  };
-
   const applyProfileUpdate = (updated: Profile) => {
     setProfile(updated);
     publishProfileUpdate(updated);
-  };
-
-  const cancelEdit = () => {
-    editingRef.current = null;
-    setEditingField(null);
-  };
-
-  // Claimed via editingRef so Enter + blur (which both fire) only save once,
-  // and Escape (which clears the ref) never saves.
-  const saveField = async () => {
-    const field = editingRef.current;
-    if (!profile || !field) return;
-    editingRef.current = null;
-    const value = draft.trim();
-    setSavingField(true);
-    try {
-      const updated = await updateMyProfile(field === "name" ? { display_name: value } : field === "username" ? { username: value } : { bio: value });
-      applyProfileUpdate(updated);
-      setEditingField(null);
-      toast.show(field === "name" ? "Name updated" : field === "username" ? "Username updated" : "Bio updated", "success");
-    } catch (caught) {
-      editingRef.current = field;
-      toast.show(getErrorMessage(caught), "error");
-    } finally {
-      setSavingField(false);
-    }
-  };
-
-  const saveTrack = async () => {
-    setTrackSaving(true);
-    try {
-      const updated = await updateMyTrack({ enrolled_language: language, year_level: yearLevel, semester });
-      applyProfileUpdate(updated);
-      setTrackOpen(false);
-      toast.show("Learning track updated", "success");
-    } catch (caught) {
-      toast.show(getErrorMessage(caught), "error");
-    } finally {
-      setTrackSaving(false);
-    }
   };
 
   const onAvatarPicked = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -870,19 +814,6 @@ function ProfilePageContent() {
       setAvatarBusy(false);
       setConfirmRemove(false);
     }
-  };
-
-  const dismissProfileTips = () => {
-    if (!profile) return;
-    window.localStorage.setItem(setupDismissalKey(profile.id), "true");
-    setProfileTipsDismissed(true);
-  };
-
-  const restoreProfileTips = () => {
-    if (!profile) return;
-    window.localStorage.removeItem(setupDismissalKey(profile.id));
-    setProfileTipsDismissed(false);
-    toast.show("Profile tips restored", "success");
   };
 
   if (loading) {
@@ -919,24 +850,21 @@ function ProfilePageContent() {
     );
   }
 
-  const displayName = profile.display_name?.trim() || "Add your name";
+  // Alt text only; a generated starter handle would be noise to screen readers.
+  const avatarName = profile.display_name?.trim() || (profile.handle_chosen === false ? ROLE_LABEL[profile.role] : `@${profile.username}`);
   const memberSince = profile.created_at ? formatDate(profile.created_at) : null;
   const activityLabel = profile.role === "student" ? "Progress" : profile.role === "instructor" ? "Teaching" : "Stewardship";
-  const done: Record<string, boolean> = {
-    name: Boolean(profile.display_name?.trim()),
-    bio: Boolean(profile.bio?.trim()),
-  };
-  const actOnStep = (key: string) => {
-    if (key === "name") startEdit("name", profile.display_name || "");
-    else startEdit("bio", profile.bio || "");
-  };
 
   return (
     <div className="page-shell profile-shell">
-      <section className="profile-header ws-panel">
+      <ProfileHeader
+        profile={profile}
+        onUpdated={applyProfileUpdate}
+        editHandleOnOpen={searchParams.get("edit") === "handle"}
+        avatar={(
         <div className="profile-avatar-col">
           <div className="profile-avatar-control">
-            <UserAvatar seed={profile.pseudonym_id} name={displayName} url={profile.avatar_url} size="profile" busy={avatarBusy} />
+            <UserAvatar seed={profile.pseudonym_id} name={avatarName} url={profile.avatar_url} size="profile" busy={avatarBusy} />
             <details className="profile-avatar-menu">
               <summary aria-label="Edit profile photo" title="Edit profile photo"><span aria-hidden="true">✎</span></summary>
               <div className="profile-avatar-menu-popover">
@@ -959,180 +887,14 @@ function ProfilePageContent() {
           {!profile.avatar_url ? <span className="profile-avatar-optional">Photo optional</span> : null}
         </div>
 
-        <div className="profile-header-main">
-          <div className="profile-header-top">
-            {editingField === "name" ? (
-              <span className="profile-inline-name" style={{ flex: 1 }}>
-                <input
-                  className="profile-inline-input"
-                  aria-label="Display name"
-                  autoFocus
-                  maxLength={120}
-                  value={draft}
-                  disabled={savingField}
-                  placeholder="Your name"
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") void saveField();
-                    if (event.key === "Escape") cancelEdit();
-                  }}
-                  onBlur={() => void saveField()}
-                />
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="profile-editable"
-                data-tooltip="Click to edit your name"
-                onClick={() => startEdit("name", profile.display_name || "")}
-              >
-                <h1 style={{ margin: 0 }}>{displayName}</h1>
-                <span className="profile-edit-pencil" aria-hidden="true">✎</span>
-              </button>
-            )}
-            <StatusChip
-              state={profile.role}
-              label={ROLE_LABEL[profile.role]}
-              tone={profile.role === "admin" ? "muted" : profile.role === "instructor" ? "info" : "good"}
-            />
-          </div>
-
-          <p className="profile-header-meta">
-            @{profile.username}
-            {memberSince ? <> · Member since {memberSince}</> : null}
-          </p>
-          {editingField === "username" ? (
-            <div className="profile-inline-actions profile-username-edit">
-              <label htmlFor="profile-username">Username</label>
-              <input id="profile-username" className="profile-inline-input" autoFocus value={draft} maxLength={44}
-                disabled={savingField} onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => { if (event.key === "Enter") void saveField(); if (event.key === "Escape") cancelEdit(); }} />
-              <Button variant="primary" disabled={savingField} onClick={() => void saveField()}>Save username</Button>
-              <Button variant="quiet" disabled={savingField} onClick={cancelEdit}>Cancel</Button>
-              <span className="ws-muted">3–44 letters only. Usernames are public.</span>
-            </div>
-          ) : (
-            <button type="button" className="ws-inline-link" onClick={() => startEdit("username", profile.username)}>
-              Edit username
-            </button>
-          )}
-
-          {profile.role === "student" ? (
-            <p className="profile-header-meta">
-              {LANGUAGE_LABEL[profile.enrolled_language] || profile.enrolled_language} track · Year {profile.year_level} · Semester {profile.semester}{" "}
-              <button
-                type="button"
-                className="ws-inline-link"
-                onClick={() => {
-                  if (!trackOpen) {
-                    setLanguage((profile.enrolled_language as ProgrammingLanguage) || "python");
-                    setYearLevel(profile.year_level || 1);
-                    setSemester(profile.semester || 1);
-                  }
-                  setTrackOpen((open) => !open);
-                }}
-              >
-                {trackOpen ? "Close" : "Edit track"}
-              </button>
-            </p>
-          ) : null}
-
-          {trackOpen && profile.role === "student" ? (
-            <div className="profile-track-edit">
-              <div className="profile-track-grid">
-                <label className="profile-track-field">
-                  <span>Learning language</span>
-                  <select value={language} onChange={(event) => setLanguage(event.target.value as ProgrammingLanguage)}>
-                    {LANGUAGES.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="profile-track-field">
-                  <span>Year level</span>
-                  <select value={yearLevel} onChange={(event) => setYearLevel(Number(event.target.value))}>
-                    {[1, 2, 3, 4].map((value) => <option key={value} value={value}>Year {value}</option>)}
-                  </select>
-                </label>
-                <label className="profile-track-field">
-                  <span>Semester</span>
-                  <select value={semester} onChange={(event) => setSemester(Number(event.target.value))}>
-                    {[1, 2].map((value) => <option key={value} value={value}>Semester {value}</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="ws-inline-actions" style={{ marginTop: 10 }}>
-                <Button variant="primary" disabled={trackSaving} onClick={() => void saveTrack()}>
-                  {trackSaving ? "Saving…" : "Save track"}
-                </Button>
-                <Button variant="quiet" disabled={trackSaving} onClick={() => setTrackOpen(false)}>Cancel</Button>
-              </div>
-            </div>
-          ) : null}
-
-          {editingField === "bio" ? (
-            <div style={{ marginTop: 10 }}>
-              <textarea
-                className="profile-inline-textarea"
-                aria-label="Bio"
-                autoFocus
-                rows={3}
-                maxLength={500}
-                value={draft}
-                disabled={savingField}
-                placeholder="A short line about you"
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") cancelEdit();
-                }}
-              />
-              <div className="profile-inline-actions">
-                <Button variant="primary" disabled={savingField} onClick={() => void saveField()}>
-                  {savingField ? "Saving…" : "Save bio"}
-                </Button>
-                <Button variant="quiet" disabled={savingField} onClick={cancelEdit}>Cancel</Button>
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="profile-editable profile-bio"
-              data-tooltip="Click to edit your bio"
-              onClick={() => startEdit("bio", profile.bio || "")}
-            >
-              <span className={profile.bio ? "" : "ws-muted"}>{profile.bio || "Add a short introduction — optional"}</span>
-              <span className="profile-edit-pencil" aria-hidden="true">✎</span>
-            </button>
-          )}
-        </div>
-      </section>
+        )}
+      />
 
       <nav className="profile-tabs" aria-label="Profile sections">
         <Link href="/profile" scroll={false} aria-current={activeTab === "overview" ? "page" : undefined}>Overview</Link>
         <Link href="/profile?tab=activity" scroll={false} aria-current={activeTab === "activity" ? "page" : undefined}>{activityLabel}</Link>
         <Link href="/profile?tab=account" scroll={false} aria-current={activeTab === "account" ? "page" : undefined}>Account</Link>
       </nav>
-
-      {activeTab === "overview" && !profileTipsDismissed && COMPLETE_STEPS.some((step) => !done[step.key]) ? (
-        <section className="profile-setup-card" aria-labelledby="profile-tips-title">
-          <div className="profile-setup-copy">
-            <p className="eyebrow-label">OPTIONAL PROFILE TIPS</p>
-            <h2 id="profile-tips-title">Make ByteQuest feel more personal</h2>
-            <p>These details help ByteQuest address you clearly. They never affect access, grades, or permissions.</p>
-          </div>
-          <ul className="profile-complete-list">
-            {COMPLETE_STEPS.filter((step) => !done[step.key]).map((step) => (
-              <li key={step.key}>
-                <button type="button" onClick={() => actOnStep(step.key)}>{step.label}</button>
-              </li>
-            ))}
-          </ul>
-          <div className="profile-setup-footer">
-            <span>Profile photo is always optional.</span>
-            <button type="button" className="ws-inline-link" onClick={dismissProfileTips}>Not now</button>
-          </div>
-        </section>
-      ) : null}
 
       {activeTab !== "account" && analyticsLoading ? (
         <section className="ws-panel" role="status" aria-label="Loading profile analytics">
@@ -1155,17 +917,13 @@ function ProfilePageContent() {
       {activeTab === "overview" && analytics?.instructor ? <InstructorOverview a={analytics.instructor} /> : null}
       {activeTab === "overview" && analytics?.admin ? <AdminOverview a={analytics.admin} /> : null}
 
+      {activeTab === "activity" && profile.role === "student" ? <DebuggerCodex userId={profile.id} /> : null}
       {activeTab === "activity" && analytics?.student ? <StudentSections a={analytics.student} /> : null}
       {activeTab === "activity" && analytics?.instructor ? <InstructorSections a={analytics.instructor} /> : null}
       {activeTab === "activity" && analytics?.admin ? <AdminSections a={analytics.admin} /> : null}
 
       {activeTab === "account" ? (
-        <AccountPanel
-          profile={profile}
-          memberSince={memberSince}
-          profileTipsDismissed={profileTipsDismissed}
-          onRestoreProfileTips={restoreProfileTips}
-        />
+        <AccountPanel profile={profile} memberSince={memberSince} />
       ) : null}
 
       <ConfirmDialog

@@ -9,6 +9,7 @@ import { ConfirmDialog, StatusChip } from "@/components/workspace/ui";
 import { apiRequest, getErrorMessage } from "@/lib/api";
 import { splitProblemStatement } from "@/lib/problem-statement";
 import { getSupabase } from "@/lib/supabase";
+import { newRequestId } from "@/lib/network";
 import type { Evaluation, EvaluationTestResult, Profile, Quest } from "@/lib/types";
 
 const Editor = dynamic(() => import("@monaco-editor/react"), {
@@ -353,7 +354,7 @@ export default function Arena({ activityId }: { activityId: string }) {
     setAnnouncement(dryRun ? "Running your code on the sample cases." : "Submitting your code for official grading.");
     try {
       const pendingKey = `bytequest:pending-job:${quest.id}:${dryRun ? "sample" : "official"}`;
-      let idempotencyKey = crypto.randomUUID();
+      let idempotencyKey = newRequestId();
       try {
         const previous = JSON.parse(window.sessionStorage.getItem(pendingKey) || "null") as
           { sourceCode?: string; key?: string } | null;
@@ -409,7 +410,7 @@ export default function Arena({ activityId }: { activityId: string }) {
     try {
       const hint = await apiRequest<{ body: string; remaining: number }>(`/pilot/activities/${quest.id}/hints/reveal`, {
         method: "POST",
-        body: JSON.stringify({ source: "ai", request_key: crypto.randomUUID() }),
+        body: JSON.stringify({ source: "ai", request_key: newRequestId() }),
       });
       setAiHint(hint.body);
       setAnnouncement(`AI hint ready. ${hint.remaining} hint ${hint.remaining === 1 ? "use" : "uses"} left.`);
@@ -429,7 +430,7 @@ export default function Arena({ activityId }: { activityId: string }) {
     try {
       await apiRequest(`/pilot/activities/${quest.id}/hints/reveal`, {
         method: "POST",
-        body: JSON.stringify({ source: "reviewed", hint_id: hintId, request_key: crypto.randomUUID() }),
+        body: JSON.stringify({ source: "reviewed", hint_id: hintId, request_key: newRequestId() }),
       });
       const next = await apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`);
       setHintStatus(next);
@@ -540,7 +541,7 @@ export default function Arena({ activityId }: { activityId: string }) {
           </nav>
 
           <header className="arena-head">
-            <p className="eyebrow-label">Code challenge · {languageName}</p>
+            <p className="eyebrow-label">Quest #{quest.sequence_order} · Code challenge · {languageName}</p>
             <h1 id="arena-title">{quest.title || "Untitled challenge"}</h1>
             <ul className="arena-facts" aria-label="Challenge details">
               <li className="tag">{quest.topic_concept}</li>
@@ -697,6 +698,7 @@ export default function Arena({ activityId }: { activityId: string }) {
                 disabled={actionsBlocked}
                 aria-disabled={busy !== ""}
                 aria-describedby="arena-run-help"
+                data-tooltip="Check the example test cases without recording an attempt."
               >
                 {busy === "run" ? "Running…" : "Run sample"}
               </button>
@@ -710,6 +712,7 @@ export default function Arena({ activityId }: { activityId: string }) {
                 disabled={actionsBlocked || Boolean(quest.is_closed)}
                 aria-disabled={busy !== ""}
                 aria-describedby="arena-submit-help"
+                data-tooltip={quest.is_closed ? undefined : "Check all test cases and record an official attempt."}
               >
                 {busy === "submit" ? "Submitting…" : "Submit for grading"}
               </button>

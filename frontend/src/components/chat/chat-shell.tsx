@@ -145,6 +145,7 @@ export function ChatShell() {
           type="button"
           className="button button-outline bq-chat-action"
           aria-label={open ? "Close Chat Assistant" : "Open Chat Assistant"}
+          data-tooltip={open ? "Hide the chat panel and keep your conversation." : "Ask for a concept explanation or a hint while you practice."}
           aria-expanded={open}
           onClick={() => open ? closePanel() : setOpen(true)}
         >
@@ -189,7 +190,7 @@ export function ChatShell() {
               <div className="chat-window-actions">
                 <button
                   type="button"
-                  className="chat-window-btn"
+                  className="chat-window-btn chat-window-minimize"
                   aria-label="Minimize chat"
                   data-tooltip="Minimize chat. The conversation is kept."
                   onClick={closePanel}

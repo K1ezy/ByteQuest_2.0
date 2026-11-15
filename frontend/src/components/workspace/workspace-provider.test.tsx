@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { AppShell } from "@/components/app-shell";
 import { authReturnTo, questRedirect } from "@/lib/navigation";
 import type { Profile } from "@/lib/types";
@@ -15,21 +15,36 @@ const admin = { role: "admin", enrolled_language: "python" } as Profile;
 const student = { ...admin, role: "student" } as Profile;
 afterEach(cleanup);
 
-it("renders role-specific navigation and closes it on selection or Escape", () => {
+it("renders the role's destinations once, with the current page marked", () => {
   render(<AppShell profile={admin}><p>Course screen</p></AppShell>);
-  const toggle = screen.getByRole("button", { name: "Menu" });
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  fireEvent.click(toggle);
-  const target = screen.getByRole("link", { name: "Course & Instructor Management" });
+  // One navigation landmark serves as the desktop sidebar and the phone tab bar.
+  const navigation = screen.getByRole("navigation", { name: "Administrator navigation" });
+  expect(within(navigation).getAllByRole("link")).toHaveLength(5);
+  const target = within(navigation).getByRole("link", { name: /^Course & Instructor Management/ });
   expect(target.getAttribute("aria-current")).toBe("page");
-  expect(screen.queryByRole("link", { name: "Quest Map" })).toBeNull();
-  fireEvent.keyDown(target, { key: "Escape" });
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  expect(document.activeElement).toBe(toggle);
-  fireEvent.click(toggle);
-  target.addEventListener("click", event => event.preventDefault(), { once: true });
-  fireEvent.click(target);
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(within(target).getByText("Courses")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /Quest Map/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Menu" })).toBeNull();
+});
+
+it("opens the account menu and closes it on Escape or a tap outside", () => {
+  render(<AppShell profile={student}><p>Quest screen</p></AppShell>);
+  const trigger = screen.getByRole("button", { name: "Account" });
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("link", { name: "Profile" })).toBeNull();
+
+  fireEvent.click(trigger);
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  const panel = screen.getByRole("region", { name: "Account" });
+  expect(within(panel).getByRole("link", { name: "Profile" }).getAttribute("href")).toBe("/profile");
+  expect(within(panel).getByText("PYTHON")).toBeTruthy();
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(trigger);
+
+  fireEvent.click(trigger);
+  fireEvent.pointerDown(screen.getByText("Quest screen"));
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
 });
 
 it("keeps exam return paths internal and role appropriate", () => {

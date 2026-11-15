@@ -10,7 +10,10 @@ from __future__ import annotations
 import base64
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Barrier
+from types import SimpleNamespace
 
 import jwt
 import anyio
@@ -19,10 +22,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api import pilot
 from app.api import chat as chat_api
+from app.api import reviews as reviews_api
 from app.core import quotas
 from app.core.config import settings
 from app.core.database import get_db
@@ -39,6 +44,14 @@ from app.models.entities import (
     TestCase as GradingCase,
     UserRole,
     Exam, ExamAttempt, ExamRetakeGrant, SubmissionJob, ResearchConsent,
+    Badge, ChallengeHint, ConceptReview, HintUse, PlatformSetting, StudentBadge,
+)
+from app.services.gamification.badges import evaluate_and_award_badges
+from app.services.gamification import progress_recap as recap_service
+from app.services.gamification.memory import REVIEW_INTERVAL_DAYS, REVIEW_XP
+from app.services.gamification.quiz_content import parse_quiz_questions
+from app.services.gamification.rollout import (
+    CODEX_UNLOCK_KEY, MEMORY_UNLOCK_KEY, UNLOCK_DEFAULTS, MechanicState, MechanicUnlock, mechanic_state,
 )
 from app.services.judge0.client import judge0_client
 from app.services.ai_rag.llm import GeminiAPIError
@@ -346,6 +359,16 @@ def test_instructor_gate_and_student_submission_contract(flow):
     published = client.patch(f"{path}/publish", headers=instructor)
     assert published.status_code == 200, published.text
     assert published.json()["review_status"] == "published"
+
+    with new_session() as db:
+        record = db.get(LearningActivity, activity_id)
+        publication = record.published_at
+        sequence = record.sequence_order
+    quest = next(row for row in client.get("/api/v1/quests", headers=student).json()
+                 if row["id"] == str(activity_id))
+    assert quest["sequence_order"] == sequence
+    assert datetime.fromisoformat(quest["added_at"]) == publication
+    assert quest["added_at_estimated"] is False
 
     dry_run = _graded_job(client, student, activity_id, "PRINT_INPUT", dry_run=True)
     assert dry_run["mode"] == "dry_run"
@@ -705,6 +728,11 @@ def test_exam_snapshot_autosave_and_result_embargo(flow, monkeypatch):
     assert client.get(f"/api/v1/exams/instructor/{exam_id}", headers=admin).status_code == 200
     published = client.post(f"/api/v1/exams/instructor/{exam_id}/publish", headers=instructor)
     assert published.status_code == 200, published.text
+    assigned_exam = next(item for item in client.get("/api/v1/exams", headers=student).json()
+                         if item["id"] == exam_id)
+    exam_detail = client.get(f"/api/v1/exams/{exam_id}", headers=student).json()
+    assert assigned_exam["exam_number"] == exam_detail["exam_number"] == 1
+    assert assigned_exam["added_at"] == exam_detail["added_at"] == published.json()["published_at"]
     with new_session() as db:
         exam = db.get(Exam, uuid.UUID(exam_id))
         exam.opens_at = now - timedelta(minutes=1)
@@ -1031,6 +1059,654 @@ def _published_activity(db: Session, activity_id: uuid.UUID) -> None:
     db.commit()
 
 
+def _ranked_student(db: Session, xp: int, *, handle: str | None = None,
+                    language: ProgrammingLang = ProgrammingLang.python, status: str = "active") -> Profile:
+    user_id = uuid.uuid4()
+    db.execute(
+        text("INSERT INTO auth.users (id, instance_id, aud, role, email, encrypted_password) "
+             "VALUES (:id, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', :email, '')"),
+        {"id": user_id, "email": f"ranked-{user_id.hex}@example.test"},
+    )
+    profile = Profile(id=user_id, pseudonym_id=f"test_{user_id.hex}", role=UserRole.student, year_level=1,
+                      semester=1, enrolled_language=language, xp_points=xp, current_level=2, account_status=status)
+    if handle:
+        profile.username = handle
+    db.add(profile)
+    db.flush()
+    return profile
+
+
+def _letters(prefix: str) -> str:
+    return prefix + uuid.uuid4().hex[:12].translate(str.maketrans("0123456789", "ghijklmnop"))
+
+
+def test_leaderboard_ranks_ties_hides_private_ids_and_reports_own_standing(flow):
+    client, new_session, users = flow
+    student_id = users["student"]
+    base = 1_500_000_000  # far above any local data, so these rows own the top ranks
+    alpha, gamma = _letters("alpha"), _letters("gamma")
+    with new_session() as db:
+        leader = _ranked_student(db, base + 30, handle=alpha)
+        unnamed = _ranked_student(db, base + 20)
+        tied = _ranked_student(db, base + 20, handle=gamma)
+        fourth = _ranked_student(db, base + 10, handle=_letters("delta"))
+        _ranked_student(db, base + 50, handle=_letters("gone"), status="deactivated")
+        _ranked_student(db, base + 60, handle=_letters("java"), language=ProgrammingLang.java)
+        unnamed_username, unnamed_pseudonym = unnamed.username, unnamed.pseudonym_id
+        # Equal XP is ordered by id, so the two rank-2 rows come back in id order.
+        tie_order = [None if row_id == unnamed.id else gamma for row_id in sorted([unnamed.id, tied.id])]
+        expected_handles = [alpha, *tie_order, fourth.username]
+        db.commit()
+
+    response = client.get("/api/v1/quests/leaderboard", headers=_token(student_id))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    top = body["entries"][:4]
+    assert [row["rank"] for row in top] == [1, 2, 2, 4]
+    assert [row["handle"] for row in top] == expected_handles
+    assert all(set(row) == {"rank", "handle", "xp_points", "current_level", "is_me"} for row in body["entries"])
+    assert unnamed_username not in response.text and unnamed_pseudonym not in response.text
+    assert all(row["xp_points"] > 0 and not row["is_me"] for row in body["entries"])
+    assert body["you"] == {"rank": None, "handle": None, "xp_points": 0, "current_level": 1}
+    assert body["track"] == "python"
+
+    with new_session() as db:
+        for _ in range(7):  # 4 + 7 learners ahead push the caller out of the top 10
+            _ranked_student(db, base + 1)
+        me = db.get(Profile, student_id)
+        me.xp_points = 5
+        db.commit()
+    with new_session() as db:
+        ahead = db.query(func.count(Profile.id)).filter(
+            Profile.role == UserRole.student, Profile.enrolled_language == ProgrammingLang.python,
+            Profile.account_status == "active", Profile.xp_points > 5).scalar()
+        ranked = db.query(func.count(Profile.id)).filter(
+            Profile.role == UserRole.student, Profile.enrolled_language == ProgrammingLang.python,
+            Profile.account_status == "active", Profile.xp_points > 0).scalar()
+    body = client.get("/api/v1/quests/leaderboard", headers=_token(student_id)).json()
+    assert len(body["entries"]) == 10 and not any(row["is_me"] for row in body["entries"])
+    assert body["you"]["rank"] == ahead + 1
+    assert body["total_ranked"] == ranked
+
+    with new_session() as db:
+        db.get(Profile, student_id).xp_points = base + 40
+        db.commit()
+    body = client.get("/api/v1/quests/leaderboard", headers=_token(student_id)).json()
+    assert body["entries"][0]["is_me"] is True and body["entries"][0]["rank"] == 1
+    assert body["you"]["rank"] == 1
+    assert body["entries"][1]["rank"] == 2 and body["entries"][1]["handle"] == alpha
+
+
+def _reveal_reviewed_hint(client: TestClient, headers: dict[str, str], new_session, activity_id: uuid.UUID) -> None:
+    with new_session() as db:
+        hint = ChallengeHint(activity_id=activity_id, slot=1, body="Think about what input() returns.")
+        db.add(hint)
+        db.commit()
+        hint_id = hint.id
+    revealed = client.post(f"/api/v1/pilot/activities/{activity_id}/hints/reveal", headers=headers,
+                           json={"source": "reviewed", "hint_id": str(hint_id), "request_key": f"hint-{uuid.uuid4().hex}"})
+    assert revealed.status_code == 200, revealed.text
+
+
+def test_solve_quality_stars_help_pattern_and_level_up(flow, monkeypatch):
+    client, new_session, users = flow
+    # Eight official submissions in one test; the per-minute limit is covered by its own tests.
+    monkeypatch.setitem(quotas.POLICIES, "official_submit", (quotas.Rule("official_submit", "account", "minute", 50),))
+    student = _token(users["student"])
+    with new_session() as db:
+        ids = {name: _challenge(db, users["instructor"], reference="PRINT_INPUT") for name in ("clean", "hinted", "tried", "slow")}
+        for activity_id in ids.values():
+            _published_activity(db, activity_id)
+        me = db.get(Profile, users["student"])
+        me.xp_points, me.current_level = 240, 1  # the first pass (+40 XP) crosses the 250 XP level line
+        db.commit()
+
+    def submit(name: str, source: str) -> dict:
+        return _graded_job(client, student, ids[name], source)
+
+    clean = submit("clean", "PRINT_INPUT")
+    assert clean["quality"] == {"stars": 3, "max_stars": 3, "hints_before": 0, "self_solved": True}
+    assert clean["level_up"] is True and clean["new_level"] >= 2
+
+    _reveal_reviewed_hint(client, student, new_session, ids["hinted"])  # help before any try
+    failed = submit("hinted", "FAIL")
+    assert failed["quality"]["stars"] == 0 and failed["level_up"] is False
+    assert submit("hinted", "PRINT_INPUT")["quality"] == {"stars": 1, "max_stars": 3, "hints_before": 1, "self_solved": False}
+
+    submit("tried", "FAIL")
+    _reveal_reviewed_hint(client, student, new_session, ids["tried"])  # help after a genuine attempt
+    assert submit("tried", "PRINT_INPUT")["quality"]["stars"] == 1
+
+    submit("slow", "FAIL")
+    submit("slow", "FAIL # second try")  # identical code would be de-duplicated as a double submit
+    assert submit("slow", "PRINT_INPUT")["quality"]["stars"] == 2  # independent, outside the mastery window
+
+    quests = {row["id"]: row for row in client.get("/api/v1/quests", headers=student).json()}
+    assert {name: quests[str(activity_id)]["stars"] for name, activity_id in ids.items()} == {
+        "clean": 3, "hinted": 1, "tried": 1, "slow": 2}
+
+    pattern = client.get("/api/v1/profile/me/analytics", headers=student).json()["student"]["help_pattern"]
+    assert pattern == {"challenges_solved": 4, "self_solved": 2, "three_star": 1,
+                       "hinted_challenges": 2, "tried_before_hint": 1}
+
+
+def test_badge_awards_are_idempotent_and_grant_their_bonus_once(flow):
+    _, new_session, users = flow
+    with new_session() as db:
+        badge = Badge(code=_letters("TESTBADGE")[:60].upper(), name="Regression Badge", description="Test only",
+                      icon_url="", xp_bonus=15, criteria_json={"metric": "xp_points", "threshold": 1})
+        db.add(badge)
+        student = db.get(Profile, users["student"])
+        student.xp_points = 10
+        db.commit()
+        badge_id = badge.id
+
+        first = evaluate_and_award_badges(db, db.get(Profile, users["student"]))
+        db.commit()
+        xp_after_first = db.get(Profile, users["student"]).xp_points
+        second = evaluate_and_award_badges(db, db.get(Profile, users["student"]))
+        db.commit()
+
+        assert "Regression Badge" in first and "Regression Badge" not in second
+        assert second == []
+        assert db.get(Profile, users["student"]).xp_points == xp_after_first
+        assert db.query(func.count(StudentBadge.id)).filter(
+            StudentBadge.student_id == users["student"], StudentBadge.badge_id == badge_id).scalar() == 1
+
+
+def test_codex_recovers_distinct_practice_errors_on_the_first_pass(flow):
+    client, new_session, users = flow
+    student = _token(users["student"])
+    with new_session() as db:
+        db.get(PlatformSetting, CODEX_UNLOCK_KEY).value = 0
+        challenge = _challenge(db, users["instructor"])
+        _published_activity(db, challenge)
+        now = datetime.now(timezone.utc)
+        db.add(SubmissionJob(
+            student_id=users["student"], activity_id=challenge, idempotency_key="syntax",
+            source_code="test", dry_run_only=True, status="completed",
+            result_json={"evaluation": {"dominant_error_category": "syntax_error"}},
+            created_at=now - timedelta(seconds=1),
+        ))
+        db.commit()
+
+    assert _graded_job(client, student, challenge, "FAIL first")["codex_recoveries"] == []
+    _graded_job(client, student, challenge, "FAIL second")
+    result = _graded_job(client, student, challenge, "pass third")
+    assert result["codex_recoveries"] == [
+        {"category": "syntax_error", "label": "Syntax"},
+        {"category": "logic_error", "label": "Logic"},
+    ]
+    assert "Comeback" in result["new_badges_unlocked"]
+    _graded_job(client, student, challenge, "FAIL after pass")
+    with new_session() as db:
+        db.add(SubmissionJob(
+            student_id=users["student"], activity_id=challenge, idempotency_key="new-error-after-pass",
+            source_code="timeout", dry_run_only=True, status="completed",
+            result_json={"evaluation": {"dominant_error_category": "timeout"}},
+        ))
+        db.commit()
+    again = _graded_job(client, student, challenge, "pass again")
+    assert again["codex_recoveries"] == []
+    assert again["xp_awarded"] == 0
+    assert "Comeback" not in again["new_badges_unlocked"]
+
+    codex = client.get("/api/v1/quests/codex", headers=student).json()
+    assert (codex["total_recoveries"], codex["comebacks"]) == (2, 1)
+    assert [(row["tier"], row["next_tier_at"]) for row in codex["categories"]] == [
+        (1, 3), (1, 3), (0, 1), (0, 1)
+    ]
+    assert client.get("/api/v1/quests/codex", headers=_token(users["instructor"])).status_code == 403
+    with new_session() as db:
+        job = db.query(SubmissionJob).filter_by(student_id=users["student"], source_code="pass third").one()
+        job_id = str(job.id)
+        assert job.result_json["codex_recoveries"] == result["codex_recoveries"]
+        db.get(PlatformSetting, CODEX_UNLOCK_KEY).value = UNLOCK_DEFAULTS[CODEX_UNLOCK_KEY]
+        db.commit()
+    assert client.get(f"/api/v1/submission-jobs/{job_id}", headers=student).json()["result"]["codex_recoveries"] == []
+
+
+def test_mastery_map_matches_quest_visibility_and_orders_concepts(flow):
+    client, new_session, users = flow
+    student = _token(users["student"])
+    with new_session() as db:
+        own = _challenge(db, users["instructor"])
+        sibling = _quiz(db, users["instructor"])
+        first = _quiz(db, users["instructor"])
+        last = _quiz(db, users["instructor"])
+        draft = _quiz(db, users["instructor"])
+        other = _quiz(db, users["instructor"])
+        future = _quiz(db, users["instructor"])
+        for activity_id, name, sequence in [
+            (own, "BQ Loops", 3), (sibling, "BQ Loops", 6), (first, "BQ Basics", 3),
+            (last, "BQ Values", 8), (draft, "BQ Draft", 1), (other, "BQ Other", 1), (future, "BQ Future", 1),
+        ]:
+            activity = db.get(LearningActivity, activity_id)
+            activity.topic_concept, activity.sequence_order = name, sequence
+            if activity_id != draft:
+                activity.review_status = ReviewState.published
+            if activity_id == other:
+                activity.language = ProgrammingLang.java
+            if activity_id == future:
+                activity.opens_at = datetime.now(timezone.utc) + timedelta(days=1)
+        db.add(ActivityAttempt(student_id=users["student"], activity_id=first, attempt_number=1, is_successful=True))
+        db.add(SubmissionJob(
+            student_id=users["student"], activity_id=own, idempotency_key="map-syntax",
+            source_code="syntax", dry_run_only=True, status="completed",
+            result_json={"evaluation": {"dominant_error_category": "syntax_error"}},
+        ))
+        db.commit()
+    _graded_job(client, student, own, "FAIL practice", dry_run=True)
+    _graded_job(client, student, own, "FAIL practice again", dry_run=True)
+    _graded_job(client, student, own, "Pass practice")
+    mapped = client.get("/api/v1/quests/mastery-map", headers=student).json()
+    quests = client.get("/api/v1/quests", headers=student).json()
+    assert {activity_id for row in mapped["concepts"] for activity_id in row["activity_ids"]} == {q["id"] for q in quests}
+    rows = [row for row in mapped["concepts"] if row["concept"].startswith("BQ ")]
+    assert [row["concept"] for row in rows] == ["BQ Basics", "BQ Loops", "BQ Values"]
+    assert [(row["mastery_percent"], row["state"]) for row in rows] == [
+        (100, "mastered"), (50, "in_progress"), (0, "not_started"),
+    ]
+    assert rows[1]["average_stars"] == 3 and rows[1]["weak_spot"] == "logic_error"
+    assert rows[2]["average_stars"] is None and rows[2]["weak_spot"] is None
+
+
+def test_codex_ignores_exam_tries_and_awards_bug_hunter_once_at_five(flow):
+    client, new_session, users = flow
+    student = _token(users["student"])
+    now = datetime.now(timezone.utc)
+    with new_session() as db:
+        db.get(PlatformSetting, CODEX_UNLOCK_KEY).value = 0
+        exam = Exam(created_by=users["instructor"], title="Exam only", opens_at=now, closes_at=now + timedelta(hours=1), duration_minutes=30)
+        db.add(exam)
+        db.flush()
+        exam_attempt = ExamAttempt(
+            exam_id=exam.id, student_id=users["student"], attempt_number=1, started_at=now, due_at=exam.closes_at,
+        )
+        db.add(exam_attempt)
+        db.flush()
+        exam_id = exam_attempt.id
+        exam_challenge = _challenge(db, users["instructor"])
+        _published_activity(db, exam_challenge)
+        db.add(ActivityAttempt(
+            student_id=users["student"], activity_id=exam_challenge, attempt_number=1,
+            exam_attempt_id=exam_id, is_successful=False, error_category="runtime_error", created_at=now,
+        ))
+        db.commit()
+        student_profile = db.get(Profile, users["student"])
+        assert mechanic_state(db, student_profile, now + timedelta(days=10)).day == 0
+        db.add(ActivityAttempt(
+            student_id=users["student"], activity_id=exam_challenge, attempt_number=2,
+            exam_attempt_id=exam_id, is_successful=True, created_at=now + timedelta(seconds=1),
+        ))
+        db.add(ActivityAttempt(
+            student_id=users["student"], activity_id=exam_challenge, attempt_number=3,
+            is_successful=True, created_at=now + timedelta(seconds=2),
+        ))
+        db.commit()
+        assert client.get("/api/v1/quests/codex", headers=student).json()["comebacks"] == 0
+        assert client.get("/api/v1/quests/codex", headers=student).json()["total_recoveries"] == 0
+        for index in range(6):
+            activity_id = _challenge(db, users["instructor"])
+            _published_activity(db, activity_id)
+            db.add(SubmissionJob(
+                student_id=users["student"], activity_id=activity_id, idempotency_key=f"sample-{index}",
+                source_code="sample", dry_run_only=True, status="completed",
+                result_json={"evaluation": {"dominant_error_category": "logic_error"}}, created_at=now,
+            ))
+            db.add(ActivityAttempt(
+                student_id=users["student"], activity_id=activity_id, attempt_number=1,
+                is_successful=True, created_at=now + timedelta(seconds=1),
+            ))
+            db.flush()
+            awarded = evaluate_and_award_badges(db, student_profile)
+            assert ("Bug Hunter" in awarded) == (index == 4)
+            assert evaluate_and_award_badges(db, student_profile) == []
+            db.commit()
+            if index in (2, 5):
+                codex = client.get("/api/v1/quests/codex", headers=student).json()
+                logic = next(row for row in codex["categories"] if row["category"] == "logic_error")
+                assert (logic["tier"], logic["next_tier_at"]) == ((2, 6) if index == 2 else (3, None))
+                assert logic["topics"] == ["Regression checks"]
+                assert datetime.fromisoformat(logic["first_recovered_at"]) == now + timedelta(seconds=1)
+        badge = db.query(Badge).filter_by(code="BUG_HUNTER").one()
+        assert badge.xp_bonus == 50
+        assert db.query(StudentBadge).filter_by(student_id=users["student"], badge_id=badge.id).count() == 1
+        legacy_bonuses = db.query(func.sum(Badge.xp_bonus)).join(StudentBadge).filter(
+            StudentBadge.student_id == users["student"], Badge.id != badge.id
+        ).scalar() or 0
+        assert student_profile.xp_points == legacy_bonuses + badge.xp_bonus
+
+
+def test_challenge_with_no_test_cases_records_no_practice_or_codex_progress(flow):
+    client, new_session, users = flow
+    student = _token(users["student"])
+    with new_session() as db:
+        db.get(PlatformSetting, CODEX_UNLOCK_KEY).value = 0
+        activity = LearningActivity(
+            created_by=users["instructor"], activity_type=ActivityKind.challenge, language=ProgrammingLang.python,
+            topic_concept="Without tests", title="No cases", review_status=ReviewState.published,
+        )
+        db.add(activity)
+        db.commit()
+        activity_id = str(activity.id)
+    accepted = client.post("/api/v1/submission-jobs", headers={**student, "Idempotency-Key": "zero-test-cases"},
+                           json={"activity_id": activity_id, "source_code": "print('test')"})
+    assert accepted.status_code == 202, accepted.text
+    job_id = accepted.json()["id"]
+    anyio.run(anyio.to_thread.run_sync, submission_worker.run_one, job_id)
+    after = client.get(f"/api/v1/submission-jobs/{job_id}", headers=student).json()
+    assert after["status"] == "failed" and after["result"] is None
+    assert client.get("/api/v1/quests/codex", headers=student).json()["total_recoveries"] == 0
+    assert client.get("/api/v1/gamification/state", headers=student).json()["codex"]["unlocks_on"] is None
+    with new_session() as db:
+        assert db.query(ActivityAttempt).filter_by(student_id=users["student"]).count() == 0
+
+
+def _recall_concept(new_session, users, now):
+    with new_session() as db:
+        db.get(PlatformSetting, MEMORY_UNLOCK_KEY).value = 0
+        quizzes = [_quiz(db, users["instructor"]) for _ in range(3)]
+        for quiz_id in quizzes:
+            quiz = db.get(LearningActivity, quiz_id)
+            quiz.topic_concept = "BQ Recall"
+            quiz.review_status = ReviewState.published
+        smaller = _quiz(db, users["instructor"])
+        quiz = db.get(LearningActivity, smaller)
+        quiz.topic_concept = "BQ Too Few Questions"
+        quiz.review_status = ReviewState.published
+        # Two questions: below the three-question floor for a recall.
+        quiz.quiz_questions_json = {"questions": quiz.quiz_questions_json["questions"][:2]}
+        db.add_all([
+            ActivityAttempt(
+                student_id=users["student"], activity_id=quiz_id, attempt_number=1,
+                is_successful=True, created_at=now - timedelta(days=REVIEW_INTERVAL_DAYS[0]),
+            ) for quiz_id in [quizzes[0], smaller]
+        ])
+        db.commit()
+
+
+def test_three_question_concept_gets_a_short_recall_with_a_two_thirds_bar(flow, monkeypatch):
+    client, new_session, users = flow
+    now = datetime.now(timezone.utc)
+    with new_session() as db:
+        db.get(PlatformSetting, MEMORY_UNLOCK_KEY).value = 0
+        quiz_id = _quiz(db, users["instructor"])  # one quiz, three questions, like the seeded course content
+        quiz = db.get(LearningActivity, quiz_id)
+        quiz.topic_concept = "BQ Short Recall"
+        quiz.review_status = ReviewState.published
+        db.add(ActivityAttempt(student_id=users["student"], activity_id=quiz_id, attempt_number=1,
+                               is_successful=True, created_at=now - timedelta(days=REVIEW_INTERVAL_DAYS[0])))
+        db.commit()
+    monkeypatch.setattr(reviews_api, "_utcnow", lambda: now)
+    student = _token(users["student"])
+
+    start = client.post("/api/v1/reviews/start", json={"concept": "BQ Short Recall"}, headers=student)
+    assert start.status_code == 200, start.text
+    ids = [question["id"] for question in start.json()["questions"]]
+    assert len(ids) == 3
+    answers = {key: "B" if index == 0 else "A" for index, key in enumerate(ids)}
+    result = client.post(f"/api/v1/reviews/{start.json()['id']}/submit", json={"answers": answers}, headers=student)
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert (body["correct"], body["total"], body["passed"], body["xp_awarded"]) == (2, 3, True, REVIEW_XP)
+
+
+def test_review_is_due_and_private_and_replays_the_same_result(flow, monkeypatch):
+    client, new_session, users = flow
+    now = datetime.now(timezone.utc)
+    _recall_concept(new_session, users, now)
+    monkeypatch.setattr(reviews_api, "_utcnow", lambda: now - timedelta(seconds=1))
+    student = _token(users["student"])
+    request = {"concept": "BQ Recall"}
+    assert client.post("/api/v1/reviews/start", json=request, headers=student).status_code == 409
+    monkeypatch.setattr(reviews_api, "_utcnow", lambda: now)
+    overview = client.get("/api/v1/reviews", headers=student).json()
+    assert [row["concept"] for row in overview["concepts"]] == ["BQ Recall"]
+    assert overview["due_count"] == 1
+    assert overview["concepts"][0]["state"] == "due"
+    assert client.get("/api/v1/reviews", headers=_token(users["instructor"])).status_code == 403
+    assert client.get("/api/v1/reviews", headers=_token(users["other_track"])).json()["concepts"] == []
+    mapped = client.get("/api/v1/quests/mastery-map", headers=student).json()
+    assert next(row for row in mapped["concepts"] if row["concept"] == "BQ Recall")["memory"]["stage"] == 0
+
+    start = client.post("/api/v1/reviews/start", json=request, headers=student)
+    assert start.status_code == 200, start.text
+    assert client.post("/api/v1/reviews/start", json=request, headers=student).json() == start.json()
+    assert "correct_answer" not in start.text
+    review_id = start.json()["id"]
+    path = f"/api/v1/reviews/{review_id}"
+    assert client.get(path, headers=_token(users["other_track"])).status_code == 404
+    with new_session() as db:
+        refs = db.get(ConceptReview, uuid.UUID(review_id)).question_refs
+        assert len({ref["activity_id"] for ref in refs[:3]}) == 3
+    ids = [question["id"] for question in start.json()["questions"]]
+    bad = {key: "unknown" for key in ids}
+    assert client.post(f"{path}/submit", json={"answers": bad}, headers=student).status_code == 422
+    answers = {key: "B" if i == 0 else "A" for i, key in enumerate(ids)}
+    response = client.post(f"{path}/submit", json={"answers": answers}, headers=student)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert (result["correct"], result["passed"], result["xp_awarded"], result["stage"]) == (3, True, REVIEW_XP, 1)
+    assert datetime.fromisoformat(result["next_due_at"]) == now + timedelta(days=REVIEW_INTERVAL_DAYS[1])
+    assert client.post(f"{path}/submit", json={"answers": bad}, headers=student).json() == result
+    assert client.get(path, headers=student).json()["result"] == result
+
+    with new_session() as db:
+        assert db.query(ActivityAttempt).filter_by(student_id=users["student"]).count() == 2
+        assert db.get(Profile, users["student"]).xp_points == result["new_total_xp"]
+        original = db.get(ConceptReview, uuid.UUID(review_id))
+        with pytest.raises(IntegrityError), db.begin_nested():
+            db.add(ConceptReview(
+                student_id=original.student_id, language=original.language, concept=original.concept,
+                stage=original.stage, status="passed", question_refs=refs, answers_json=original.answers_json,
+                correct=original.correct, total=original.total, xp_awarded=REVIEW_XP, submitted_at=now,
+            ))
+            db.flush()
+        db.get(Profile, users["student"]).enrolled_language = ProgrammingLang.java
+        db.commit()
+    assert client.get(path, headers=student).status_code == 404
+
+
+def test_review_steps_down_on_a_miss_then_refreshes_stage_three_without_extra_xp(flow, monkeypatch):
+    client, new_session, users = flow
+    student = _token(users["student"])
+    now = datetime.now(timezone.utc)
+    _recall_concept(new_session, users, now)
+    monkeypatch.setattr(reviews_api, "_utcnow", lambda: now)
+
+    def grade(answer):
+        started = client.post("/api/v1/reviews/start", json={"concept": "BQ Recall"}, headers=student)
+        assert started.status_code == 200, started.text
+        review_id = started.json()["id"]
+        answers = {question["id"]: answer for question in started.json()["questions"]}
+        response = client.post(f"/api/v1/reviews/{review_id}/submit", json={"answers": answers}, headers=student)
+        assert response.status_code == 200, response.text
+        with new_session() as db:
+            refs = db.get(ConceptReview, uuid.UUID(review_id)).question_refs
+        return response.json(), {(ref["activity_id"], ref["question_index"]) for ref in refs}
+
+    first, first_refs = grade("A")
+    now = datetime.fromisoformat(first["next_due_at"])
+    miss, miss_refs = grade("B")
+    assert first_refs.isdisjoint(miss_refs)
+    assert (miss["passed"], miss["stage"], miss["next_check_days"], miss["xp_awarded"]) == (False, 0, 1, 0)
+    now = datetime.fromisoformat(miss["next_due_at"])
+    retry, _ = grade("A")
+    assert (retry["passed"], retry["stage"], retry["xp_awarded"]) == (True, 1, 0)
+
+    for stage in range(1, len(REVIEW_INTERVAL_DAYS)):
+        now = datetime.fromisoformat(retry["next_due_at"])
+        retry, _ = grade("A")
+        assert (retry["stage"], retry["xp_awarded"]) == (min(stage + 1, 3), REVIEW_XP)
+    overview = client.get("/api/v1/reviews", headers=student).json()
+    assert overview["concepts"][0]["state"] == "long_term"
+    now = datetime.fromisoformat(retry["next_due_at"]) + timedelta(days=REVIEW_INTERVAL_DAYS[3])
+    assert client.get("/api/v1/reviews", headers=student).json()["concepts"][0]["state"] == "fading"
+    maintenance, _ = grade("A")
+    assert (maintenance["passed"], maintenance["stage"], maintenance["xp_awarded"]) == (True, 3, 0)
+    with new_session() as db:
+        assert db.query(ConceptReview).filter(
+            ConceptReview.student_id == users["student"], ConceptReview.xp_awarded > 0,
+        ).count() == len(REVIEW_INTERVAL_DAYS)
+
+
+def test_simultaneous_review_starts_and_submissions_share_one_xp_award(flow, monkeypatch):
+    _, new_session, users = flow
+    student_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    with new_session() as fixture_db:
+        engine = fixture_db.get_bind().engine
+        quiz_ids = [_quiz(fixture_db, users["instructor"]) for _ in range(2)]
+        quizzes = {key: parse_quiz_questions(fixture_db.get(LearningActivity, key).quiz_questions_json) for key in quiz_ids}
+    concept = "Concurrent recall"
+    activities = [SimpleNamespace(id=key, topic_concept=concept) for key in quiz_ids]
+    # Use independent PostgreSQL sessions for the actual row locks. Only the
+    # rolled-back fixture's content inputs are supplied in memory to these sessions.
+    monkeypatch.setattr(reviews_api, "visible_concept_activities", lambda *_args, **_kwargs: (activities, quizzes))
+    monkeypatch.setattr(reviews_api, "first_visible_completions",
+                        lambda *_args: {quiz_ids[0]: now - timedelta(days=REVIEW_INTERVAL_DAYS[0])})
+    enabled = MechanicUnlock(unlocked=True, unlock_day=0, unlocks_on=None)
+    monkeypatch.setattr(reviews_api, "mechanic_state", lambda *_args: MechanicState(day=2, codex=enabled, memory=enabled))
+
+    with Session(engine) as db:
+        db.execute(text(
+            "INSERT INTO auth.users (id, aud, role, email, encrypted_password) "
+            "VALUES (:id, 'authenticated', 'authenticated', :email, '')"
+        ), {"id": student_id, "email": f"recall-concurrent-{student_id.hex}@example.test"})
+        db.add(Profile(id=student_id, pseudonym_id=f"test_{student_id.hex}", role=UserRole.student, enrolled_language=ProgrammingLang.python))
+        db.commit()
+
+    def race(operation):
+        barrier = Barrier(2)
+
+        def call():
+            with Session(engine) as db:
+                student = db.get(Profile, student_id)
+                barrier.wait(timeout=10)
+                return operation(db, student)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            calls = [pool.submit(call) for _ in range(2)]
+            return [task.result(timeout=15) for task in calls]
+
+    try:
+        started, repeated = race(lambda db, student: reviews_api.start_review(
+            reviews_api.StartReviewRequest(concept=concept), student, db,
+        ))
+        assert started == repeated
+        answers = reviews_api.SubmitReviewRequest(answers={question.id: "A" for question in started.questions})
+        result, retry = race(lambda db, student: reviews_api.submit_review(started.id, answers, student, db))
+        assert result == retry
+        assert result.xp_awarded == REVIEW_XP and result.new_total_xp == REVIEW_XP
+        with Session(engine) as db:
+            assert db.query(ConceptReview).filter_by(student_id=student_id).count() == 1
+            assert db.get(Profile, student_id).xp_points == REVIEW_XP
+    finally:
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM auth.users WHERE id = :id"), {"id": student_id})
+
+
+def test_rollout_uses_manila_day_boundaries_and_keeps_locked_data_private(flow, monkeypatch):
+    from app.services.gamification import rollout
+
+    client, new_session, users = flow
+    first = datetime(2026, 11, 10, 15, 59, tzinfo=timezone.utc)
+    now = first
+    monkeypatch.setattr(rollout, "_utcnow", lambda: now)
+    monkeypatch.setattr(reviews_api, "_utcnow", lambda: now)
+    student = _token(users["student"])
+    state_path = "/api/v1/gamification/state"
+    with new_session() as db:
+        for key, default in UNLOCK_DEFAULTS.items():
+            db.get(PlatformSetting, key).value = default
+        db.commit()
+
+    empty = client.get(state_path, headers=student).json()
+    assert empty["day"] == 0
+    assert empty["codex"] == {"unlocked": False, "unlock_day": UNLOCK_DEFAULTS[CODEX_UNLOCK_KEY], "unlocks_on": None}
+    assert client.get(state_path, headers=_token(users["admin"])).status_code == 403
+    with new_session() as db:
+        challenge = _challenge(db, users["instructor"])
+        _published_activity(db, challenge)
+        db.add(SubmissionJob(
+            student_id=users["student"], activity_id=challenge, idempotency_key="first-sample",
+            source_code="test", dry_run_only=True, status="completed",
+            result_json={"evaluation": {"dominant_error_category": "logic_error"}}, created_at=first,
+        ))
+        db.commit()
+    assert client.get(state_path, headers=student).json()["day"] == 0
+    now += timedelta(minutes=1)
+    assert client.get(state_path, headers=student).json()["day"] == 1
+    assert client.get("/api/v1/quests/codex", headers=student).json()["categories"] == []
+    assert client.get("/api/v1/reviews", headers=student).json()["locked"] is True
+    assert client.post("/api/v1/reviews/start", headers=student, json={"concept": "Unavailable"}).status_code == 409
+
+    now = first + timedelta(days=UNLOCK_DEFAULTS[CODEX_UNLOCK_KEY])
+    codex = client.get("/api/v1/quests/codex", headers=student).json()
+    assert codex["day"] == UNLOCK_DEFAULTS[CODEX_UNLOCK_KEY]
+    assert codex["locked"] is False and len(codex["categories"]) == 4
+    now = first + timedelta(days=UNLOCK_DEFAULTS[MEMORY_UNLOCK_KEY])
+    assert client.get(state_path, headers=student).json()["memory"]["unlocked"] is True
+    assert client.post("/api/v1/reviews/start", headers=student, json={"concept": "Unavailable"}).status_code == 404
+    with new_session() as db:
+        db.get(Profile, users["student"]).account_status = "deactivated"
+        db.commit()
+    assert client.get(state_path, headers=student).status_code == 403
+
+
+def test_admin_can_unlock_both_mechanics_immediately_with_validated_settings(flow):
+    client, _, users = flow
+    admin, student = _token(users["admin"]), _token(users["student"])
+    groups = client.get("/api/v1/admin/settings", headers=admin).json()["groups"]
+    group = next(group for group in groups if group["service"] == "gamification")
+    assert group["label"] == "Gamification"
+    assert {setting["key"] for setting in group["settings"]} == set(UNLOCK_DEFAULTS)
+    for setting in group["settings"]:
+        path = f"/api/v1/admin/settings/{setting['key']}"
+        assert setting["value_type"] == "integer" and "immediately" in setting["description"]
+        for invalid in (-1, 61, 1.5):
+            assert client.patch(path, headers=admin, json={"value": invalid, "expected_version": setting["version"]}).status_code == 422
+        assert client.patch(path, headers=admin, json={"value": 0, "expected_version": setting["version"]}).status_code == 200
+    state = client.get("/api/v1/gamification/state", headers=student).json()
+    assert state["day"] == 0 and state["codex"]["unlocked"] and state["memory"]["unlocked"]
+
+
+def test_profile_reports_whether_the_public_handle_was_chosen(flow):
+    client, _, users = flow
+    headers = _token(users["student"])
+    assert client.get("/api/v1/profile/me", headers=headers).json()["handle_chosen"] is False
+    handle = _letters("chosen")
+    updated = client.patch("/api/v1/profile/me", headers=headers, json={"username": handle})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["handle_chosen"] is True
+    assert client.get("/api/v1/profile/me", headers=headers).json()["username"] == handle
+
+
+def test_quest_added_date_accounts_for_scheduled_opening_and_legacy_records(flow):
+    client, new_session, users = flow
+    now = datetime.now(timezone.utc)
+    created = now - timedelta(days=10)
+    published = now - timedelta(days=5)
+    opened = now - timedelta(days=2)
+    with new_session() as db:
+        legacy_id = _quiz(db, users["instructor"])
+        scheduled_id = _challenge(db, users["instructor"])
+        for activity_id in (legacy_id, scheduled_id):
+            _published_activity(db, activity_id)
+            db.get(LearningActivity, activity_id).created_at = created
+        scheduled = db.get(LearningActivity, scheduled_id)
+        scheduled.published_at = published
+        scheduled.opens_at = opened
+        db.commit()
+
+    rows = {row["id"]: row for row in client.get("/api/v1/quests", headers=_token(users["student"])).json()}
+    assert datetime.fromisoformat(rows[str(legacy_id)]["added_at"]) == created
+    assert rows[str(legacy_id)]["added_at_estimated"] is True
+    assert datetime.fromisoformat(rows[str(scheduled_id)]["added_at"]) == opened
+    assert rows[str(scheduled_id)]["added_at_estimated"] is False
+
+
 def _chat_payload(content: str = "Explain a loop invariant.", activity_id: uuid.UUID | None = None) -> dict:
     return {
         "messages": [{"role": "user", "content": content}],
@@ -1253,3 +1929,72 @@ def test_student_track_setup_is_pending_until_saved(flow):
 
     # Staff never see track setup, whatever the column holds.
     assert client.get("/api/v1/profile/me", headers=_token(users["instructor"])).json()["needs_track_setup"] is False
+
+
+def test_progress_recap_compares_manila_periods_and_usual_pace(flow, monkeypatch):
+    client, new_session, users = flow
+    manila = lambda day, hour, minute=0: datetime(2026, 11, day, hour, minute, tzinfo=timezone(timedelta(hours=8)))  # noqa: E731
+    monkeypatch.setattr(recap_service, "_utcnow", lambda: manila(15, 12).astimezone(timezone.utc))
+    with new_session() as db:
+        for key in (CODEX_UNLOCK_KEY, MEMORY_UNLOCK_KEY):
+            db.get(PlatformSetting, key).value = 0
+        ids = {name: _challenge(db, users["instructor"], reference="PRINT_INPUT") for name in "ABCD"}
+        for activity_id in ids.values():
+            _published_activity(db, activity_id)
+
+        def attempt(name, number, passed, at, category="none"):
+            db.add(ActivityAttempt(student_id=users["student"], activity_id=ids[name], attempt_number=number,
+                                   is_successful=passed, error_category=category, created_at=at))
+
+        attempt("A", 1, True, manila(5, 10))                       # before the 2-period history window
+        attempt("B", 1, False, manila(11, 10), "logic_error")      # previous period
+        attempt("D", 1, True, manila(12, 23, 30))                  # previous period, 23:30 Manila
+        attempt("B", 2, True, manila(13, 0, 30))                   # current period, 00:30 Manila (Nov 12 in UTC)
+        db.add(HintUse(student_id=users["student"], activity_id=ids["C"], request_key="recap-hint-0001",
+                       source="reviewed", body="Hint", created_at=manila(14, 9)))
+        attempt("C", 1, True, manila(14, 10))                      # solved after a hint: not self-solved
+        db.add(ConceptReview(student_id=users["student"], language=ProgrammingLang.python, concept="BQ Recap",
+                             stage=0, status="passed", total=3, correct=3, xp_awarded=10, answers_json={"answers": {}},
+                             question_refs=[{"activity_id": str(ids["A"]), "question_index": i} for i in range(3)],
+                             submitted_at=manila(14, 11)))
+        db.commit()
+
+    student = _token(users["student"])
+    response = client.get("/api/v1/quests/progress-recap?days=3", headers=student)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["period_start"], body["period_end"], body["previous_start"], body["previous_end"]) == (
+        "2026-11-13", "2026-11-15", "2026-11-10", "2026-11-12")
+    assert (body["enough_activity"], body["comparison"]) == (True, "ok")
+    rows = {row["key"]: (row["current"], row["previous"], row["change"], row["usual"]) for row in body["metrics"]}
+    assert rows == {
+        "solved": (2, 1, 1, 0.5),        # B, C now; D before; usual over Nov 7-12 = 1 per 2 periods
+        "self_solved": (1, 1, 0, 0.5),   # C used a hint first
+        "recoveries": (1, 0, 1, 0.0),    # B recovered from its logic error
+        "recalls": (1, 0, 1, 0.0),
+        "active_days": (2, 2, 0, 1.0),   # Nov 13, 14 vs Nov 11, 12
+    }
+    assert [row["key"] for row in body["metrics"]] == ["solved", "self_solved", "recoveries", "recalls", "active_days"]
+
+    month = client.get("/api/v1/quests/progress-recap?days=30", headers=student).json()
+    assert {row["key"]: (row["current"], row["usual"]) for row in month["metrics"]}["solved"] == (4, None)
+    # The learner started Nov 5, after the previous 30-day period began: no unfair comparison.
+    assert (month["enough_activity"], month["comparison"]) == (False, "new_learner")
+
+    # Weeks later with nothing new: history exists, but too few recent events to call a change.
+    monkeypatch.setattr(recap_service, "_utcnow", lambda: manila(28, 12).astimezone(timezone.utc))
+    later = client.get("/api/v1/quests/progress-recap?days=3", headers=student).json()
+    assert (later["enough_activity"], later["comparison"]) == (False, "too_little_activity")
+    monkeypatch.setattr(recap_service, "_utcnow", lambda: manila(15, 12).astimezone(timezone.utc))
+
+    with new_session() as db:
+        db.get(PlatformSetting, CODEX_UNLOCK_KEY).value = 60
+        db.commit()
+    locked = client.get("/api/v1/quests/progress-recap?days=3", headers=student).json()
+    assert "recoveries" not in [row["key"] for row in locked["metrics"]]
+
+    quiet = client.get("/api/v1/quests/progress-recap", headers=_token(users["other_track"])).json()
+    assert (quiet["days"], quiet["enough_activity"], quiet["comparison"]) == (7, False, "new_learner")
+    assert all(row["current"] == row["previous"] == 0 and row["usual"] is None for row in quiet["metrics"])
+    assert client.get("/api/v1/quests/progress-recap?days=5", headers=student).status_code == 422
+    assert client.get("/api/v1/quests/progress-recap", headers=_token(users["instructor"])).status_code == 403

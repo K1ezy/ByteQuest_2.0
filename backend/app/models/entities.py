@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Enum,
@@ -134,6 +135,13 @@ class Profile(Base):
     def needs_track_setup(self) -> bool:
         """The server owns this rule so every entry point routes the same way."""
         return self.role == UserRole.student and self.track_selected_at is None
+
+    @property
+    def handle_chosen(self) -> bool:
+        """False while the account still has its generated starter handle."""
+        from app.services.usernames import is_starter_username  # lazy: avoids the services↔models cycle
+
+        return bool(self.username) and not (self.id is not None and is_starter_username(self.id, self.username))
 
 
 # ============================================================================
@@ -329,6 +337,14 @@ class ActivityAttempt(Base):
     __tablename__ = "activity_attempts"
 
     __table_args__ = (
+        Index(
+            "ix_activity_attempts_student_first_practice", "student_id", "created_at",
+            postgresql_where=text("exam_attempt_id IS NULL"),
+        ),
+        Index(
+            "ix_activity_attempts_student_success", "student_id", "activity_id", "created_at",
+            postgresql_where=text("is_successful"),
+        ),
         UniqueConstraint(
             "student_id",
             "activity_id",
@@ -374,6 +390,45 @@ class ActivityAttempt(Base):
     activity = relationship("LearningActivity", back_populates="attempts")
 
 
+class ConceptReview(Base):
+    __tablename__ = "concept_reviews"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    student_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
+    language = Column(Enum(ProgrammingLang, name="programminglang"), nullable=False)
+    concept = Column(String(100), nullable=False)
+    stage = Column(Integer, nullable=False)
+    status = Column(Text, nullable=False)
+    question_refs = Column(JSONB, nullable=False)
+    answers_json = Column(JSONB(none_as_null=True), nullable=True)
+    correct = Column(Integer, nullable=True)
+    total = Column(Integer, nullable=False)
+    xp_awarded = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()"))
+    submitted_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("stage BETWEEN 0 AND 3", name="ck_concept_reviews_stage"),
+        CheckConstraint("status IN ('open', 'passed', 'not_passed')", name="ck_concept_reviews_status"),
+        CheckConstraint("total > 0 AND correct BETWEEN 0 AND total", name="ck_concept_reviews_scores"),
+        CheckConstraint("xp_awarded >= 0 AND (xp_awarded = 0 OR status = 'passed')", name="ck_concept_reviews_xp"),
+        CheckConstraint(
+            "(status = 'open' AND submitted_at IS NULL AND correct IS NULL AND answers_json IS NULL)"
+            " OR (status IN ('passed', 'not_passed') AND submitted_at IS NOT NULL AND correct IS NOT NULL AND answers_json IS NOT NULL)",
+            name="ck_concept_reviews_submission",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(question_refs) = 'array' AND jsonb_array_length(question_refs) = total",
+            name="ck_concept_reviews_questions",
+        ),
+        Index("ix_concept_reviews_history", "student_id", "language", "concept", submitted_at.desc()),
+        Index("uq_concept_reviews_open", "student_id", "language", "concept", unique=True,
+              postgresql_where=text("status = 'open'")),
+        Index("uq_concept_reviews_passed_stage", "student_id", "language", "concept", "stage", unique=True,
+              postgresql_where=text("status = 'passed' AND xp_awarded > 0")),
+    )
+
+
 class ActivityDraft(Base):
     __tablename__ = "activity_drafts"
     __table_args__ = (UniqueConstraint("student_id", "activity_id", name="uq_activity_draft_student_activity"),)
@@ -387,7 +442,17 @@ class ActivityDraft(Base):
 
 class SubmissionJob(Base):
     __tablename__ = "submission_jobs"
-    __table_args__ = (UniqueConstraint("student_id", "idempotency_key", name="uq_submission_job_student_key"),)
+    __table_args__ = (
+        Index(
+            "ix_submission_jobs_student_first_sample", "student_id", "created_at",
+            postgresql_where=text("dry_run_only AND status = 'completed'"),
+        ),
+        UniqueConstraint("student_id", "idempotency_key", name="uq_submission_job_student_key"),
+        Index(
+            "ix_submission_jobs_student_sample_activity", "student_id", "activity_id", "created_at",
+            postgresql_where=text("dry_run_only AND status = 'completed'"),
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     student_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -401,7 +466,8 @@ class SubmissionJob(Base):
     error_message = Column(Text, nullable=True)
     attempts = Column(Integer, nullable=False, server_default=text("0"))
     next_attempt_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    # App clock, like activity_attempts: hint, run and attempt order is compared across tables.
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
@@ -426,7 +492,8 @@ class HintUse(Base):
     hint_id = Column(UUID(as_uuid=True), ForeignKey("challenge_hints.id", ondelete="SET NULL"), nullable=True)
     source = Column(String(16), nullable=False)
     body = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    # App clock, like activity_attempts: hint, run and attempt order is compared across tables.
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()"))
 
 
 class ResearchConsent(Base):

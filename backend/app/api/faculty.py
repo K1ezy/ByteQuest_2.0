@@ -76,6 +76,7 @@ from app.services.workspace_queries import (
     scoped_activities,
     scoped_materials,
 )
+from app.services.gamification.insights import GamificationInsights, course_insights
 
 router = APIRouter(prefix="/api/v1/faculty", tags=["Faculty workspace"])
 logger = logging.getLogger(__name__)
@@ -1466,6 +1467,23 @@ def create_activity_version(
         "activity": _activity_response(clone, course, attempt_count=0),
         "message": f"Version {next_version} drafted. Grading content is editable here; the published version stays live until you publish.",
     }
+
+
+# ---------------------------------------------------------------------------
+# Gamification insights
+# ---------------------------------------------------------------------------
+@router.get("/gamification-insights", response_model=GamificationInsights)
+def gamification_insights(
+    course_id: Optional[uuid.UUID] = None,
+    user: Profile = Depends(faculty_user),
+    db: Session = Depends(get_db),
+) -> GamificationInsights:
+    """Class-level engagement, solve quality, help-seeking, recovery and recall retention.
+
+    Same scope as Performance: an assigned instructor's course; aggregates only.
+    """
+    course = resolve_workspace_course(db, user, course_id, allow_admin=False)
+    return course_insights(db, course)
 
 
 # ---------------------------------------------------------------------------

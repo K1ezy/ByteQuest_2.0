@@ -4,14 +4,32 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiRequest, getErrorMessage } from "@/lib/api";
-import type { Evaluation } from "@/lib/types";
+import type { CodexRecovery, Evaluation } from "@/lib/types";
+import { MAX_STARS, STAR_MEANING, SolveStars } from "@/components/solve-stars";
 
 interface Job {
   id: string;
   activity_id: string;
   status: "queued" | "running" | "completed" | "failed";
   error: string | null;
-  result: { attempt_number?: number; xp_awarded?: number; evaluation: Evaluation } | null;
+  result: {
+    attempt_number?: number;
+    xp_awarded?: number;
+    new_level?: number;
+    level_up?: boolean;
+    new_badges_unlocked?: string[];
+    quality?: { stars: number; max_stars: number; hints_before: number; self_solved: boolean };
+    codex_recoveries?: CodexRecovery[];
+    evaluation: Evaluation;
+  } | null;
+}
+
+// The next tier is only reachable on a future challenge: hints and attempts already used stay on record.
+function nextStarTip(stars: number, hintsBefore: number): string | null {
+  if (stars >= MAX_STARS) return null;
+  return hintsBefore > 0
+    ? "On your next challenge, try a sample run before opening a hint to aim for more stars."
+    : "On your next challenge, aim to pass within 2 attempts for 3 stars.";
 }
 
 export default function SubmissionStatusPage() {
@@ -225,6 +243,35 @@ export default function SubmissionStatusPage() {
                 Attempt {job.result?.attempt_number} ·{" "}
                 <span className="font-bold text-[#156046]">+{job.result?.xp_awarded || 0} XP awarded</span>
               </p>
+              {job.result?.evaluation.is_successful && job.result.quality ? (
+                <div className="solve-result" role="status">
+                  <div className="solve-result-stars">
+                    <SolveStars stars={job.result.quality.stars} />
+                    <strong>{STAR_MEANING[job.result.quality.stars]}</strong>
+                    <span className={`solve-chip${job.result.quality.self_solved ? " is-self" : ""}`}>
+                      {job.result.quality.self_solved
+                        ? "Self-solved: no hints used"
+                        : `${job.result.quality.hints_before} ${job.result.quality.hints_before === 1 ? "hint" : "hints"} used before passing`}
+                    </span>
+                  </div>
+                  {nextStarTip(job.result.quality.stars, job.result.quality.hints_before)
+                    ? <p className="solve-result-tip">{nextStarTip(job.result.quality.stars, job.result.quality.hints_before)}</p>
+                    : null}
+                  {job.result.level_up && job.result.new_level ? (
+                    <p className="reward-news is-level">Level up! You reached Level {job.result.new_level}.</p>
+                  ) : null}
+                  {job.result.new_badges_unlocked?.length ? (
+                    <p className="reward-news is-badge">
+                      Badge unlocked: <strong>{job.result.new_badges_unlocked.join(", ")}</strong>
+                    </p>
+                  ) : null}
+                  {job.result.codex_recoveries?.map(({ category, label }) => (
+                    <p key={category} className="reward-news is-codex">
+                      Codex: you recovered from a {label} error
+                    </p>
+                  ))}
+                </div>
+              ) : null}
               {!job.result?.evaluation.is_successful && (
                 <p className="text-xs text-slate-600">
                   Some tests did not pass. Review visible diagnostics in the arena and refine your code.

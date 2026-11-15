@@ -74,6 +74,16 @@ def assigned(db: Session, exam_id: uuid.UUID, student_id: uuid.UUID) -> bool:
     ).filter(ExamAssignment.exam_id == exam_id, QuestGroupMember.profile_id == student_id).first() is not None
 
 
+def assigned_exam_numbers(db: Session, student_id: uuid.UUID):
+    assignments = db.query(ExamAssignment.exam_id).join(
+        QuestGroupMember, QuestGroupMember.group_id == ExamAssignment.group_id
+    ).filter(QuestGroupMember.profile_id == student_id)
+    return db.query(
+        Exam.id,
+        func.row_number().over(order_by=(Exam.published_at, Exam.created_at, Exam.id)).label("exam_number"),
+    ).filter(Exam.id.in_(assignments), Exam.published_at.is_not(None)).subquery()
+
+
 def public_item(item: ExamItem) -> dict:
     snap = item.snapshot_json
     result = {"id": str(item.id), "position": item.position, "points": item.points,
@@ -342,21 +352,22 @@ def grant_retake(exam_id: uuid.UUID, student_id: uuid.UUID, body: RetakeWindow,
 def student_exams(user: Profile = Depends(get_current_user), db: Session = Depends(get_db)):
     if user.role != UserRole.student:
         raise HTTPException(403, "Student access required.")
-    exams = db.query(Exam).join(ExamAssignment, ExamAssignment.exam_id == Exam.id).join(
-        QuestGroupMember, QuestGroupMember.group_id == ExamAssignment.group_id
-    ).filter(QuestGroupMember.profile_id == user.id, Exam.published_at.is_not(None)).distinct().order_by(
-        Exam.opens_at.desc()).limit(100).all()
+    numbered = assigned_exam_numbers(db, user.id)
+    exams = db.query(Exam, numbered.c.exam_number).join(
+        numbered, numbered.c.id == Exam.id
+    ).order_by(Exam.opens_at.desc(), numbered.c.exam_number.desc()).all()
     latest_attempts = {}
     if exams:
         for attempt in db.query(ExamAttempt).filter(
             ExamAttempt.student_id == user.id,
-            ExamAttempt.exam_id.in_([exam.id for exam in exams]),
+            ExamAttempt.exam_id.in_([exam.id for exam, _ in exams]),
         ).order_by(ExamAttempt.attempt_number.desc()).all():
             latest_attempts.setdefault(attempt.exam_id, attempt)
     return [{"id": e.id, "title": e.title, "opens_at": e.opens_at, "closes_at": e.closes_at,
+             "exam_number": number, "added_at": e.published_at,
              "duration_minutes": e.duration_minutes,
              "results_released": bool(latest_attempts.get(e.id) and latest_attempts[e.id].result_released_at)}
-            for e in exams]
+            for e, number in exams]
 
 
 @router.get("/{exam_id}")
@@ -373,7 +384,10 @@ def student_exam(exam_id: uuid.UUID, user: Profile = Depends(get_current_user), 
     can_start = bool((not latest or latest.status == "submitted") and
                      (not latest or (grant is not None and latest.attempt_number < grant.allowed_attempts)))
     opens_at, closes_at = (grant.opens_at, grant.closes_at) if latest and grant else (exam.opens_at, exam.closes_at)
+    numbered = assigned_exam_numbers(db, user.id)
+    number = db.query(numbered.c.exam_number).filter(numbered.c.id == exam_id).scalar()
     return {"id": exam.id, "title": exam.title, "opens_at": opens_at, "closes_at": closes_at,
+            "exam_number": number, "added_at": exam.published_at,
             "duration_minutes": grant.duration_minutes if latest and grant else exam.duration_minutes,
             "server_now": utcnow(),
             "can_start": can_start and opens_at <= utcnow() < closes_at,

@@ -10,6 +10,12 @@ class QuizOption(BaseModel):
     text: str = Field(min_length=1, max_length=500)
 
 
+class PublicQuizQuestion(BaseModel):
+    id: str
+    prompt: str
+    options: list[QuizOption]
+
+
 class StoredQuizQuestion(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
@@ -47,3 +53,7 @@ def parse_quiz_questions(content: object) -> list[StoredQuizQuestion]:
     if len(question_ids) != len(set(question_ids)):
         raise ValueError("Quiz question IDs must be unique.")
     return questions
+
+
+def public_question(question: StoredQuizQuestion, *, question_id: str | None = None) -> PublicQuizQuestion:
+    return PublicQuizQuestion(id=question_id or question.id, prompt=question.prompt, options=question.options)

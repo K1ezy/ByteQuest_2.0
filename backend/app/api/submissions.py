@@ -28,8 +28,10 @@ from app.services.judge0.client import (
 )
 from app.services.attempt_visibility import activity_has_opened, activity_is_closed
 from app.services.gamification.badges import evaluate_and_award_badges
+from app.services.gamification.codex import recovery_news
 from app.services.gamification.progression import grant_xp
 from app.services.gamification.sequencer import determine_next_task_rule_based
+from app.services.gamification.solve_quality import attempt_quality
 from app.services.ml_predictor.audit import record_prediction_outcome
 from app.services.ml_predictor.shadow import record_shadow_prediction
 
@@ -185,6 +187,7 @@ def run_code_submission(
     # Reload the activity after the Judge0 wait. The initial transaction has been
     # released, and the recommendation service expects a live ORM activity.
     activity = db.query(LearningActivity).filter(LearningActivity.id == activity_id).one()
+    level_before = student.current_level
 
     # Official submission: compute next sequential attempt_number (Rule 5: Append-Only)
     prior_attempts_count = (
@@ -245,6 +248,7 @@ def run_code_submission(
 
     # Phase 4 awards apply to both quizzes and programming challenges.
     new_badges = evaluate_and_award_badges(db, student)
+    quality = attempt_quality(db, new_attempt)
     recommendation = determine_next_task_rule_based(
         db, student, activity, new_attempt
     )
@@ -256,7 +260,10 @@ def run_code_submission(
         "xp_awarded": xp_earned,
         "new_total_xp": student.xp_points,
         "new_level": student.current_level,
+        "level_up": student.current_level > level_before,
         "new_badges_unlocked": new_badges,
+        "quality": quality,
+        "codex_recoveries": recovery_news(db, new_attempt),
         "next_step_recommendation": recommendation,
         "evaluation": summary,
     })

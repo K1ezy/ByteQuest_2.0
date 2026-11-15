@@ -12,6 +12,8 @@ from app.models.entities import (
     LearningActivity,
     QuestGroupActivity,
     QuestGroupMember,
+    Profile,
+    ReviewState,
 )
 
 
@@ -88,4 +90,12 @@ def student_visible_activity_clause(student_id: uuid.UUID, now: datetime | None 
         LearningActivity.archived_at.is_(None),
         or_(LearningActivity.opens_at.is_(None), LearningActivity.opens_at <= moment),
         student_activity_clause(student_id),
+    )
+
+
+def published_track_clause(student: Profile, now: datetime | None = None):
+    return and_(
+        LearningActivity.language == student.enrolled_language,
+        LearningActivity.review_status == ReviewState.published,
+        student_visible_activity_clause(student.id, now),
     )

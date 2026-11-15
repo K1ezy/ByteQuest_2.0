@@ -25,6 +25,7 @@ type HydrationState = "hydrating" | "ready" | "unauthenticated" | "error";
 interface ExamInfo {
   id: string;
   title: string;
+  exam_number?: number;
   opens_at: string;
   closes_at: string;
   duration_minutes: number;
@@ -934,12 +935,6 @@ export default function ExamPage() {
             <Link
               href={`/onboarding?mode=signin&redirect=/exams/${examId}`}
               className="button button-primary"
-              style={{
-                backgroundColor: "#047857",
-                borderColor: "#047857",
-                color: "#ffffff",
-                fontWeight: 700,
-              }}
             >
               Sign in to continue exam →
             </Link>
@@ -998,6 +993,7 @@ export default function ExamPage() {
   return (
     <div className="page-shell pilot-dashboard">
       <p className="eyebrow-label">Timed assessment · Asia/Manila</p>
+      {info?.exam_number && <p className="activity-number">Exam #{info.exam_number}</p>}
       <h1>{info?.title || attempt?.title || "Exam"}</h1>
 
       {topError && (
@@ -1080,12 +1076,7 @@ export default function ExamPage() {
                 className="button button-primary"
                 disabled={isReadOnly || isSubmittingExam}
                 onClick={() => void handleManualSubmitExam()}
-                style={{
-                  backgroundColor: "#047857",
-                  borderColor: "#047857",
-                  color: "#ffffff",
-                  fontWeight: 700,
-                }}
+                data-tooltip="Submit your saved answers for grading and finish this attempt."
               >
                 {isSubmittingExam ? "Confirming & submitting…" : "Submit exam"}
               </button>
@@ -1330,9 +1321,6 @@ export default function ExamPage() {
                     style={{
                       marginTop: "12px",
                       width: "100%",
-                      backgroundColor: "#047857",
-                      borderColor: "#047857",
-                      color: "#fff",
                     }}
                     onClick={() => void handleResolveKeepLocal()}
                   >
@@ -1615,11 +1603,8 @@ export default function ExamPage() {
                   onClick={() => void handleManualSubmitExam()}
                   style={{
                     width: "100%",
-                    backgroundColor: "#047857",
-                    borderColor: "#047857",
-                    color: "#ffffff",
-                    fontWeight: 700,
                   }}
+                  data-tooltip="Submit your saved answers for grading and finish this attempt."
                 >
                   {isSubmittingExam ? "Submitting…" : "Submit exam"}
                 </button>

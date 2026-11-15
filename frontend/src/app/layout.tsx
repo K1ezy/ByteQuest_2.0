@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { AppTooltips } from "@/components/app-tooltips";
 import { AccessibilityProvider } from "@/components/accessibility-provider";
@@ -16,6 +16,15 @@ const byteBounce = localFont({
 export const metadata: Metadata = {
   title: "ByteQuest — Learn by building",
   description: "A guided programming quest platform for students and instructors.",
+};
+
+// viewport-fit=cover lets the phone tab bar and sheets pad themselves with
+// env(safe-area-inset-*) so they clear the home indicator and rounded corners.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#ffffff",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

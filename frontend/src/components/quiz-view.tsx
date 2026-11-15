@@ -6,6 +6,9 @@ import { apiRequest, getErrorMessage } from "@/lib/api";
 import { getSupabase } from "@/lib/supabase";
 import type { Profile, Quest, QuizQuestion } from "@/lib/types";
 
+// Display mirror of backend QUIZ_MASTERY_SCORE (app/services/gamification/sequencer.py); the server decides pass/fail.
+const QUIZ_PASS_PERCENT = 75;
+
 interface QuizResult {
   score_percentage: number;
   is_successful: boolean;
@@ -15,6 +18,7 @@ interface QuizResult {
   attempt_number?: number;
   new_total_xp?: number;
   new_level?: number;
+  level_up?: boolean;
   new_badges_unlocked?: string[];
 }
 
@@ -236,7 +240,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
       {/* Page Heading */}
       <div className="page-heading">
         <div>
-          <p className="eyebrow-label">CONCEPT CHECK · {profile?.enrolled_language?.toUpperCase() || ""}</p>
+          <p className="eyebrow-label">{quest && `Quest #${quest.sequence_order} · `}Concept check · {profile?.enrolled_language?.toUpperCase() || ""}</p>
           <h1>{quest?.title || "Concept knowledge check"}</h1>
           <p>{quest ? `${quest.topic_concept} · ${quest.xp_reward} XP on first completion` : "Test your understanding of core concepts."}</p>
         </div>
@@ -279,8 +283,16 @@ export default function QuizView({ activityId }: { activityId: string }) {
               <h2>{result.is_successful ? "Great work!" : "Keep practicing"}</h2>
               <p className="panel-subtitle">
                 You scored <strong>{result.score_percentage}%</strong> ({result.correct_answers} of {result.total_questions} questions correct).
-                {result.xp_awarded > 0 ? ` +${result.xp_awarded} XP awarded!` : " Completion XP was previously recorded."}
+                {result.xp_awarded > 0
+                  ? ` +${result.xp_awarded} XP awarded!`
+                  : result.is_successful
+                    ? " Completion XP was previously recorded."
+                    : ` Score ${QUIZ_PASS_PERCENT}% or higher to complete this quest and earn its XP.`}
               </p>
+
+              {result.level_up && result.new_level ? (
+                <p className="reward-news is-level" role="status">Level up! You reached Level {result.new_level}.</p>
+              ) : null}
 
               {result.new_badges_unlocked && result.new_badges_unlocked.length > 0 && (
                 <div className="notice" role="status">

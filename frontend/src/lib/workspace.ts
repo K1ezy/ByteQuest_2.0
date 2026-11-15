@@ -949,6 +949,15 @@ export interface NextAction {
   kind: string | null;
 }
 
+/** How the student solves challenges and seeks help. Descriptive, never scored. */
+export interface HelpPattern {
+  challenges_solved: number;
+  self_solved: number;
+  three_star: number;
+  hinted_challenges: number;
+  tried_before_hint: number;
+}
+
 export interface StudentAnalytics {
   total_attempts: number;
   successful_attempts: number;
@@ -973,6 +982,7 @@ export interface StudentAnalytics {
   score_trend: TrendPoint[];
   exam_history: ExamHistoryEntry[];
   badges: BadgeEntry[];
+  help_pattern?: HelpPattern;
 }
 
 export interface ProfileAuditEntry {
