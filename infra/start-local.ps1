@@ -64,6 +64,9 @@ if (-not $DockerAlreadyVerified) {
 # abort the launcher if it is slow or unhealthy.
 $projectId = "bytequest-local"
 $essentialServices = @("db", "kong", "auth", "rest", "storage")
+# Mailpit (container "inbucket") is optional, but local password-reset emails are
+# delivered to it at http://127.0.0.1:15434, so the launcher keeps it running.
+$resumedOptionalServices = @("inbucket")
 
 function Get-ByteQuestServiceState {
     # Single docker call; returns @{ <service> = @{ State; Status } } for this
@@ -71,9 +74,11 @@ function Get-ByteQuestServiceState {
     param([Parameter(Mandatory)][string]$ProjectId)
     $states = @{}
     $escaped = [regex]::Escape($ProjectId)
-    foreach ($line in (& docker ps -a --filter "name=_$ProjectId" --format '{{.Names}}|{{.State}}|{{.Status}}' 2>$null)) {
+    $containers = & docker ps -a --filter "name=_$ProjectId" --format '{{.Names}}|{{.State}}|{{.Status}}' 2>$null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not list Supabase containers. Check that Docker Desktop is running.' }
+    foreach ($line in $containers) {
         $parts = $line -split '\|', 3
-        if ($parts.Count -ge 2 -and $parts[0] -match "^supabase_(?<svc>.+)_$escaped$") {
+        if ($parts.Count -eq 3 -and $parts[0] -match "^supabase_(?<svc>.+)_$escaped$") {
             $states[$Matches.svc] = [pscustomobject]@{ State = $parts[1]; Status = $parts[2] }
         }
     }
@@ -82,25 +87,23 @@ function Get-ByteQuestServiceState {
 
 function Test-ByteQuestServiceUp {
     param($ServiceState)
+    # "Up 4 seconds (health: starting)" is running but not ready: Postgres is still
+    # initializing, and 'supabase status' refuses to report any keys until it is healthy.
     return ($null -ne $ServiceState -and
         $ServiceState.State -eq "running" -and
-        $ServiceState.Status -notmatch "unhealthy|Restarting")
+        $ServiceState.Status -notmatch "unhealthy|Restarting|health: starting")
 }
 
 function Invoke-SupabaseStatusEnv {
-    # The CLI withholds its env block while ANY enabled service is unhealthy,
-    # and its stderr is the only explanation for a blank read. Keep stderr off
-    # the terminal (stdout carries local signing keys) but retain it for the
-    # diagnostic thrown below.
+    # Keep status output private because stdout carries local signing keys.
     $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ("bytequest-status-" + [guid]::NewGuid().ToString("N") + ".log")
     try {
-        $lines = & cmd.exe /d /c "supabase status --output env 2>`"$stderrPath`""
-        $exitCode = $LASTEXITCODE
+        $lines = & supabase status --output env 2> $stderrPath
         $stderrText = ""
         if (Test-Path -LiteralPath $stderrPath) {
             $stderrText = ([System.IO.File]::ReadAllText($stderrPath)).Trim()
         }
-        return [pscustomobject]@{ Lines = @($lines); ExitCode = $exitCode; StdErr = $stderrText }
+        return [pscustomobject]@{ Lines = @($lines); StdErr = $stderrText }
     }
     finally {
         Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
@@ -145,6 +148,7 @@ function Add-ByteQuestFallbackValues {
     $kong = "supabase_kong_$ProjectId"
     $auth = "supabase_auth_$ProjectId"
     $db = "supabase_db_$ProjectId"
+    $storage = "supabase_storage_$ProjectId"
 
     if ([string]::IsNullOrWhiteSpace($Values["API_URL"])) {
         $apiPort = Get-ByteQuestPublishedPort -Container $kong -ContainerPort 8000
@@ -152,18 +156,24 @@ function Add-ByteQuestFallbackValues {
     }
     if ([string]::IsNullOrWhiteSpace($Values["DB_URL"])) {
         $dbPort = Get-ByteQuestPublishedPort -Container $db -ContainerPort 5432
-        if ($null -ne $dbPort) { $Values["DB_URL"] = "postgresql://postgres:postgres@127.0.0.1:$dbPort/postgres" }
+        $dbPassword = Get-ByteQuestContainerSetting -Container $db -Names @("POSTGRES_PASSWORD")
+        if ($null -ne $dbPort -and $dbPassword) {
+            $password = [uri]::EscapeDataString($dbPassword)
+            $Values["DB_URL"] = "postgresql://postgres:$password@127.0.0.1:$dbPort/postgres"
+        }
     }
     if ([string]::IsNullOrWhiteSpace($Values["JWT_SECRET"])) {
         $jwtSecret = Get-ByteQuestContainerSetting -Container $auth -Names @("GOTRUE_JWT_SECRET")
         if ($jwtSecret) { $Values["JWT_SECRET"] = $jwtSecret }
     }
     if ([string]::IsNullOrWhiteSpace($Values["ANON_KEY"])) {
-        $anonKey = Get-ByteQuestContainerSetting -Container $kong -Names @("SUPABASE_ANON_KEY", "ANON_KEY")
+        $anonKey = Get-ByteQuestContainerSetting -Container $storage -Names @("ANON_KEY")
+        if (-not $anonKey) { $anonKey = Get-ByteQuestContainerSetting -Container $kong -Names @("SUPABASE_ANON_KEY", "ANON_KEY") }
         if ($anonKey) { $Values["ANON_KEY"] = $anonKey }
     }
     if ([string]::IsNullOrWhiteSpace($Values["SERVICE_ROLE_KEY"])) {
-        $serviceRoleKey = Get-ByteQuestContainerSetting -Container $kong -Names @("SUPABASE_SERVICE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SERVICE_ROLE_KEY")
+        $serviceRoleKey = Get-ByteQuestContainerSetting -Container $storage -Names @("SERVICE_KEY", "SERVICE_ROLE_KEY")
+        if (-not $serviceRoleKey) { $serviceRoleKey = Get-ByteQuestContainerSetting -Container $kong -Names @("SUPABASE_SERVICE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SERVICE_ROLE_KEY") }
         if ($serviceRoleKey) { $Values["SERVICE_ROLE_KEY"] = $serviceRoleKey }
     }
 }
@@ -205,72 +215,217 @@ function Get-ByteQuestSchemaFingerprint {
     }
 }
 
-$statusResult = Invoke-SupabaseStatusEnv
-$statusLines = $statusResult.Lines
-$firstStatusOk = ($statusResult.ExitCode -eq 0)
-if ($firstStatusOk -and (
-    $null -eq (Get-ByteQuestPublishedPort -Container "supabase_db_$projectId" -ContainerPort 5432) -or
-    $null -eq (Get-ByteQuestPublishedPort -Container "supabase_kong_$projectId" -ContainerPort 8000))) {
-    Write-Output "Supabase containers lost their host port mappings; recreating the local stack."
-    & supabase stop --project-id $projectId *> $null
-    if ($LASTEXITCODE -ne 0) { throw "Could not stop the broken local Supabase stack." }
-    $firstStatusOk = $false
-}
-if ($firstStatusOk) {
-    Write-Output "Local Supabase is already running; reusing its containers."
-    $startReportedFailure = $false
-}
-else {
-    # Supabase prints its local signing keys during startup, so suppress that
-    # output rather than storing it in a transcript or terminal scrollback.
-    Write-Output "Local Supabase is stopped; starting its containers. A cold Docker start can take a few minutes."
-    # Studio, Realtime, local mail UI and image transforms are not needed for
-    # local learning. Keep Storage for existing lesson files and avatars.
-    & cmd.exe /d /c 'supabase start --exclude realtime,studio,inbucket,imgproxy,meta,vector,edge-runtime,functions,analytics >NUL 2>&1'
-    # A non-zero exit here is often a single optional service; it is recorded
-    # but not treated as fatal until the essential services are checked below.
-    $startReportedFailure = ($LASTEXITCODE -ne 0)
+function Wait-ByteQuestEssentialServices {
+    param(
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string[]]$Services,
+        [Parameter(Mandatory)][hashtable]$State,
+        [int]$TimeoutSeconds = 180
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ($true) {
+        $down = @(foreach ($service in $Services) { if (-not (Test-ByteQuestServiceUp $State[$service])) { $service } })
+        if ($down.Count -eq 0 -or (Get-Date) -ge $deadline) {
+            return [pscustomobject]@{ Down = $down; State = $State }
+        }
+        Start-Sleep -Seconds 1
+        $State = Get-ByteQuestServiceState -ProjectId $ProjectId
+    }
 }
 
-# Wait only for the essential services, polling cheaply and breaking the moment
-# they are up, so a healthy stack adds no measurable delay to startup.
-$readyDeadline = (Get-Date).AddSeconds(90)
-$serviceState = $null
-$essentialReady = $false
-while ($true) {
-    $serviceState = Get-ByteQuestServiceState -ProjectId $projectId
-    $essentialReady = $true
-    foreach ($svc in $essentialServices) {
-        if (-not (Test-ByteQuestServiceUp $serviceState[$svc])) {
-            $essentialReady = $false
-            break
+function Get-ByteQuestStackAction {
+    # Decides how to bring the local stack up from what Docker reports. It makes no
+    # Docker calls, so every branch is unit-tested in test-launcher-helpers.ps1.
+    #   Before waiting: 'start'   no container exists yet
+    #                   'rebuild' a required container is missing or can't be started in place
+    #                   'resume'  a required container is stopped
+    #                   'reuse'   every required container is running (some may still be warming)
+    #   -AfterWait:     'ready', or 'rebuild' when a required container stayed unready
+    #                   or the database or API lost its host port mapping
+    param(
+        [Parameter(Mandatory)][hashtable]$State,
+        [Parameter(Mandatory)][string[]]$Services,
+        [switch]$AfterWait,
+        [bool]$PortsMapped = $true
+    )
+    if ($AfterWait) {
+        $unready = @($Services | Where-Object { -not (Test-ByteQuestServiceUp $State[$_]) })
+        if ($unready.Count -gt 0 -or -not $PortsMapped) { return 'rebuild' }
+        return 'ready'
+    }
+    if ($State.Count -eq 0) { return 'start' }
+    foreach ($service in $Services) {
+        if (-not $State.ContainsKey($service) -or $State[$service].State -in @('dead', 'paused', 'removing')) {
+            return 'rebuild'
         }
     }
-    if ($essentialReady -or (Get-Date) -ge $readyDeadline) {
-        break
-    }
-    Start-Sleep -Milliseconds 600
+    if (@($Services | Where-Object { $State[$_].State -in @('created', 'exited') }).Count -gt 0) { return 'resume' }
+    return 'reuse'
 }
 
-if (-not $essentialReady) {
-    $down = @(foreach ($svc in $essentialServices) { if (-not (Test-ByteQuestServiceUp $serviceState[$svc])) { $svc } })
-    $diagnosticPath = Join-Path $repoRoot "logs/startup-diagnostics.log"
-    New-Item -ItemType Directory -Path (Split-Path -Parent $diagnosticPath) -Force | Out-Null
-    @("Supabase startup failed at $(Get-Date -Format o)", "Unhealthy services: $($down -join ', ')") |
-        Set-Content -LiteralPath $diagnosticPath
-    foreach ($svc in $down) {
-        $container = "supabase_$($svc)_$projectId"
-        Add-Content -LiteralPath $diagnosticPath -Value "`n[$container]"
-        & docker logs --tail 40 $container 2>&1 | Add-Content -LiteralPath $diagnosticPath
+function Get-ByteQuestStoppedContainers {
+    param(
+        [Parameter(Mandatory)][hashtable]$State,
+        [Parameter(Mandatory)][string[]]$Services,
+        [Parameter(Mandatory)][string]$ProjectId
+    )
+    foreach ($service in $Services) {
+        if ($State.ContainsKey($service) -and $State[$service].State -in @('created', 'exited')) {
+            "supabase_${service}_$ProjectId"
+        }
     }
-    throw "Essential Supabase services did not become healthy ($($down -join ', ')). See logs/startup-diagnostics.log."
 }
 
-# Essential stack is up. Report any degraded optional services as a warning
-# rather than aborting, and only then surface a non-zero 'supabase start' exit.
+function Protect-ByteQuestLogText {
+    # Container logs can echo connection strings, SQL or request URLs. Mask anything
+    # shaped like a JWT, a Supabase API key or a password before it goes to a file.
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return $Text }
+    $masked = $Text -replace 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', '[redacted token]'
+    $masked = $masked -replace 'sb_(secret|publishable)_[A-Za-z0-9_-]+', '[redacted key]'
+    $masked = $masked -replace '(postgres(?:ql)?://[^:/@\s]+:)[^@\s]+@', '$1[redacted]@'
+    $masked = $masked -replace "(?i)(password\s*[=:]?\s*')[^']*(')", '$1[redacted]$2'
+    return ($masked -replace "(?i)\b(password=)(?!')\S+", '$1[redacted]')
+}
+
+function Write-ByteQuestSupabaseDiagnostics {
+    # Records each named container's status and last 40 log lines, so a failure, or
+    # an automatic rebuild (which deletes the old containers), can be explained later.
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Heading,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string[]]$Services,
+        [Parameter(Mandatory)][hashtable]$State
+    )
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
+    Add-Content -LiteralPath $Path -Value $Heading
+    foreach ($service in $Services) {
+        $container = "supabase_${service}_$ProjectId"
+        if (-not $State.ContainsKey($service)) {
+            Add-Content -LiteralPath $Path -Value "[$container] missing"
+            continue
+        }
+        Add-Content -LiteralPath $Path -Value "[$container] $($State[$service].Status)"
+        $logLines = @(& docker logs --tail 40 $container 2>&1 | ForEach-Object { Protect-ByteQuestLogText "$_" })
+        if ($logLines.Count -gt 0) { Add-Content -LiteralPath $Path -Value $logLines }
+    }
+}
+
+$diagnosticPath = Join-Path $repoRoot "logs/startup-diagnostics.log"
+
+# Docker can restore an existing stack before Postgres is ready, and the CLI's
+# status command fails during that window, so Docker's view decides what to do.
+$serviceState = Get-ByteQuestServiceState -ProjectId $projectId
+$stackAction = Get-ByteQuestStackAction -State $serviceState -Services $essentialServices
+$startExitCode = 0
+$essential = $null
+
+if ($stackAction -in @('resume', 'reuse')) {
+    $stoppedRequired = @(Get-ByteQuestStoppedContainers -State $serviceState -Services $essentialServices -ProjectId $projectId)
+    $stoppedOptional = @(Get-ByteQuestStoppedContainers -State $serviceState -Services $resumedOptionalServices -ProjectId $projectId)
+    if ($stoppedRequired.Count -gt 0) {
+        Write-Output 'Resuming the existing local Supabase containers.'
+        & docker start @stoppedRequired | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output 'Docker could not resume them; rebuilding the stack from its existing volumes instead.'
+            $stackAction = 'rebuild'
+        }
+    }
+    elseif (@($essentialServices | Where-Object { -not (Test-ByteQuestServiceUp $serviceState[$_]) }).Count -gt 0) {
+        Write-Output 'Waiting for the existing local Supabase containers to become healthy.'
+    }
+    else {
+        Write-Output 'Local Supabase is already running; reusing its containers.'
+    }
+    if ($stackAction -ne 'rebuild' -and $stoppedOptional.Count -gt 0) {
+        & docker start @stoppedOptional *> $null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning 'Mailpit could not be resumed, so local password-reset emails are unavailable. ByteQuest still starts.'
+        }
+    }
+}
+
+if ($stackAction -in @('resume', 'reuse')) {
+    $serviceState = Get-ByteQuestServiceState -ProjectId $projectId
+    $essential = Wait-ByteQuestEssentialServices -ProjectId $projectId -Services $essentialServices -State $serviceState
+    $portsMapped = $essential.Down.Count -eq 0 -and
+        $null -ne (Get-ByteQuestPublishedPort -Container "supabase_db_$projectId" -ContainerPort 5432) -and
+        $null -ne (Get-ByteQuestPublishedPort -Container "supabase_kong_$projectId" -ContainerPort 8000)
+    $stackAction = Get-ByteQuestStackAction -State $essential.State -Services $essentialServices -AfterWait -PortsMapped $portsMapped
+    if ($stackAction -eq 'rebuild' -and $essential.Down.Count -gt 0) {
+        Write-Output "Supabase containers did not become healthy ($($essential.Down -join ', ')); rebuilding the stack from its existing volumes."
+        # The rebuild deletes these containers, so keep their status and logs first.
+        $rebuildDiagnostics = @{
+            Path      = $diagnosticPath
+            Heading   = "Supabase containers were rebuilt at $(Get-Date -Format o) because they stayed unready: $($essential.Down -join ', ')"
+            ProjectId = $projectId
+            Services  = $essential.Down
+            State     = $essential.State
+        }
+        Write-ByteQuestSupabaseDiagnostics @rebuildDiagnostics
+    }
+    elseif ($stackAction -eq 'rebuild') {
+        Write-Output 'Supabase containers lost their host port mappings; rebuilding the stack from its existing volumes.'
+    }
+}
+
+if ($stackAction -in @('rebuild', 'start')) {
+    if ($stackAction -eq 'rebuild') {
+        # Supabase CLI v2 short-circuits start when the DB is already running, even
+        # if other services are missing or stuck. Stop keeps the project volumes.
+        Write-Output 'Recreating the local Supabase stack from its existing volumes.'
+        & supabase stop --project-id $projectId *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not stop the local Supabase stack before rebuilding it.' }
+    }
+
+    # Keep containers available for our readiness check if the CLI times out.
+    # Suppress CLI output because it includes local signing keys.
+    Write-Output 'Starting local Supabase. A cold Docker start can take a few minutes.'
+    # ByteQuest doesn't use Studio, Realtime, image transforms or the other services
+    # below. Mailpit stays (see $resumedOptionalServices). The v2 CLI uses service
+    # aliases for image pulls and image names when starting containers, so pass
+    # both where they differ.
+    $optionalServices = @('realtime', 'studio', 'imgproxy', 'meta', 'postgres-meta',
+        'vector', 'edge-runtime', 'functions', 'analytics', 'logflare')
+    $startArguments = @('start', '--ignore-health-check') + @(
+        foreach ($service in $optionalServices) {
+            '--exclude'
+            $service
+        }
+    )
+    & supabase @startArguments *> $null
+    $startExitCode = $LASTEXITCODE
+    $serviceState = Get-ByteQuestServiceState -ProjectId $projectId
+    if ($startExitCode -ne 0 -and $serviceState.Count -eq 0) {
+        # The CLI removes every container when one of them cannot start, for example
+        # when Windows has reserved Mailpit's port. Mailpit is the only extra service
+        # kept, so try once more without it rather than stop here.
+        Write-Output 'Supabase did not start with Mailpit; retrying without it. Local password-reset emails will be unavailable.'
+        $retryArguments = $startArguments + @('--exclude', 'inbucket', '--exclude', 'mailpit')
+        & supabase @retryArguments *> $null
+        $startExitCode = $LASTEXITCODE
+        $serviceState = Get-ByteQuestServiceState -ProjectId $projectId
+    }
+    $waitSeconds = if ($serviceState.Count -eq 0 -and $startExitCode -ne 0) { 0 } else { 180 }
+    $essential = Wait-ByteQuestEssentialServices -ProjectId $projectId -Services $essentialServices -State $serviceState -TimeoutSeconds $waitSeconds
+}
+$serviceState = $essential.State
+
+if ($essential.Down.Count -gt 0) {
+    $heading = @("Supabase startup failed at $(Get-Date -Format o)", "Unready services: $($essential.Down -join ', ')")
+    if ($startExitCode -ne 0) { $heading += "supabase start exit code: $startExitCode" }
+    Write-ByteQuestSupabaseDiagnostics -Path $diagnosticPath -Heading $heading -ProjectId $projectId -Services $essential.Down -State $serviceState
+    throw "Essential Supabase services did not become healthy ($($essential.Down -join ', ')). See logs/startup-diagnostics.log."
+}
+
+# Essential stack is up. Warn only about optional services that are running but
+# broken; ones that are stopped or still warming up are not a problem.
 $degradedServices = @(
     foreach ($svc in ($serviceState.Keys | Sort-Object)) {
-        if ($essentialServices -notcontains $svc -and -not (Test-ByteQuestServiceUp $serviceState[$svc])) {
+        $optional = $serviceState[$svc]
+        if ($essentialServices -notcontains $svc -and
+            ($optional.State -eq 'restarting' -or ($optional.State -eq 'running' -and $optional.Status -match 'unhealthy'))) {
             $svc
         }
     }
@@ -278,21 +433,13 @@ $degradedServices = @(
 if ($degradedServices.Count -gt 0) {
     Write-Warning "Optional Supabase services are degraded; startup continues without them: $($degradedServices -join ', '). Inspect with 'docker logs supabase_<service>_$projectId'."
 }
-elseif ($startReportedFailure) {
-    Write-Warning "'supabase start' returned a non-zero exit, but all essential services are healthy; continuing."
+if ($startExitCode -ne 0) {
+    Write-Warning "'supabase start' exited with code $startExitCode. The required containers are now healthy."
 }
 
-# Re-read status only if the first read failed (i.e. we just started the stack).
-# The exit code is intentionally not gated: when an optional service is down the
-# CLI can report non-zero even though the endpoints we need respond, so the
-# required-key validation below is the authoritative readiness check.
-if (-not $firstStatusOk) {
-    $statusResult = Invoke-SupabaseStatusEnv
-    $statusLines = $statusResult.Lines
-}
-
+$statusResult = Invoke-SupabaseStatusEnv
 $localValues = @{}
-foreach ($line in $statusLines) {
+foreach ($line in $statusResult.Lines) {
     if ($line -match '^([A-Z0-9_]+)=(.*)$') {
         $value = $Matches[2].Trim()
         if ($value.Length -ge 2 -and $value.StartsWith('"') -and $value.EndsWith('"')) {
@@ -310,9 +457,7 @@ $missingSettings = @(
 )
 
 if ($missingSettings.Count -gt 0) {
-    # A degraded optional service makes the CLI withhold every value, including
-    # those for services that are healthy. Read them from the containers rather
-    # than aborting a stack whose essential services were just confirmed up.
+    # Read settings from the active containers if CLI status is unavailable.
     Add-ByteQuestFallbackValues -Values $localValues -ProjectId $projectId
     $missingSettings = @(
         foreach ($required in $requiredSettings) {
@@ -323,9 +468,6 @@ if ($missingSettings.Count -gt 0) {
 
 if ($missingSettings.Count -gt 0) {
     $detail = "Supabase did not return required local settings ($($missingSettings -join ', ')), and they could not be read from the running containers."
-    if ($degradedServices.Count -gt 0) {
-        $detail += " Degraded optional services ($($degradedServices -join ', ')) stop the CLI reporting status at all; disable them in supabase/config.toml or repair them."
-    }
     if (-not [string]::IsNullOrWhiteSpace($statusResult.StdErr)) {
         $detail += " 'supabase status' reported: $($statusResult.StdErr)"
     }

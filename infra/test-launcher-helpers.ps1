@@ -308,6 +308,117 @@ Assert-That 'page scripts are verified before the browser opens' {
     $assetGateAt -gt 0 -and $openBrowserAt -gt $assetGateAt
 }
 
+Write-Host "`n[10] Supabase readiness and local settings"
+& {
+    $localAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $infraPath 'start-local.ps1'), [ref]$null, [ref]$null)
+    $helpers = @('Test-ByteQuestServiceUp', 'Wait-ByteQuestEssentialServices', 'Add-ByteQuestFallbackValues',
+        'Get-ByteQuestStackAction', 'Get-ByteQuestStoppedContainers', 'Protect-ByteQuestLogText',
+        'Write-ByteQuestSupabaseDiagnostics')
+    foreach ($definition in $localAst.FindAll({
+        $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -in $helpers
+    }, $true)) {
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+
+    $startingDb = @{ db = @{ State = 'running'; Status = 'Up 2 seconds (health: starting)' } }
+    $healthyDb = @{ State = 'running'; Status = 'Up 5 seconds (healthy)' }
+    function Start-Sleep { param([int]$Seconds) }
+    function Get-ByteQuestServiceState {
+        param($ProjectId)
+        @{ db = $healthyDb; studio = @{ State = 'running'; Status = 'Up 1 second (health: starting)' } }
+    }
+
+    Assert-That 'a running database that is still warming counts as unready' {
+        $result = Wait-ByteQuestEssentialServices -ProjectId 'test' -Services @('db') -State $startingDb -TimeoutSeconds 0
+        ($result.Down -join ',') -eq 'db'
+    }
+    Assert-That 'startup waits for Postgres and ignores an optional service that is still warming' {
+        $result = Wait-ByteQuestEssentialServices -ProjectId 'test' -Services @('db') -State $startingDb
+        $result.Down.Count -eq 0 -and $result.State.db.Status -eq $healthyDb.Status
+    }
+    Assert-That 'a missing required container counts as unready' {
+        $result = Wait-ByteQuestEssentialServices -ProjectId 'test' -Services @('db') -State @{} -TimeoutSeconds 0
+        ($result.Down -join ',') -eq 'db'
+    }
+
+    function Get-ByteQuestPublishedPort {
+        param($Container, $ContainerPort)
+        @{ supabase_db_test = 15432; supabase_kong_test = 15431 }[$Container]
+    }
+    function Get-ByteQuestContainerSetting {
+        param($Container, $Names)
+        $settings = @{
+            supabase_db_test      = @{ POSTGRES_PASSWORD = 'test@password' }
+            supabase_auth_test    = @{ GOTRUE_JWT_SECRET = 'test-jwt' }
+            supabase_storage_test = @{ ANON_KEY = 'test-anon'; SERVICE_KEY = 'test-service' }
+        }
+        if ($settings.ContainsKey($Container)) { $settings[$Container][$Names[0]] }
+    }
+    Assert-That 'an empty CLI response can be recovered from the active containers' {
+        $values = @{}
+        Add-ByteQuestFallbackValues -Values $values -ProjectId 'test'
+        $values.API_URL -eq 'http://127.0.0.1:15431' -and
+            $values.DB_URL -eq 'postgresql://postgres:test%40password@127.0.0.1:15432/postgres' -and
+            $values.JWT_SECRET -eq 'test-jwt' -and $values.ANON_KEY -eq 'test-anon' -and $values.SERVICE_ROLE_KEY -eq 'test-service'
+    }
+
+    # Resume or rebuild: the decision the launcher makes before touching Docker.
+    $up = @{ State = 'running'; Status = 'Up 5 minutes (healthy)' }
+    $required = @('db', 'storage')
+    Assert-That 'no containers means a fresh start' {
+        (Get-ByteQuestStackAction -State @{} -Services $required) -eq 'start'
+    }
+    Assert-That 'a missing required container means a rebuild' {
+        (Get-ByteQuestStackAction -State @{ db = $up; studio = $up } -Services $required) -eq 'rebuild'
+    }
+    Assert-That 'a dead required container means a rebuild' {
+        (Get-ByteQuestStackAction -State @{ db = $up; storage = @{ State = 'dead'; Status = 'Dead' } } -Services $required) -eq 'rebuild'
+    }
+    Assert-That 'a stopped required container is resumed in place' {
+        (Get-ByteQuestStackAction -State @{ db = @{ State = 'exited'; Status = 'Exited (0) 2 hours ago' }; storage = $up } -Services $required) -eq 'resume'
+    }
+    Assert-That 'a running stack is reused even while Postgres warms up' {
+        (Get-ByteQuestStackAction -State @{ db = @{ State = 'running'; Status = 'Up 2 seconds (health: starting)' }; storage = $up } -Services $required) -eq 'reuse'
+    }
+    Assert-That 'a reused stack that stays unhealthy is rebuilt' {
+        (Get-ByteQuestStackAction -State @{ db = @{ State = 'running'; Status = 'Up 3 minutes (unhealthy)' }; storage = $up } -Services $required -AfterWait) -eq 'rebuild'
+    }
+    Assert-That 'a stack that lost its port mappings is rebuilt' {
+        (Get-ByteQuestStackAction -State @{ db = $up; storage = $up } -Services $required -AfterWait -PortsMapped $false) -eq 'rebuild'
+    }
+    Assert-That 'a healthy stack with its ports is ready' {
+        (Get-ByteQuestStackAction -State @{ db = $up; storage = $up } -Services $required -AfterWait) -eq 'ready'
+    }
+    Assert-That 'only stopped containers are resumed' {
+        $state = @{ db = @{ State = 'exited' }; storage = $up; inbucket = @{ State = 'created' } }
+        $stopped = @(Get-ByteQuestStoppedContainers -State $state -Services @('db', 'storage', 'inbucket', 'kong') -ProjectId 'test')
+        ($stopped -join ',') -eq 'supabase_db_test,supabase_inbucket_test'
+    }
+
+    # Failure log: container logs are kept, with secrets masked.
+    Assert-That 'tokens, keys and passwords are masked in saved logs' {
+        $jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.c2lnbmF0dXJl'
+        $line = Protect-ByteQuestLogText "key=$jwt url=postgresql://postgres:s3cret@db:5432/postgres ALTER ROLE x PASSWORD 'hunter2' password=letmein sb_secret_abc123"
+        $line -notmatch 'eyJ|s3cret|hunter2|letmein|sb_secret_abc' -and $line -match '\[redacted'
+    }
+    Assert-That 'the failure log keeps each container status and its masked logs' {
+        function docker { 'FATAL: could not open file "base/1/2600"'; 'apikey eyJa1.eyJb2.c3' }
+        $logPath = Join-Path ([System.IO.Path]::GetTempPath()) ("bytequest-diag-test-" + [guid]::NewGuid().ToString('N') + '.log')
+        try {
+            $state = @{ db = @{ State = 'running'; Status = 'Up 3 minutes (unhealthy)' } }
+            Write-ByteQuestSupabaseDiagnostics -Path $logPath -Heading 'test heading' -ProjectId 'test' -Services @('db', 'kong') -State $state
+            $text = Get-Content -LiteralPath $logPath -Raw
+            $text -match 'test heading' -and
+                $text -match '\[supabase_db_test\] Up 3 minutes \(unhealthy\)' -and
+                $text -match 'could not open file' -and
+                $text -match '\[supabase_kong_test\] missing' -and
+                $text -notmatch 'eyJa1'
+        }
+        finally { Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 # --------------------------------------------------------------------------
 Write-Host ""
 if ($script:Failures -gt 0) {

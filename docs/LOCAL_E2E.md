@@ -45,7 +45,7 @@ The batch files require PowerShell 7, Node.js 20.9 or newer with npm, Supabase C
    npm run dev
    ```
 
-7. Open `http://localhost:3000/onboarding` to create a local student account and select its language track. This manual URL preserves a saved browser session; the BAT launcher adds its one-time startup marker to show authentication on launch. Supabase local email confirmation is disabled; if confirmation is enabled in a local override, email is viewable through Inbucket at `http://127.0.0.1:54324`.
+7. Open `http://localhost:3000/onboarding` to create a local student account and select its language track. This manual URL preserves a saved browser session; the BAT launcher adds its one-time startup marker to show authentication on launch. Supabase local email confirmation is disabled; the launcher keeps Mailpit running, so password-reset emails (and confirmation emails, if a local override enables them) can be opened at `http://127.0.0.1:15434`.
 
 ## Local Quest Map demos
 

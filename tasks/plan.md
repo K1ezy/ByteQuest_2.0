@@ -23,6 +23,7 @@ Sources: [.design/review-report.md](../.design/review-report.md) (BQ-01…BQ-10)
 
 - [x] **Launcher:** `START-BYTEQUEST.bat` now restarts the API on every run, as it already did the worker. Reusing a healthy API had kept serving yesterday's backend code after every change. If something it can't stop holds the port, it fails with a clear message.
 - [x] **Signed-in role checks (2026-11-15):** instructor overview and Performance both show 7% mastery and agree; all action links go to `/instructor/...`. Admin shows "Services: Healthy", "3 of 3", prediction "Off", and the runner as healthy despite old failures. Fixed along the way: two leftover "completion" labels, the muted chip contrast (4.3:1 → 6.1:1), and long runner times now read in hours and days.
+- [x] **Launcher: Supabase startup (2026-11-15):** the launcher waits for Postgres to be healthy before it asks `supabase status` for keys, and reads the keys from the containers when the CLI still gives nothing. It resumes stopped containers, and rebuilds the stack from its existing volumes when a required container is missing, stays unhealthy for 3 minutes, or loses its ports. Mailpit stays on, so local password resets work. Failures and rebuilds save each container's last 40 log lines, with keys masked, to `logs/startup-diagnostics.log`. The ZeroTier phone relay no longer counts as a port 3000 conflict. (Resume/rebuild, readiness and log-masking tests in `test-launcher-helpers.ps1`.)
 
 ## Still open
 

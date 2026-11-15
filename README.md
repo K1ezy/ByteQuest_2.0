@@ -78,7 +78,7 @@ Set-Location .\frontend
 npm install; npm run dev
 ```
 
-Open <http://127.0.0.1:3000/onboarding>. The one-click battery launcher skips Supabase Studio and other services unused by the learning flow; start the full local stack manually when you need Studio.
+Open <http://127.0.0.1:3000/onboarding>. The one-click battery launcher skips Supabase Studio and other services unused by the learning flow; start the full local stack manually when you need Studio. It keeps Mailpit running, so local password-reset emails can be opened at <http://127.0.0.1:15434>.
 
 If the Judge0 VM's IP changes, re-point the client with `.\infra\configure-judge0-vm.ps1` (add `-SetApiToken` to update a rotated token), then restart the API. `GEMINI_API_KEY` is required only for AI generation, not for the core coding flow.
 
