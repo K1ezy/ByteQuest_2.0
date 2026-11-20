@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api.exams import require_practice_help_available
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.core.quotas import reserve
 from app.core.security import get_current_user
 from app.models.entities import ActivityKind, LearningActivity, Profile, ReviewState, SubmissionJob, UserRole
@@ -32,6 +32,18 @@ router = APIRouter(prefix=f"{settings.API_V1_STR}/chat", tags=["Chat Assistant"]
 GENERIC_UNAVAILABLE = (
     "The learning assistant is temporarily unavailable. Please try again."
 )
+_PROVIDER_FAILURES = {
+    "rate_limited": ("provider_rate_limited", "The learning assistant is busy right now. Please try again shortly."),
+    "timeout": ("provider_timeout", "The learning assistant took too long to reply. Please try again."),
+    "unavailable": ("provider_unavailable", GENERIC_UNAVAILABLE),
+}
+_RETRIEVAL_BUDGET_SECONDS = 4.0
+
+
+def _provider_failure(kind: str, retry_after: int | None = None) -> HTTPException:
+    code, message = _PROVIDER_FAILURES[kind]
+    return HTTPException(503, {"code": code, "message": message},
+                         headers={"Retry-After": str(retry_after)} if retry_after else None)
 
 _TUTOR_DEPTH = {
     "quick_fact": "Answer directly in a few sentences. Give a short example if it clarifies the fact.",
@@ -292,6 +304,12 @@ def _generate_chat_reply(
     )
 
 
+def _course_passages(document_ids: list[uuid.UUID], query: str) -> list[dict]:
+    """Worker-thread retrieval with its own session, so a timed-out search never touches the request's."""
+    with SessionLocal() as db:
+        return tutoring_passages(db, document_ids, query, for_chat=True)
+
+
 @router.post("/messages", response_model=ChatMessageResponse)
 async def create_chat_message(
     payload: ChatMessageRequest,
@@ -329,12 +347,18 @@ async def generate_chat_reply(payload: ChatMessageRequest, current_user: Profile
 
     # The question embedding is a provider call too, so it sits inside the chat budget.
     reserve("chat_message", user_id)
+    # One deadline covers retrieval and generation; slow retrieval falls back to general guidance.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settings.CHAT_TIMEOUT_SECONDS
     passages = []
     if document_ids and turn.search_query:
-        passages = await asyncio.to_thread(
-            tutoring_passages, db, document_ids, turn.search_query, for_chat=True,
-        )
-        db.rollback()
+        try:
+            passages = await asyncio.wait_for(
+                asyncio.to_thread(_course_passages, document_ids, turn.search_query),
+                timeout=min(_RETRIEVAL_BUDGET_SECONDS, settings.CHAT_TIMEOUT_SECONDS / 4),
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Tutor retrieval skipped: search exceeded its time budget.")
     system_instruction = _system_instruction(activity_context, sample_run, passages, turn=turn)
 
     try:
@@ -345,14 +369,20 @@ async def generate_chat_reply(payload: ChatMessageRequest, current_user: Profile
                 system_instruction,
                 turn,
             ),
-            timeout=settings.CHAT_TIMEOUT_SECONDS,
+            timeout=max(0.0, deadline - loop.time()),
         )
-    except (GeminiConfigurationError, GeminiAPIError, asyncio.TimeoutError) as exc:
-        logger.warning("Chat provider unavailable (%s).", type(exc).__name__)
-        raise HTTPException(status_code=503, detail=GENERIC_UNAVAILABLE) from None
-    except Exception:
-        logger.exception("Unexpected chat provider failure.")
-        raise HTTPException(status_code=503, detail=GENERIC_UNAVAILABLE) from None
+    except asyncio.TimeoutError:
+        logger.warning("Chat provider timed out.")
+        raise _provider_failure("timeout") from None
+    except GeminiAPIError as exc:
+        logger.warning("Chat provider failed (%s).", exc.kind)
+        raise _provider_failure(exc.kind, exc.retry_after) from None
+    except GeminiConfigurationError:
+        logger.warning("Chat provider is not configured.")
+        raise _provider_failure("unavailable") from None
+    except Exception as exc:
+        logger.error("Unexpected chat provider failure (%s).", type(exc).__name__)
+        raise _provider_failure("unavailable") from None
 
     profile = db.get(Profile, user_id)
     if profile is None or profile.account_status != "active" or (profile.role == UserRole.student) != is_student:
@@ -366,5 +396,5 @@ async def generate_chat_reply(payload: ChatMessageRequest, current_user: Profile
     if reveals_solution(reply, reference, starter, failed_sample=failed_sample, prose_only=is_challenge):
         return ChatMessageResponse(reply=WITHHELD_REPLY, sources=[])
     if not reply:
-        raise HTTPException(status_code=503, detail=GENERIC_UNAVAILABLE)
+        raise _provider_failure("unavailable")
     return ChatMessageResponse(reply=reply, sources=sources)

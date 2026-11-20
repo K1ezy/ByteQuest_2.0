@@ -6,7 +6,8 @@ export type ConversationSummary = { id: string; title: string; revision: number;
 type SavedTurn = { id: string; position: number; question: string; reply: string; sources: ChatSource[] };
 type ConversationPage = { items: ConversationSummary[]; next_offset: number | null };
 type Transcript = { conversation: ConversationSummary; turns: SavedTurn[]; before: number | null };
-type SavedReply = { conversation: ConversationSummary; turn: SavedTurn };
+export type SavedReply = { conversation: ConversationSummary; turn: SavedTurn };
+type TurnStatus = { status: "completed" | "pending" | "missing"; conversation: ConversationSummary; turn: SavedTurn | null };
 
 const root = "/chat/conversations";
 
@@ -15,8 +16,11 @@ export const chatHistory = {
     const params = new URLSearchParams({ q: query, offset: String(offset) });
     return apiRequest<ConversationPage>(root + "?" + params, { signal });
   },
-  create(signal: AbortSignal) {
-    return apiRequest<ConversationSummary>(root, { method: "POST", signal });
+  create(id: string, signal: AbortSignal) {
+    return apiRequest<ConversationSummary>(root, { method: "POST", body: JSON.stringify({ id }), signal });
+  },
+  turn(id: string, turnId: string, signal: AbortSignal) {
+    return apiRequest<TurnStatus>(root + "/" + id + "/turns/" + turnId, { signal });
   },
   read(id: string, signal: AbortSignal, before?: number) {
     return apiRequest<Transcript>(root + "/" + id + (before ? "?before=" + before : ""), { signal });

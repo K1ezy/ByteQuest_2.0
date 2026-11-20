@@ -1,6 +1,10 @@
 import logging
+import math
 from time import perf_counter
-from typing import Type, TypeVar
+from typing import Literal, Type, TypeVar
+
+import httpx
+from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
@@ -16,6 +20,37 @@ T = TypeVar("T", bound=BaseModel)
 
 class GeminiAPIError(Exception):
     """Raised when Gemini API generation fails."""
+
+    def __init__(
+        self, message: str = "Gemini generation failed.", *,
+        kind: Literal["rate_limited", "timeout", "unavailable"] = "unavailable", retry_after: int | None = None,
+    ):
+        super().__init__(message)
+        self.kind = kind
+        self.retry_after = retry_after
+
+
+def _retry_after(exc: genai_errors.APIError) -> int | None:
+    """Seconds the provider asked us to wait, from its header or RetryInfo, clamped to a safe range."""
+    value = (getattr(exc.response, "headers", None) or {}).get("retry-after")
+    error = exc.details.get("error") if isinstance(exc.details, dict) else None
+    if value is None and isinstance(error, dict) and isinstance(error.get("details"), list):
+        value = next((str(item["retryDelay"]).removesuffix("s") for item in error["details"]
+                      if isinstance(item, dict) and item.get("retryDelay")), None)
+    try:
+        return min(max(math.ceil(float(value)), 1), 300)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _chat_failure(exc: Exception) -> GeminiAPIError:
+    """Classify a provider failure; its message is dropped because it may echo the prompt."""
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        return GeminiAPIError("Gemini chat generation timed out.", kind="timeout")
+    if isinstance(exc, genai_errors.APIError):
+        return GeminiAPIError("Gemini chat generation failed.", kind="rate_limited" if exc.code == 429 else "unavailable",
+                              retry_after=_retry_after(exc) if exc.code in (429, 503) else None)
+    return GeminiAPIError("Gemini chat generation failed.")
 
 
 class GeminiLLMService:
@@ -126,12 +161,14 @@ class GeminiLLMService:
         except GeminiAPIError:
             raise
         except Exception as exc:
+            failure = _chat_failure(exc)
             logger.error(
-                "Gemini chat generation failed with model %s (%s).",
+                "Gemini chat generation failed with model %s (%s, %s).",
                 model_id,
                 type(exc).__name__,
+                failure.kind,
             )
-            raise GeminiAPIError("Gemini chat generation failed.") from exc
+            raise failure from exc
 
 
 gemini_service = GeminiLLMService()

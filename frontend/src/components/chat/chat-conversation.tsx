@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { UserRole } from "@/lib/types";
+import { ChatMessageContent } from "./chat-message-content";
 import { useChat } from "./chat-provider";
 import type { ActivityContext } from "./chat-session";
 
@@ -42,7 +43,7 @@ const availabilityCopy = {
 export function ChatConversation({ variant }: { variant: "compact" | "page" }) {
   const {
     messages, draft, setDraft, pending, error, activity, detachActivity, availability,
-    role, language, limits, sendMessage, retryLast, editLast, clearConversation, refreshAvailability,
+    role, language, limits, sendMessage, retryLast, checkReply, editLast, clearConversation, refreshAvailability,
     scrollToLatest, setScrollToLatest,
     mode, conversation, historyEnabled, canBrowseHistory, loadingTranscript, canLoadEarlier, loadEarlier,
   } = useChat();
@@ -160,7 +161,9 @@ export function ChatConversation({ variant }: { variant: "compact" | "page" }) {
         ) : messages.map((message) => (
           <article key={message.id} className={`chat-message chat-message-${message.role}`}>
             <span className="chat-message-role">{message.role === "user" ? "You" : "Chat Assistant"}</span>
-            <div className="chat-bubble">{message.content}</div>
+            <div className="chat-bubble">
+              {message.role === "assistant" ? <ChatMessageContent content={message.content} /> : message.content}
+            </div>
             {message.sources && message.sources.length > 0 && (
               <div className="chat-sources">
                 <span>Course sources</span>
@@ -187,6 +190,9 @@ export function ChatConversation({ variant }: { variant: "compact" | "page" }) {
           <div className={`chat-error chat-error-${error.kind}`}>
             <p role="alert">{error.message}</p>
             <div className="chat-error-actions">
+              {error.check && (
+                <button type="button" disabled={!ready || pending || loadingTranscript} onClick={checkReply}>Check for reply</button>
+              )}
               {error.retryable && (
                 <button type="button" disabled={!ready || pending || loadingTranscript || waitingToRetry} onClick={retryLast}>
                   {waitingToRetry ? "Retry after the wait" : "Retry question"}

@@ -199,6 +199,129 @@ it("detaches a stale activity and retries without it", async () => {
   ]);
 });
 
+const savedChat = { id: "1f0c3c4e-7d2a-4c58-9a51-0f1e2d3c4b5a", title: "New chat", revision: 0, last_message_at: null };
+
+function routeApi(handler: (path: string, init: RequestInit) => unknown) {
+  vi.mocked(apiRequest).mockImplementation(async (path: string, init: RequestInit = {}) => {
+    if (path === "/chat/status") return { ...ready, history_enabled: true } as never;
+    return await handler(path, init) as never;
+  });
+}
+
+function bodies(match: (path: string, init: RequestInit) => boolean) {
+  return vi.mocked(apiRequest).mock.calls
+    .filter(([path, init]) => match(path, init ?? {}))
+    .map(([, init]) => JSON.parse(String(init?.body)));
+}
+
+const isSend = (path: string, init: RequestInit) => path.endsWith("/turns") && init.method === "POST";
+const isCreate = (path: string, init: RequestInit) => path === "/chat/conversations" && init.method === "POST";
+
+it("keeps the question and the cross-device explanation after refreshing a changed chat", async () => {
+  const changed = { ...savedChat, revision: 1, title: "Loops" };
+  routeApi((path, init) => {
+    if (isCreate(path, init)) return savedChat;
+    if (isSend(path, init)) throw new ApiError("This chat changed.", 409, "conversation_changed");
+    if (path === "/chat/conversations/" + savedChat.id) {
+      return { conversation: changed, before: null, turns: [
+        { id: "laptop-turn", position: 1, question: "Asked on the laptop", reply: "Laptop reply", sources: [] },
+      ] };
+    }
+    throw new Error("Unexpected request " + path);
+  });
+  const { result } = await openChat();
+  act(() => result.current.setDraft("Asked on the phone"));
+  act(() => result.current.sendMessage());
+  await waitFor(() => expect(result.current.messages.map(({ content }) => content))
+    .toEqual(["Asked on the laptop", "Laptop reply", "Asked on the phone"]));
+  expect(result.current.error).toMatchObject({
+    message: "This chat changed on another device. Review the latest messages before retrying.", retryable: true,
+  });
+  expect(result.current.conversation?.revision).toBe(1);
+});
+
+it("restores a saved reply after a lost response with one read-only check", async () => {
+  routeApi((path, init) => {
+    if (isCreate(path, init)) return savedChat;
+    if (isSend(path, init)) throw new ApiError("Network error", 0);
+    const turn = path.match(/\/turns\/(.+)$/)?.[1];
+    if (turn) {
+      return { status: "completed", conversation: { ...savedChat, revision: 1 }, turn: {
+        id: turn, position: 1, question: "What is a loop?", reply: "A loop repeats a block.", sources: [],
+      } };
+    }
+    throw new Error("Unexpected request " + path);
+  });
+  const { result } = await openChat();
+  act(() => result.current.setDraft("What is a loop?"));
+  act(() => result.current.sendMessage());
+  await waitFor(() => expect(result.current.messages.map(({ content }) => content))
+    .toEqual(["What is a loop?", "A loop repeats a block."]));
+  expect(result.current.error).toBeNull();
+  expect(bodies(isSend)).toHaveLength(1);
+  expect(vi.mocked(apiRequest).mock.calls.filter(([path]) => /\/turns\/.+/.test(path))).toHaveLength(1);
+});
+
+it("offers Check for reply while pending, then retries a missing turn with the same turn ID", async () => {
+  const outcomes = ["pending", "missing"];
+  let sends = 0;
+  routeApi((path, init) => {
+    if (isCreate(path, init)) return savedChat;
+    if (isSend(path, init)) {
+      sends += 1;
+      if (sends === 1) throw new ApiError("Network error", 0);
+      const { turn_id, question } = JSON.parse(String(init.body));
+      return { conversation: { ...savedChat, revision: 1 }, turn: { id: turn_id, position: 1, question, reply: "Trace it.", sources: [] } };
+    }
+    if (/\/turns\/.+/.test(path)) return { status: outcomes.shift(), conversation: savedChat, turn: null };
+    throw new Error("Unexpected request " + path);
+  });
+  const { result } = await openChat();
+  act(() => result.current.setDraft("Why does my loop stop early?"));
+  act(() => result.current.sendMessage());
+  await waitFor(() => expect(result.current.error).toMatchObject({ kind: "pending", check: true, retryable: false }));
+  expect(sends).toBe(1);
+  act(() => result.current.checkReply());
+  await waitFor(() => expect(result.current.error).toMatchObject({ retryable: true }));
+  expect(result.current.error?.check).toBeFalsy();
+  expect(result.current.messages.map(({ content }) => content)).toEqual(["Why does my loop stop early?"]);
+  act(() => result.current.retryLast());
+  await waitFor(() => expect(result.current.messages.at(-1)?.content).toBe("Trace it."));
+  const [first, retry] = bodies(isSend);
+  expect(retry.turn_id).toBe(first.turn_id);
+  expect(retry.question).toBe(first.question);
+});
+
+it("reuses the client chat ID after a lost create and gives an edited question a new turn ID", async () => {
+  let creates = 0;
+  routeApi((path, init) => {
+    if (isCreate(path, init)) {
+      creates += 1;
+      if (creates === 1) throw new ApiError("Network error", 0);
+      return { ...savedChat, id: JSON.parse(String(init.body)).id };
+    }
+    if (isSend(path, init)) throw new ApiError("Busy", 503, "provider_rate_limited");
+    throw new Error("Unexpected request " + path);
+  });
+  const { result } = await openChat();
+  act(() => result.current.setDraft("What is a list?"));
+  act(() => result.current.sendMessage());
+  await waitFor(() => expect(result.current.error?.kind).toBe("network"));
+  act(() => result.current.retryLast());
+  await waitFor(() => expect(result.current.error).toMatchObject({
+    kind: "rate_limit", message: "The assistant is busy right now. Your question is still here.",
+  }));
+  const [lost, retried] = bodies(isCreate);
+  expect(retried.id).toBe(lost.id);
+  act(() => result.current.editLast());
+  act(() => result.current.setDraft("What is a Python list?"));
+  act(() => result.current.sendMessage());
+  await waitFor(() => expect(bodies(isSend)).toHaveLength(2));
+  const [original, edited] = bodies(isSend);
+  expect(edited.turn_id).not.toBe(original.turn_id);
+  expect(bodies(isCreate)).toHaveLength(2);
+});
+
 it("keeps the newest question within both configured history limits", () => {
   const messages = [
     { id: "1", role: "assistant" as const, content: "abcde" },

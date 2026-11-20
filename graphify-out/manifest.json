@@ -12,9 +12,9 @@
     "semantic_hash": ""
   },
   "backend/app/api/chat.py": {
-    "mtime": 1795152353.9801898,
-    "seen": 1795158112.0903764,
-    "ast_hash": "7d2e5b463ae8418d93866ec08a1c56a1",
+    "mtime": 1795172085.2126753,
+    "seen": 1795172673.3584123,
+    "ast_hash": "7a073184e126140ba36ef904e1f43cbf",
     "semantic_hash": ""
   },
   "backend/app/api/exams.py": {
@@ -156,9 +156,9 @@
     "semantic_hash": ""
   },
   "backend/app/services/ai_rag/llm.py": {
-    "mtime": 1795151751.0390239,
-    "seen": 1795158112.1050534,
-    "ast_hash": "a06fc941d6d80d23db072f0c4809dfd3",
+    "mtime": 1795172055.443763,
+    "seen": 1795172673.3734307,
+    "ast_hash": "6d75ce693ad7de6a42c235de8bb1e84f",
     "semantic_hash": ""
   },
   "backend/app/services/ai_rag/pdf_processor.py": {
@@ -444,9 +444,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_learning_flow_integration.py": {
-    "mtime": 1795152208.173346,
-    "seen": 1795158112.1396916,
-    "ast_hash": "551437c1b4a62230322bfdd4afd1d54b",
+    "mtime": 1795172183.5148237,
+    "seen": 1795172673.4060452,
+    "ast_hash": "571470ae652f1fcdbec45c6570c5b511",
     "semantic_hash": ""
   },
   "backend/tests/test_ml_exam_features.py": {
@@ -882,21 +882,21 @@
     "semantic_hash": ""
   },
   "frontend/src/components/chat/chat-conversation.tsx": {
-    "mtime": 1795149836.1104176,
-    "seen": 1795158112.1880507,
-    "ast_hash": "37d7ab2aa56b6ca22f0e994c33eb353f",
+    "mtime": 1795172394.6822667,
+    "seen": 1795172673.443046,
+    "ast_hash": "bf0e18c9b5c5a1dbe21f446bc984fbe1",
     "semantic_hash": ""
   },
   "frontend/src/components/chat/chat-provider.test.tsx": {
-    "mtime": 1795147741.8038433,
-    "seen": 1795158112.1880507,
-    "ast_hash": "a5907116836a2e106689dff681c4c1b4",
+    "mtime": 1795172495.7188482,
+    "seen": 1795172673.443046,
+    "ast_hash": "65a1621324037856d75a0d826f948410",
     "semantic_hash": ""
   },
   "frontend/src/components/chat/chat-provider.tsx": {
-    "mtime": 1795149876.6296446,
-    "seen": 1795158112.1880507,
-    "ast_hash": "2c0314e52f266541cab0d448269510d5",
+    "mtime": 1795172372.5969796,
+    "seen": 1795172673.443046,
+    "ast_hash": "77efccc29e1a540528861376ac550867",
     "semantic_hash": ""
   },
   "frontend/src/components/chat/chat-shell.tsx": {
@@ -1302,9 +1302,9 @@
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1795158002.6584785,
-    "seen": 1795158112.2580113,
-    "ast_hash": "4e0550eefe91f9078fe1d48364fd2e7b",
+    "mtime": 1795159032.2030964,
+    "seen": 1795172673.498063,
+    "ast_hash": "dfa119ccd458f01a795e1647a678b8d5",
     "semantic_hash": ""
   },
   "backend/requirements-dev.txt": {
@@ -2406,9 +2406,9 @@
     "semantic_hash": ""
   },
   "backend/app/api/chat_history.py": {
-    "mtime": 1795150264.1812074,
-    "seen": 1795158112.0903764,
-    "ast_hash": "a4bdd936717fbc53fe923dd27d998c7e",
+    "mtime": 1795171975.0251732,
+    "seen": 1795172673.3584123,
+    "ast_hash": "2e0468f9e98614f6d8b7d7ee89b16f32",
     "semantic_hash": ""
   },
   "backend/app/services/ai_rag/tutor.py": {
@@ -2430,9 +2430,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/chat/chat-history.ts": {
-    "mtime": 1795149480.1673262,
-    "seen": 1795158112.1880507,
-    "ast_hash": "cc7e1f47c7eb706e56b42ddbdd54ca7b",
+    "mtime": 1795172282.7809076,
+    "seen": 1795172673.443046,
+    "ast_hash": "e9fcc1f2128d277891ebe89f09f5481b",
     "semantic_hash": ""
   },
   "frontend/src/components/chat/chat-session.ts": {
@@ -2472,9 +2472,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md": {
-    "mtime": 1795158464.883201,
-    "seen": 1795158519.2627006,
-    "ast_hash": "950e790c84fde47a8a78da029abc9c76",
+    "mtime": 1795158554.887673,
+    "seen": 1795172673.501057,
+    "ast_hash": "c6424d575419d3a6619a41ca72d4e40e",
     "semantic_hash": ""
   },
   "docs/KVM2_LIVE_PILOT_CHECKLIST.md": {
@@ -2487,6 +2487,18 @@
     "mtime": 1795158483.074331,
     "seen": 1795158519.2737105,
     "ast_hash": "ab6ec8b2c79637e88e2a7c71be63b20d",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/chat/chat-message-content.test.tsx": {
+    "mtime": 1795172497.366783,
+    "seen": 1795172673.443046,
+    "ast_hash": "9be00283cecb9c7e29dc948a9a02352b",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/chat/chat-message-content.tsx": {
+    "mtime": 1795172353.5241306,
+    "seen": 1795172673.443046,
+    "ast_hash": "a8052818b710df120730395b991e8f87",
     "semantic_hash": ""
   }
 }

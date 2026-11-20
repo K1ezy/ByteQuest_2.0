@@ -6,7 +6,7 @@ import {
 import { ApiError, apiRequest } from "@/lib/api";
 import { newRequestId } from "@/lib/network";
 import type { UserRole } from "@/lib/types";
-import { chatHistory, turnMessages, type ChatMode, type ConversationSummary } from "./chat-history";
+import { chatHistory, turnMessages, type ChatMode, type ConversationSummary, type SavedReply } from "./chat-history";
 import {
   activityFromPath, contextMessages, DEFAULT_LIMITS, loadChatSnapshot, MAX_SAVED_MESSAGES,
   safeChatReturnPath, saveChatSnapshot, type ChatLimits, type ChatMessage, type ChatSource,
@@ -16,12 +16,14 @@ type ServerChatState = "ready" | "exam_in_progress" | "enrollment_required" | "d
 type ChatStatusResponse = { status: ServerChatState; role: UserRole; language: string | null; limits: ChatLimits; history_enabled?: boolean };
 type ChatAvailability = ServerChatState | "checking" | "offline" | "connection_error" | "session";
 type ChatError = {
-  kind: "network" | "rate_limit" | "unavailable" | "invalid" | "session" | "forbidden" | "unknown";
+  kind: "network" | "rate_limit" | "unavailable" | "invalid" | "session" | "forbidden" | "pending" | "unknown";
   message: string;
   retryable: boolean;
   retryAt?: number;
   blocked?: ServerChatState;
   clearActivity?: boolean;
+  /** The saved reply may still arrive: offer a read-only check instead of a new generation. */
+  check?: boolean;
 };
 
 const INTERRUPTED_REPLY: ChatError = {
@@ -29,6 +31,19 @@ const INTERRUPTED_REPLY: ChatError = {
   message: "Your question is still here. Retry when you're ready.",
   retryable: true,
 };
+const PENDING_REPLY: ChatError = {
+  kind: "pending",
+  message: "A reply is still being prepared for this chat. Check again in a moment.",
+  retryable: false,
+  check: true,
+};
+const MISSING_REPLY: ChatError = {
+  kind: "unavailable",
+  message: "Your reply wasn't saved. Your question is still here, so retry when you're ready.",
+  retryable: true,
+};
+// The request may have reached the server even though its response never arrived.
+const LOST_RESPONSE = [0, 502, 504];
 
 function mapChatError(error: unknown): ChatError {
   if (error instanceof ApiError) {
@@ -60,6 +75,7 @@ function mapChatError(error: unknown): ChatError {
           clearActivity: true,
         };
       case 409:
+        if (error.code === "chat_turn_in_progress") return PENDING_REPLY;
         if (error.code === "conversation_changed") {
           return { kind: "unavailable", message: "This chat changed on another device. Review the latest messages before retrying.", retryable: true };
         }
@@ -73,12 +89,21 @@ function mapChatError(error: unknown): ChatError {
           retryable: true,
           retryAt: error.retryAfterSeconds ? Date.now() + error.retryAfterSeconds * 1_000 : undefined,
         };
-      case 503:
+      case 503: {
+        const retryAt = error.retryAfterSeconds ? Date.now() + error.retryAfterSeconds * 1_000 : undefined;
+        if (error.code === "provider_rate_limited") {
+          return { kind: "rate_limit", message: "The assistant is busy right now. Your question is still here.", retryable: true, retryAt };
+        }
+        if (error.code === "provider_timeout") {
+          return { kind: "unavailable", message: "The assistant took too long to reply. Your question is still here.", retryable: true, retryAt };
+        }
         return {
           kind: "unavailable",
           message: "The assistant is temporarily unavailable. Your question is still here.",
           retryable: true,
+          retryAt,
         };
+      }
     }
   }
   if (error instanceof Error && error.message.startsWith("Your session has expired.")) {
@@ -113,6 +138,7 @@ function useChatController() {
   const transcriptRequest = useRef<AbortController | null>(null);
   const conversationRef = useRef<ConversationSummary | null>(null);
   const restoreId = useRef<string | null>(null);
+  const newConversationId = useRef<string | null>(null);
   const drafts = useRef<Record<string, string>>({});
   const routeActivity = activityFromPath(returnPath);
   const activity = routeActivity?.id === detachedActivity ? null : routeActivity;
@@ -144,6 +170,7 @@ function useChatController() {
 
   const clearConversation = useCallback(() => {
     stopReply();
+    newConversationId.current = null;
     lastActivity.current = null;
     replaceMessages([]);
     setDraft("");
@@ -168,6 +195,7 @@ function useChatController() {
     replaceMessages(snapshot?.messages ?? []);
     drafts.current = snapshot?.savedDrafts ?? {};
     restoreId.current = snapshot?.conversationId ?? null;
+    newConversationId.current = null;
     updateConversation(null);
     setBefore(null);
     setMode(snapshot?.mode ?? "saved");
@@ -259,7 +287,8 @@ function useChatController() {
         const previous = messagesRef.current.at(-1);
         const interrupted = previous?.role === "user" && !loaded.some((entry) => entry.id === previous.id);
         replaceMessages(interrupted ? [...loaded, previous] : loaded);
-        setError(interrupted ? INTERRUPTED_REPLY : null);
+        // Keep the reason the question is unsaved (such as a cross-device conflict) rather than a generic notice.
+        setError((current) => interrupted ? current ?? INTERRUPTED_REPLY : null);
         updateConversation(result.conversation);
       }
       setBefore(result.before);
@@ -344,21 +373,22 @@ function useChatController() {
     setPending(true);
     setError(null);
     setScrollToLatest(true);
+    let sentTo: ConversationSummary | null = null;
     try {
       if (mode === "saved" && historyEnabled) {
-        const current = conversationRef.current ?? await chatHistory.create(controller.signal);
-        if (controller.signal.aborted) return;
-        updateConversation(current);
-        const question = history.at(-1)!;
-        const saved = await chatHistory.send(current, question, activityId, controller.signal);
-        if (controller.signal.aborted) return;
-        updateConversation(saved.conversation);
-        if (saved.turn.position !== current.revision + 1 || saved.turn.position !== saved.conversation.revision) {
-          await readTranscript(current.id);
-        } else {
-          replaceMessages([...messagesRef.current.slice(0, -1), ...turnMessages(saved.turn)]);
+        let current = conversationRef.current;
+        if (!current) {
+          // Reused on retry, so a lost create response cannot open (and charge for) a second chat.
+          newConversationId.current ??= newRequestId();
+          current = await chatHistory.create(newConversationId.current, controller.signal);
+          if (controller.signal.aborted) return;
+          newConversationId.current = null;
+          updateConversation(current);
         }
-        setHistoryRevision((value) => value + 1);
+        sentTo = current;
+        const saved = await chatHistory.send(current, history.at(-1)!, activityId, controller.signal);
+        if (controller.signal.aborted) return;
+        await applySavedReply(current, saved);
         return;
       }
       setMode("temporary");
@@ -374,28 +404,11 @@ function useChatController() {
       replaceMessages([...messagesRef.current, message].slice(-MAX_SAVED_MESSAGES));
     } catch (caught) {
       if (controller.signal.aborted) return;
-      const failure = mapChatError(caught);
-      if (failure.clearActivity) {
-        lastActivity.current = null;
-        if (activityId === routeActivity?.id) setDetachedActivity(activityId);
-      }
-      if (failure.blocked) {
-        statusRequest.current?.abort();
-        statusRequest.current = null;
-        setAvailability(failure.blocked);
-      }
-      if (failure.kind === "session") setAvailability("session");
-      if (caught instanceof ApiError && caught.code === "conversation_missing") {
-        restoreId.current = null;
-        updateConversation(null);
-        replaceMessages([]);
-        setBefore(null);
-        setDraft(history.at(-1)?.content ?? "");
-        setHistoryRevision((value) => value + 1);
-      }
-      setError(failure);
-      if (caught instanceof ApiError && caught.code === "conversation_changed" && conversationRef.current) {
-        await readTranscript(conversationRef.current.id);
+      // The reply may have been saved even though its response was lost: check once before offering Retry.
+      if (sentTo && caught instanceof ApiError && LOST_RESPONSE.includes(caught.status)) {
+        await recoverTurn(sentTo, history.at(-1)!, controller.signal);
+      } else {
+        await handleFailure(caught, history, activityId);
       }
     } finally {
       if (replyRequest.current === controller) {
@@ -403,6 +416,69 @@ function useChatController() {
         setPending(false);
       }
     }
+  }
+
+  async function applySavedReply(current: ConversationSummary, saved: SavedReply) {
+    updateConversation(saved.conversation);
+    if (saved.turn.position !== current.revision + 1 || saved.turn.position !== saved.conversation.revision) {
+      await readTranscript(current.id);
+    } else {
+      replaceMessages([...messagesRef.current.slice(0, -1), ...turnMessages(saved.turn)]);
+    }
+    setHistoryRevision((value) => value + 1);
+  }
+
+  /** Read-only: restores a saved reply or says whether a new generation is needed. Never calls Gemini. */
+  async function recoverTurn(current: ConversationSummary, question: ChatMessage, signal: AbortSignal) {
+    try {
+      const result = await chatHistory.turn(current.id, question.id, signal);
+      if (signal.aborted) return;
+      if (result.turn) await applySavedReply(current, { conversation: result.conversation, turn: result.turn });
+      else setError(result.status === "pending" ? PENDING_REPLY : MISSING_REPLY);
+    } catch (caught) {
+      if (!signal.aborted) await handleFailure(caught, messagesRef.current, lastActivity.current);
+    }
+  }
+
+  async function handleFailure(caught: unknown, history: ChatMessage[], activityId: string | null) {
+    const failure = mapChatError(caught);
+    if (failure.clearActivity) {
+      lastActivity.current = null;
+      if (activityId === routeActivity?.id) setDetachedActivity(activityId);
+    }
+    if (failure.blocked) {
+      statusRequest.current?.abort();
+      statusRequest.current = null;
+      setAvailability(failure.blocked);
+    }
+    if (failure.kind === "session") setAvailability("session");
+    if (caught instanceof ApiError && caught.code === "conversation_missing") {
+      restoreId.current = null;
+      updateConversation(null);
+      replaceMessages([]);
+      setBefore(null);
+      setDraft(history.at(-1)?.content ?? "");
+      setHistoryRevision((value) => value + 1);
+    }
+    setError(failure);
+    if (caught instanceof ApiError && caught.code === "conversation_changed" && conversationRef.current) {
+      await readTranscript(conversationRef.current.id);
+    }
+  }
+
+  function checkReply() {
+    const current = conversationRef.current;
+    const question = messagesRef.current.at(-1);
+    if (!current || question?.role !== "user" || !canSend()) return;
+    const controller = new AbortController();
+    replyRequest.current = controller;
+    setPending(true);
+    void recoverTurn(current, question, controller.signal).finally(() => {
+      if (replyRequest.current === controller) {
+        replyRequest.current = null;
+        setPending(false);
+      }
+    });
   }
 
   function canSend() {
@@ -484,7 +560,7 @@ function useChatController() {
     windowMode, setWindowMode,
     signedIn: ownerId === undefined ? null : Boolean(ownerId),
     messages, draft, setDraft, pending, error, returnPath, setReturnPath, activity, detachActivity,
-    scrollToLatest, setScrollToLatest, sendMessage, retryLast, editLast, clearConversation,
+    scrollToLatest, setScrollToLatest, sendMessage, retryLast, checkReply, editLast, clearConversation,
     refreshAvailability, availability, role: serverStatus?.role, language: serverStatus?.language, limits,
     mode, conversation, historyEnabled, canBrowseHistory, historyRevision, startChat, openConversation, updateHistory,
     loadingTranscript, canLoadEarlier: before !== null,

@@ -12,16 +12,18 @@ import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from threading import Barrier
+from threading import Barrier, Event
+from time import perf_counter
 from types import SimpleNamespace
 
+import httpx
 import jwt
 import anyio
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from google.genai.errors import ClientError
+from google.genai.errors import ClientError, ServerError
 from sqlalchemy import create_engine, func, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError, TimeoutError as PoolTimeout
@@ -29,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.api import pilot
 from app.api import chat as chat_api
+from app.api import chat_history as chat_history_api
 from app.api import exams as exams_api
 from app.api import rag_instructor
 from app.api import reviews as reviews_api
@@ -132,6 +135,7 @@ def flow(monkeypatch, request):
     monkeypatch.setattr(settings, "ML_SHADOW_ENABLED", False)
     monkeypatch.setattr(quotas, "SessionLocal", new_quota_session)
     monkeypatch.setattr(submission_worker, "SessionLocal", new_session)
+    monkeypatch.setattr(chat_api, "SessionLocal", new_session)
 
     users = {
         "admin": (uuid.uuid4(), UserRole.admin, ProgrammingLang.python),
@@ -2053,6 +2057,143 @@ def test_saved_chat_expiry_and_deleted_in_flight_reply(flow, monkeypatch):
     assert client.get(f"{root}/{active}", headers=student).status_code == 404
 
 
+def test_concurrent_saved_sends_reach_gemini_once(flow, monkeypatch):
+    """Independent PostgreSQL sessions: a second send while the first waits on Gemini must not call it."""
+    client, new_session, _ = flow
+    with new_session() as fixture_db:
+        engine = fixture_db.get_bind().engine
+    student_id = uuid.uuid4()
+    with Session(engine) as db:
+        db.execute(text(
+            "INSERT INTO auth.users (id, aud, role, email, encrypted_password) "
+            "VALUES (:id, 'authenticated', 'authenticated', :email, '')"
+        ), {"id": student_id, "email": f"chat-race-{student_id.hex}@example.test"})
+        db.add(Profile(id=student_id, pseudonym_id=f"test_{student_id.hex}", role=UserRole.student,
+                       enrolled_language=ProgrammingLang.python))
+        course = Course(code=uuid.uuid4().hex[:24], title="Chat race course")
+        db.add(course)
+        db.flush()
+        course_id = course.id
+        db.add(CourseMember(course_id=course_id, profile_id=student_id, member_role="student"))
+        db.commit()
+
+    def independent_db():
+        with Session(engine) as db:
+            yield db
+
+    app.dependency_overrides[get_db] = independent_db
+    monkeypatch.setattr(settings, "CHAT_HISTORY_ENABLED", True)
+    monkeypatch.setattr(settings, "GEMINI_ENABLED", True)
+    quota: list[str] = []
+    monkeypatch.setattr(chat_api, "reserve", lambda action, account, **_: quota.append(action))
+    monkeypatch.setattr(chat_history_api, "reserve", lambda action, account, **_: quota.append(action))
+    entered, release, calls = Event(), Event(), []
+
+    def provider(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(timeout=10)
+        return "Trace the loop variable."
+
+    monkeypatch.setattr(chat_api, "_generate_chat_reply", provider)
+    student = _token(student_id)
+    root = "/api/v1/chat/conversations"
+    try:
+        path = f"{root}/{client.post(root, headers=student).json()['id']}/turns"
+        first = {"turn_id": str(uuid.uuid4()), "expected_revision": 0, "question": "Explain a loop"}
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            sending = pool.submit(client.post, path, headers=student, json=first)
+            assert entered.wait(timeout=10)
+            other_device = client.post(path, headers=student, json={**first, "turn_id": str(uuid.uuid4())})
+            same_turn = client.post(path, headers=student, json=first)
+            while_pending = client.get(f"{path}/{first['turn_id']}", headers=student)
+            release.set()
+            saved = sending.result(timeout=15)
+        for busy in (other_device, same_turn):
+            assert busy.status_code == 409, busy.text
+            assert busy.json()["detail"]["code"] == "chat_turn_in_progress"
+        assert while_pending.status_code == 200 and while_pending.json()["status"] == "pending"
+        assert saved.status_code == 200, saved.text
+        assert len(calls) == 1 and quota == ["chat_conversation", "chat_message"]
+
+        replay = client.post(path, headers=student, json=first)
+        completed = client.get(f"{path}/{first['turn_id']}", headers=student).json()
+        assert replay.json() == saved.json()
+        assert completed["status"] == "completed" and completed["turn"] == saved.json()["turn"]
+        assert len(calls) == 1 and quota == ["chat_conversation", "chat_message"]
+    finally:
+        release.set()
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM public.courses WHERE id = :id"), {"id": course_id})
+            connection.execute(text("DELETE FROM auth.users WHERE id = :id"), {"id": student_id})
+
+
+def test_saved_chat_recovers_lost_creates_and_reservations(flow, monkeypatch):
+    client, new_session, users = flow
+    student, instructor = _token(users["student"]), _token(users["instructor"])
+    _enroll_chat_students(new_session, users["student"])
+    root = "/api/v1/chat/conversations"
+    monkeypatch.setattr(settings, "CHAT_HISTORY_ENABLED", True)
+    monkeypatch.setattr(settings, "GEMINI_ENABLED", True)
+    created: list[str] = []
+    monkeypatch.setattr(chat_history_api, "reserve", lambda action, account, **_: created.append(action))
+
+    conversation_id = str(uuid.uuid4())
+    first = client.post(root, headers=student, json={"id": conversation_id})
+    again = client.post(root, headers=student, json={"id": conversation_id})
+    assert (first.status_code, again.status_code) == (201, 200)
+    assert first.json() == again.json() and first.json()["id"] == conversation_id
+    assert created == ["chat_conversation"]
+    taken = client.post(root, headers=instructor, json={"id": conversation_id})
+    assert taken.status_code == 409 and taken.json()["detail"]["code"] == "conversation_unavailable"
+    assert client.post(root, headers=student).status_code == 201
+
+    calls = []
+
+    def provider(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            raise GeminiAPIError("provider-detail-secret-9087")
+        return "Trace the loop variable."
+
+    monkeypatch.setattr(chat_api, "_generate_chat_reply", provider)
+    path = f"{root}/{conversation_id}/turns"
+    turn = {"turn_id": str(uuid.uuid4()), "expected_revision": 0, "question": "Explain a loop"}
+    status_path = f"{path}/{turn['turn_id']}"
+
+    def reservation(interval):
+        with new_session() as db:
+            db.execute(text(
+                "update bytequest_private.chat_conversations set pending_turn_id = :turn, "
+                "pending_until = now() + cast(:interval as interval) where id = :id"
+            ), {"turn": turn["turn_id"], "interval": interval, "id": conversation_id})
+            db.commit()
+
+    assert client.get(status_path, headers=student).json()["status"] == "missing"
+    assert client.get(status_path, headers=instructor).status_code == 404
+    failed = client.post(path, headers=student, json=turn)
+    assert failed.status_code == 503 and failed.json()["detail"]["code"] == "provider_unavailable"
+    assert "provider-detail-secret-9087" not in failed.text
+    assert client.get(status_path, headers=student).json()["status"] == "missing"
+
+    reservation("90 seconds")  # An interrupted request leaves its reservation behind.
+    assert client.get(status_path, headers=student).json()["status"] == "pending"
+    busy = client.post(path, headers=student, json=turn)
+    assert busy.status_code == 409 and busy.json()["detail"]["code"] == "chat_turn_in_progress"
+    reservation("-1 second")
+    assert client.get(status_path, headers=student).json()["status"] == "missing"
+    saved = client.post(path, headers=student, json=turn)
+    assert saved.status_code == 200, saved.text
+    assert len(calls) == 2
+    assert client.get(status_path, headers=student).json() == {"status": "completed", **saved.json()}
+    assert len(calls) == 2
+    with new_session() as db:
+        assert db.execute(text(
+            "select pending_turn_id, pending_until from bytequest_private.chat_conversations where id = :id"
+        ), {"id": conversation_id}).one() == (None, None)
+
+
 def test_exam_and_retake_pause_practice_help_through_the_answer_window(flow, monkeypatch):
     client, new_session, users = flow
     student = _token(users["student"])
@@ -2150,7 +2291,7 @@ def test_exam_and_retake_pause_practice_help_through_the_answer_window(flow, mon
     assert client.post(f"{hint_path}/reveal", headers=student, json=ai_request).json()["remaining"] == 3
 
 
-@pytest.mark.parametrize("source", ["chat", "hint"])
+@pytest.mark.parametrize("source", ["chat", "saved", "hint"])
 def test_help_in_flight_is_withheld_if_an_exam_begins(flow, monkeypatch, source):
     client, new_session, users = flow
     student = _token(users["student"])
@@ -2174,9 +2315,16 @@ def test_help_in_flight_is_withheld_if_an_exam_begins(flow, monkeypatch, source)
             db.commit()
 
     hint_path = f"/api/v1/pilot/activities/{challenge_id}/hints"
+    root = "/api/v1/chat/conversations"
+    turn = {"turn_id": str(uuid.uuid4()), "expected_revision": 0, "question": "Explain a loop"}
     if source == "chat":
         monkeypatch.setattr(chat_api, "_generate_chat_reply", lambda *args: start_attempt() or "Explanation.")
         response = client.post("/api/v1/chat/messages", headers=student, json=_chat_payload())
+    elif source == "saved":
+        monkeypatch.setattr(settings, "CHAT_HISTORY_ENABLED", True)
+        conversation_id = client.post(root, headers=student).json()["id"]
+        monkeypatch.setattr(chat_api, "_generate_chat_reply", lambda *args: start_attempt() or "Explanation.")
+        response = client.post(f"{root}/{conversation_id}/turns", headers=student, json=turn)
     else:
         monkeypatch.setattr(pilot, "explain_code_error", lambda **kwargs: start_attempt() or SimpleNamespace(hints=["Hint."]))
         response = client.post(f"{hint_path}/reveal", headers=student,
@@ -2185,6 +2333,13 @@ def test_help_in_flight_is_withheld_if_an_exam_begins(flow, monkeypatch, source)
     assert response.json()["detail"]["code"] == "exam_in_progress"
     with new_session() as db:
         assert db.query(HintUse).filter(HintUse.student_id == users["student"]).count() == 0
+    if source == "saved":
+        recovery = client.get(f"{root}/{conversation_id}/turns/{turn['turn_id']}", headers=student)
+        assert recovery.status_code == 403 and recovery.json()["detail"]["code"] == "exam_in_progress"
+        with new_session() as db:
+            assert db.execute(text(
+                "select pending_turn_id, revision from bytequest_private.chat_conversations where id = :id"
+            ), {"id": conversation_id}).one() == (None, 0)
 
 
 def test_chat_rejects_unauthenticated_and_invalid_payloads(flow):
@@ -2801,7 +2956,8 @@ def test_chat_provider_failure_and_quota_are_generic(flow, monkeypatch):
     )
     assert failed.status_code == 503
     assert "provider-detail-secret-9087" not in failed.text
-    assert "temporarily unavailable" in failed.json()["detail"].lower()
+    assert failed.json()["detail"]["code"] == "provider_unavailable"
+    assert "temporarily unavailable" in failed.json()["detail"]["message"].lower()
 
     def quota_denied(action, account_id):
         raise HTTPException(
@@ -2818,6 +2974,74 @@ def test_chat_provider_failure_and_quota_are_generic(flow, monkeypatch):
     )
     assert limited.status_code == 429
     assert limited.json()["detail"]["code"] == "rate_limited"
+
+
+@pytest.mark.parametrize("failure", ["rate_limit", "busy", "timeout"])
+def test_chat_provider_failures_are_distinct_and_keep_private_text_out_of_logs(flow, monkeypatch, caplog, failure):
+    client, new_session, users = flow
+    _enroll_chat_students(new_session, users["student"])
+    secret = "provider-private-detail-4411"
+    monkeypatch.setattr(settings, "GEMINI_ENABLED", True)
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "synthetic-key")
+
+    def generate_content(**kwargs):
+        if failure == "rate_limit":
+            raise ClientError(429, {"error": {"message": secret, "status": "RESOURCE_EXHAUSTED", "details": [
+                {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "17s"}]}})
+        if failure == "busy":
+            raise ServerError(503, {"error": {"message": secret, "status": "UNAVAILABLE"}},
+                              httpx.Response(503, headers={"Retry-After": "100000"}))
+        raise httpx.ReadTimeout(secret)
+
+    monkeypatch.setattr(llm, "get_gemini_client", lambda: SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)))
+    question = "Why does my loop fail? student_code_7781 = range(3)"
+    response = client.post("/api/v1/chat/messages", headers=_token(users["student"]), json=_chat_payload(question))
+    assert response.status_code == 503, response.text
+    assert (response.json()["detail"]["code"], response.headers.get("retry-after")) == {
+        "rate_limit": ("provider_rate_limited", "17"),
+        "busy": ("provider_unavailable", "300"),
+        "timeout": ("provider_timeout", None),
+    }[failure]
+    for private in (secret, "student_code_7781", "synthetic-key"):
+        assert private not in response.text and private not in caplog.text
+
+
+def test_chat_deadline_covers_slow_retrieval_and_generation(flow, monkeypatch):
+    client, new_session, users = flow
+    course_id = _enroll_chat_students(new_session, users["student"])
+    with new_session() as db:
+        _course_pdf(db, users["instructor"], course_id, "Python Reader.pdf", "Loops repeat steps.", 2)
+    release, instructions = Event(), []
+
+    def slow_embedding(text, is_query=False):
+        release.wait(timeout=15)
+        raise GeminiAPIError("late embedding")
+
+    def reply(messages, system_instruction, turn):
+        instructions.append(system_instruction)
+        if len(instructions) > 1:
+            release.wait(timeout=15)
+        return "Loops repeat steps [source:1]."
+
+    monkeypatch.setattr(retrieval, "generate_embedding", slow_embedding)
+    monkeypatch.setattr(chat_api, "_generate_chat_reply", reply)
+    monkeypatch.setattr(settings, "CHAT_TIMEOUT_SECONDS", 3.0)  # Retrieval budget: 0.75 seconds.
+    student = _token(users["student"])
+    payload = _chat_payload("How does the Python Reader.pdf explain loops?")
+    try:
+        started = perf_counter()
+        general = client.post("/api/v1/chat/messages", headers=student, json=payload)
+        assert perf_counter() - started < 2.0
+        assert general.status_code == 200, general.text
+        assert general.json() == {"reply": "Loops repeat steps.", "sources": []}
+        assert "COURSE MATERIAL PASSAGES" not in instructions[0] and "No course material matched" in instructions[0]
+
+        started = perf_counter()
+        timed_out = client.post("/api/v1/chat/messages", headers=student, json=payload)
+        assert perf_counter() - started < 3.5  # One deadline, not 0.75 seconds plus a fresh 3.
+        assert timed_out.status_code == 503 and timed_out.json()["detail"]["code"] == "provider_timeout"
+    finally:
+        release.set()
 
 
 @pytest.mark.parametrize("failure", ["timeout", "provider_quota", "unconfigured", "invalid_output"])
@@ -2869,7 +3093,9 @@ def test_ai_failures_leave_drafts_and_hint_allowance_intact(flow, monkeypatch, c
         assert draft.json()["detail"]
 
     chat = client.post("/api/v1/chat/messages", headers=student, json=_chat_payload("Help me trace a loop."))
-    assert chat.status_code == 503 and "temporarily unavailable" in chat.json()["detail"]
+    assert chat.status_code == 503 and chat.json()["detail"]["code"] == {
+        "timeout": "provider_timeout", "provider_quota": "provider_rate_limited",
+    }.get(failure, "provider_unavailable")
     assert "provider-private-detail" not in chat.text
 
     _graded_job(client, student, activity_id, "FAIL", dry_run=True)
