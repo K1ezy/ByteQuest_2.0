@@ -12,7 +12,10 @@ from app.models.entities import (
     Profile,
     ReviewState,
 )
-from app.services.attempt_visibility import learner_visible_attempt_clause, student_visible_activity_clause
+from app.services.attempt_visibility import (
+    activity_accepts_submissions_clause, activity_is_closed,
+    learner_visible_attempt_clause, student_visible_activity_clause,
+)
 
 MAX_MASTERY_ATTEMPTS = 2
 QUIZ_MASTERY_SCORE = 75.0
@@ -72,6 +75,7 @@ def determine_next_task_rule_based(
                 LearningActivity.language == completed_activity.language,
                 LearningActivity.review_status == ReviewState.published,
                 student_visible_activity_clause(student.id),
+                activity_accepts_submissions_clause(),
                 LearningActivity.sequence_order > completed_activity.sequence_order,
                 ~successful_activity,
             )
@@ -83,12 +87,8 @@ def determine_next_task_rule_based(
             .first()
         )
         if next_activity is None:
-            return {
-                "sequencer_mode": "rule_based",
-                "recommended_action": "completed_track",
-                "target_activity_id": None,
-                "rationale": "You completed all published activities in this language track.",
-            }
+            # Check earlier quests too. A learner can start anywhere on the map.
+            return determine_track_recommendation(db, student, consider_latest=False)
 
         return {
             "sequencer_mode": "rule_based",
@@ -104,6 +104,7 @@ def determine_next_task_rule_based(
             LearningActivity.topic_concept == completed_activity.topic_concept,
             LearningActivity.review_status == ReviewState.published,
             student_visible_activity_clause(student.id),
+            activity_accepts_submissions_clause(),
             LearningActivity.difficulty_level <= completed_activity.difficulty_level,
             LearningActivity.id != completed_activity.id,
             ~successful_activity,
@@ -115,6 +116,9 @@ def determine_next_task_rule_based(
         )
         .first()
     )
+
+    if remedial_activity is None and activity_is_closed(completed_activity):
+        return determine_track_recommendation(db, student, consider_latest=False)
 
     return {
         "sequencer_mode": "rule_based",
@@ -129,6 +133,8 @@ def determine_next_task_rule_based(
 def determine_track_recommendation(
     db: Session,
     student: Profile,
+    *,
+    consider_latest: bool = True,
 ) -> dict[str, Any]:
     """Recommend the next action for the student's currently selected language.
 
@@ -152,7 +158,7 @@ def determine_track_recommendation(
         student_visible_activity_clause(student.id),
     )
     first_uncompleted = (
-        track_activities.filter(~successful_activity)
+        track_activities.filter(~successful_activity, activity_accepts_submissions_clause())
         .order_by(
             LearningActivity.sequence_order.asc(),
             LearningActivity.difficulty_level.asc(),
@@ -173,13 +179,13 @@ def determine_track_recommendation(
         )
         .order_by(ActivityAttempt.created_at.desc(), ActivityAttempt.id.desc())
         .first()
-    )
+    ) if consider_latest else None
 
     if latest_attempt_row is None:
         if first_uncompleted is not None:
             return {
                 "sequencer_mode": "rule_based",
-                "recommended_action": "start_track",
+                "recommended_action": "start_track" if consider_latest else "advance_next_level",
                 "target_activity_id": first_uncompleted.id,
                 "rationale": "Start this language track with its first uncompleted published activity.",
             }
@@ -190,6 +196,13 @@ def determine_track_recommendation(
                 "target_activity_id": None,
                 "rationale": "There are no published activities in your selected language track yet.",
             }
+        if track_activities.filter(~successful_activity).first() is not None:
+            return {
+                "sequencer_mode": "rule_based",
+                "recommended_action": "no_open_activities",
+                "target_activity_id": None,
+                "rationale": "Your remaining activities are closed. You can still review them on the quest map.",
+            }
         return {
             "sequencer_mode": "rule_based",
             "recommended_action": "completed_track",
@@ -198,21 +211,4 @@ def determine_track_recommendation(
         }
 
     latest_attempt, latest_activity = latest_attempt_row
-    recommendation = determine_next_task_rule_based(
-        db, student, latest_activity, latest_attempt
-    )
-
-    # A student may start with a later activity. If the normal forward sequencer
-    # has no higher item, make sure it does not call the track complete while an
-    # earlier published activity remains unfinished.
-    if (
-        recommendation["recommended_action"] == "completed_track"
-        and first_uncompleted is not None
-    ):
-        return {
-            "sequencer_mode": "rule_based",
-            "recommended_action": "advance_next_level",
-            "target_activity_id": first_uncompleted.id,
-            "rationale": "Continue with the remaining published activity in this language track.",
-        }
-    return recommendation
+    return determine_next_task_rule_based(db, student, latest_activity, latest_attempt)

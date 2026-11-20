@@ -89,6 +89,10 @@ def _forecast(prediction: MLPrediction | None, target: LearningActivity | None) 
         "target_activity": target.title or target.topic_concept,
         "target_topic": target.topic_concept,
         "probability": round(probability, 3),
+        "probabilities": {
+            "logreg": round(float(prediction.logreg_prob), 3),
+            "random_forest": round(float(prediction.rf_prob), 3),
+        },
         "label": BAND_LABELS[recommended_action(probability)],
         "predicted_pass": classify_success(probability),
         "model_version": prediction.model_version,

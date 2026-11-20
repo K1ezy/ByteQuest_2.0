@@ -1,3 +1,7 @@
+## Current system status
+
+For weekly changes, feature coverage, readiness estimates, or UI/UX priorities, read [ByteQuest system status and weekly change log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md).
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.

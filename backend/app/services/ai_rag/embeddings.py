@@ -16,20 +16,17 @@ EMBEDDING_DIMENSIONS = 768
 
 
 def generate_embedding(text: str, is_query: bool = False) -> List[float]:
-    """
-    Rule 2: Asymmetric 768-Dim Embeddings using gemini-embedding-2.
-    Uses RETRIEVAL_DOCUMENT when embedding PDF chunks and RETRIEVAL_QUERY when embedding search queries.
-    """
-    task_type = "RETRIEVAL_QUERY" if is_query else "RETRIEVAL_DOCUMENT"
+    """Embed a query or PDF chunk for asymmetric retrieval."""
+    model = settings.GEMINI_EMBEDDING_MODEL_ID
+    config = types.EmbedContentConfig(output_dimensionality=settings.GEMINI_EMBEDDING_DIM)
+    if model.removeprefix("models/") in {"gemini-embedding-2", "gemini-embedding-2-preview"}:
+        prefix = "task: search result | query: " if is_query else "title: none | text: "
+        text = prefix + text
+    else:
+        config.task_type = "RETRIEVAL_QUERY" if is_query else "RETRIEVAL_DOCUMENT"
 
-    response = get_gemini_client().models.embed_content(
-        model=settings.GEMINI_EMBEDDING_MODEL_ID,
-        contents=text,
-        config=types.EmbedContentConfig(
-            output_dimensionality=settings.GEMINI_EMBEDDING_DIM,  # 768
-            task_type=task_type,
-        ),
-    )
+    client = get_gemini_client()
+    response = client.models.embed_content(model=model, contents=text, config=config)
 
     if not response.embeddings or not response.embeddings[0].values:
         raise ValueError("Failed to generate embedding vector from Gemini API.")

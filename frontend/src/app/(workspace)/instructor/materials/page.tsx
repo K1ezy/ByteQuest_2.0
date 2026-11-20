@@ -64,6 +64,7 @@ function FacultyMaterials() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const focusedMaterial = searchParams.get("material");
+  const replaceRequested = searchParams.get("replace") === "1";
   const status = searchParams.get("status") || "";
   const appliedSearch = searchParams.get("q") || "";
   const [search, setSearch] = useState(appliedSearch);
@@ -77,6 +78,7 @@ function FacultyMaterials() {
   const [editForm, setEditForm] = useState({ title: "", description: "", language: "python", topic: "" });
   const [archiveTarget, setArchiveTarget] = useState<MaterialSummary | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const openedReplacement = useRef<string | null>(null);
 
   const path = useMemo(
     () =>
@@ -90,6 +92,7 @@ function FacultyMaterials() {
     [appliedSearch, courseId, status],
   );
   const { data, error, loading, reload } = useApi<MaterialList>(path);
+  const maxUploadBytes = data?.max_upload_bytes;
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -97,11 +100,11 @@ function FacultyMaterials() {
   }, [appliedSearch]);
 
   useEffect(() => {
-    if (!focusedMaterial || !data) return;
+    if (!focusedMaterial || !data || replaceRequested) return;
     const element = document.getElementById(`material-${focusedMaterial}`);
     element?.scrollIntoView({ block: "center", behavior: "smooth" });
     element?.focus({ preventScroll: true });
-  }, [data, focusedMaterial]);
+  }, [data, focusedMaterial, replaceRequested]);
 
   function updateQuery(patch: Record<string, string | null>) {
     const next = new URLSearchParams(searchParams.toString());
@@ -127,6 +130,15 @@ function FacultyMaterials() {
     window.requestAnimationFrame(() => fileRef.current?.focus());
   }
 
+  useEffect(() => {
+    if (!replaceRequested || !focusedMaterial || data?.course.id !== courseId) return;
+    const target = data.items.find((item) => item.document_id === focusedMaterial && !item.archived_at);
+    if (!target || openedReplacement.current === target.document_id) return;
+    openedReplacement.current = target.document_id;
+    // The dashboard deep link opens the existing replacement form once per material.
+    openUpload(target);
+  }, [courseId, data, focusedMaterial, replaceRequested]);
+
   function startEdit(material: MaterialSummary) {
     setEditing(material);
     setEditForm({
@@ -146,6 +158,9 @@ function FacultyMaterials() {
     if (upload.title.trim().length < 2) found.title = "Enter a title of at least 2 characters.";
     if (!upload.file) found.file = "Choose a PDF file.";
     else if (!upload.file.name.toLowerCase().endsWith(".pdf")) found.file = "Only PDF files are supported.";
+    else if (maxUploadBytes && upload.file.size > maxUploadBytes) {
+      found.file = `The PDF must be ${maxUploadBytes / 1024 ** 2} MiB or smaller.`;
+    }
     setErrors(found);
     if (Object.keys(found).length > 0) return;
     if (!upload.file) return;
@@ -325,9 +340,12 @@ function FacultyMaterials() {
                 accept="application/pdf,.pdf"
                 onChange={(event) => setUpload({ ...upload, file: event.target.files?.[0] || null })}
                 aria-invalid={Boolean(errors.file)}
+                aria-describedby="material-file-help"
               />
               <FieldError>{errors.file}</FieldError>
-              <p className="ws-muted">Searchable PDFs only. Scanned images need a text-based copy; OCR is out of scope.</p>
+              <p className="ws-muted" id="material-file-help">
+                {maxUploadBytes ? `Up to ${maxUploadBytes / 1024 ** 2} MiB. ` : ""}Use a PDF with selectable text.
+              </p>
             </div>
             <div className="ws-field">
               <label htmlFor="material-language">Language track</label>

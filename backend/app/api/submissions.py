@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import uuid
 from functools import partial
@@ -26,14 +27,17 @@ from app.services.judge0.client import (
     TestCaseInput,
     judge0_client,
 )
-from app.services.attempt_visibility import activity_has_opened, activity_is_closed
-from app.services.gamification.badges import evaluate_and_award_badges
+from app.services.attempt_visibility import activity_has_opened, activity_is_closed, student_activity_clause
+from app.services.pass_mark import PRACTICE_PASS_MARK, submission_passes
+from app.services.gamification.badges import award_badges
+from app.services.gamification.completion_rewards import completed_activity_ids
 from app.services.gamification.codex import recovery_news
 from app.services.gamification.progression import grant_xp
 from app.services.gamification.sequencer import determine_next_task_rule_based
 from app.services.gamification.solve_quality import attempt_quality
 from app.services.ml_predictor.audit import record_prediction_outcome
 from app.services.ml_predictor.shadow import record_shadow_prediction
+from app.services.submission_claims import SubmissionClaim, finish_submission, lock_submission_claim
 
 logger = logging.getLogger(__name__)
 
@@ -65,17 +69,18 @@ def run_code_submission(
     payload: CodeSubmissionRequest,
     current_user: Profile,
     db: Session,
-    submission_job_id: Optional[uuid.UUID] = None,
+    submission_claim: SubmissionClaim | None = None,
 ):
     """
     Executes a student's C++, Python, or Java code against Judge0 test cases.
     Enforces Rule 5 (append-only logging on official submissions) and Rule 7 (5 runs/min rate limit).
     """
-    if current_user.role != UserRole.student:
+    if current_user.role != UserRole.student or current_user.account_status != "active":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Student code submission access is required.",
         )
+    submission_job_id = submission_claim.job_id if submission_claim is not None else None
     if submission_job_id is not None:
         job = db.get(SubmissionJob, submission_job_id)
         if job is None or job.student_id != current_user.id or job.activity_id != payload.activity_id:
@@ -93,6 +98,7 @@ def run_code_submission(
             LearningActivity.language == current_user.enrolled_language,
             LearningActivity.activity_type == ActivityKind.challenge,
             LearningActivity.review_status == ReviewState.published,
+            student_activity_clause(current_user.id),
         )
         .first()
     )
@@ -152,11 +158,12 @@ def run_code_submission(
                 test_cases=tc_inputs,
             )
         )
-    except Judge0CircuitOpenError:
+    except Judge0CircuitOpenError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Code execution is temporarily paused while the service recovers. Try again shortly.",
-        )
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
     except Judge0UnavailableError as exc:
         logger.warning("Judge0 request failed (%s).", type(exc).__name__)
         raise HTTPException(
@@ -166,6 +173,11 @@ def run_code_submission(
 
     # If dry_run_only, return results immediately without mutating database logs
     if payload.dry_run_only:
+        if db.query(Profile.id).filter(Profile.id == student_id, Profile.account_status == "active",
+                                      Profile.role == UserRole.student).first() is None:
+            raise HTTPException(403, "Student code submission access is required.")
+        if db.query(LearningActivity.id).filter(LearningActivity.id == activity_id, student_activity_clause(student_id)).first() is None:
+            raise HTTPException(404, "Published programming challenge not found.")
         return {"mode": "dry_run", "evaluation": summary}
 
     # Lock the profile while computing attempt number, XP, and badge changes. This
@@ -177,7 +189,13 @@ def run_code_submission(
         .populate_existing()
         .one()
     )
-    if submission_job_id is not None:
+    if student.role != UserRole.student or student.account_status != "active":
+        raise HTTPException(403, "Student code submission access is required.")
+    if submission_claim is not None:
+        job = lock_submission_claim(db, submission_claim)
+        if job is None:
+            db.rollback()
+            return None
         existing_attempt = db.query(ActivityAttempt).filter(
             ActivityAttempt.submission_job_id == submission_job_id
         ).first()
@@ -186,8 +204,18 @@ def run_code_submission(
             return job.result_json
     # Reload the activity after the Judge0 wait. The initial transaction has been
     # released, and the recommendation service expects a live ORM activity.
-    activity = db.query(LearningActivity).filter(LearningActivity.id == activity_id).one()
+    activity = db.query(LearningActivity).filter(
+        LearningActivity.id == activity_id, student_activity_clause(student_id),
+    ).one_or_none()
+    if activity is None:
+        raise HTTPException(404, "Published programming challenge not found.")
     level_before = student.current_level
+    summary = dataclasses.replace(summary, is_successful=submission_passes(
+        all_passed=summary.passed_test_cases == summary.total_test_cases,
+        score_percentage=summary.score_percentage,
+        pass_mark_percent=activity.pass_mark_percent,
+        default_mark=PRACTICE_PASS_MARK,
+    ))
 
     # Official submission: compute next sequential attempt_number (Rule 5: Append-Only)
     prior_attempts_count = (
@@ -199,21 +227,10 @@ def run_code_submission(
         .scalar()
         or 0
     )
-    prior_success_exists = (
-        db.query(ActivityAttempt.id)
-        .filter(
-            ActivityAttempt.student_id == student.id,
-            ActivityAttempt.activity_id == activity_id,
-            ActivityAttempt.is_successful.is_(True),
-        )
-        .first()
-        is not None
-    )
-
     # Award XP only on the first successful completion to prevent XP farming
     xp_earned = (
         max(0, int(activity.xp_reward or 0))
-        if summary.is_successful and not prior_success_exists
+        if summary.is_successful and not completed_activity_ids(db, student.id, {activity_id})
         else 0
     )
 
@@ -247,7 +264,7 @@ def run_code_submission(
     )
 
     # Phase 4 awards apply to both quizzes and programming challenges.
-    new_badges = evaluate_and_award_badges(db, student)
+    new_badges, badge_xp = award_badges(db, student)
     quality = attempt_quality(db, new_attempt)
     recommendation = determine_next_task_rule_based(
         db, student, activity, new_attempt
@@ -262,17 +279,16 @@ def run_code_submission(
         "new_level": student.current_level,
         "level_up": student.current_level > level_before,
         "new_badges_unlocked": new_badges,
+        "badge_xp_awarded": badge_xp,
         "quality": quality,
         "codex_recoveries": recovery_news(db, new_attempt),
         "next_step_recommendation": recommendation,
         "evaluation": summary,
     })
-    if submission_job_id is not None:
-        job = db.get(SubmissionJob, submission_job_id)
-        job.result_json = response_payload
-        job.status = "completed"
+    if submission_claim is not None:
+        finish_submission(job, response_payload)
     db.commit()
-    if _shadow_scoring_ready(request):
+    if submission_claim is not None or _shadow_scoring_ready(request):
         try:
             record_shadow_prediction(
                 db,

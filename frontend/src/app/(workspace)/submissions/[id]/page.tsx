@@ -6,18 +6,22 @@ import { useEffect, useState } from "react";
 import { apiRequest, getErrorMessage } from "@/lib/api";
 import type { CodexRecovery, Evaluation } from "@/lib/types";
 import { MAX_STARS, STAR_MEANING, SolveStars } from "@/components/solve-stars";
+import { SubmissionComparisonPanel } from "@/components/submission-comparison";
 
 interface Job {
   id: string;
   activity_id: string;
   status: "queued" | "running" | "completed" | "failed";
+  dry_run_only: boolean;
   error: string | null;
+  created_at: string;
   result: {
     attempt_number?: number;
     xp_awarded?: number;
     new_level?: number;
     level_up?: boolean;
     new_badges_unlocked?: string[];
+    badge_xp_awarded?: number;
     quality?: { stars: number; max_stars: number; hints_before: number; self_solved: boolean };
     codex_recoveries?: CodexRecovery[];
     evaluation: Evaluation;
@@ -36,19 +40,21 @@ export default function SubmissionStatusPage() {
   const { id } = useParams<{ id: string }>();
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState("");
+  const [retryError, setRetryError] = useState("");
+  const [retrying, setRetrying] = useState(false);
+  const [pollVersion, setPollVersion] = useState(0);
   const [waitedSeconds, setWaitedSeconds] = useState(0);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     let delay = 1500;
-    const startedAt = Date.now();
 
     async function refresh() {
       try {
         const result = await apiRequest<Job>(`/submission-jobs/${id}`);
         if (!active) return;
         setJob(result);
-        setWaitedSeconds(Math.round((Date.now() - startedAt) / 1000));
+        setWaitedSeconds(Math.floor((Date.now() - Date.parse(result.created_at)) / 1000));
         setError("");
         if (result.status === "queued" || result.status === "running") {
           timer = setTimeout(refresh, delay);
@@ -66,12 +72,27 @@ export default function SubmissionStatusPage() {
       active = false;
       clearTimeout(timer);
     };
-  }, [id]);
+  }, [id, pollVersion]);
+
+  async function retryGrading() {
+    setRetrying(true);
+    setRetryError("");
+    try {
+      const result = await apiRequest<Job>(`/submission-jobs/${id}/retry`, { method: "POST" });
+      setJob(result);
+      setPollVersion((version) => version + 1);
+    } catch (cause) {
+      setRetryError(getErrorMessage(cause));
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   const finished = job?.status === "completed" && job.result;
   const isFailed = job?.status === "failed";
   const isQueued = job?.status === "queued";
   const isRunning = job?.status === "running";
+  const isDelayed = (isQueued || isRunning) && waitedSeconds >= 60;
 
   return (
     <div className="page-shell pilot-dashboard">
@@ -97,7 +118,7 @@ export default function SubmissionStatusPage() {
           : "Grading in progress"}
       </h1>
       <p className="pilot-lead">
-        Your submission job is processed durably. You can navigate away and return anytime.
+        Your submission is saved. You can leave this page and return to check the result.
       </p>
 
       {/* Progressive State Stepper */}
@@ -197,19 +218,17 @@ export default function SubmissionStatusPage() {
           </div>
 
           {isQueued && (
-            <p>Your work has been safely recorded and is awaiting an available grading worker.</p>
+            <p>{job.error ? "Grading was interrupted and will retry automatically." : "Your submission is waiting to be graded."}</p>
           )}
           {/* Grading normally finishes in seconds. Past a minute, say so plainly
               instead of leaving the student watching a spinner with no information. */}
-          {(isQueued || isRunning) && waitedSeconds >= 60 && (
+          {isDelayed && (
             <div className="notice warning mt-3" role="status">
-              <strong>This is taking longer than usual.</strong> Your submission is saved and will be
-              graded as soon as the grading service answers — it is {Math.floor(waitedSeconds / 60)} minute
-              {Math.floor(waitedSeconds / 60) === 1 ? "" : "s"} so far. You can leave this page and come
-              back; nothing is lost. If it is still here after a few minutes, tell your instructor.
+              <strong>This is taking longer than usual.</strong> Your submission is saved. If you still
+              see this message after a few minutes, tell your instructor.
             </div>
           )}
-          {isRunning && (
+          {isRunning && !isDelayed && (
             <p>Executing your solution against sample and hidden test cases in the Judge0 sandbox…</p>
           )}
           {isFailed && (
@@ -217,9 +236,8 @@ export default function SubmissionStatusPage() {
               <p className="text-rose-700 font-semibold">
                 {job.error || "Grading is temporarily delayed or could not finish."}
               </p>
-              <p className="text-xs text-slate-600">
-                Your draft code is intact. You can return to the challenge arena and retry your submission.
-              </p>
+              <p className="text-xs text-slate-600">You can retry grading using the code you already submitted.</p>
+              {retryError && <p role="alert">{retryError}</p>}
             </div>
           )}
 
@@ -263,6 +281,7 @@ export default function SubmissionStatusPage() {
                   {job.result.new_badges_unlocked?.length ? (
                     <p className="reward-news is-badge">
                       Badge unlocked: <strong>{job.result.new_badges_unlocked.join(", ")}</strong>
+                      {job.result.badge_xp_awarded ? ` (+${job.result.badge_xp_awarded} bonus XP)` : null}
                     </p>
                   ) : null}
                   {job.result.codex_recoveries?.map(({ category, label }) => (
@@ -280,9 +299,16 @@ export default function SubmissionStatusPage() {
             </div>
           )}
 
+          {finished && job.id === id && !job.dry_run_only && <SubmissionComparisonPanel key={job.id} jobId={job.id} />}
+
           <div className="pilot-actions mt-5 pt-3 border-t border-slate-100 flex flex-wrap gap-3">
-            <Link className="button button-primary" href={`/arena/${job.activity_id}`}>
-              {isFailed ? "Retry submission in arena" : "Back to challenge arena"}
+            {isFailed && (
+              <button type="button" className="button button-primary" onClick={() => void retryGrading()} disabled={retrying}>
+                {retrying ? "Requesting retry…" : "Retry grading"}
+              </button>
+            )}
+            <Link className={isFailed ? "button button-outline" : "button button-primary"} href={`/arena/${job.activity_id}`}>
+              Back to challenge arena
             </Link>
             <Link className="button button-outline" href="/dashboard">
               Dashboard

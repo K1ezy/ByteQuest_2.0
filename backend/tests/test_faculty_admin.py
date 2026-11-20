@@ -7,12 +7,16 @@ back, so the developer's existing accounts and school data are untouched.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Barrier
 
 import jwt
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
@@ -22,6 +26,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from app.api import admin as admin_api
 from app.api import exams as exams_api
 from app.api import faculty_ml as faculty_ml_api
+from app.api.faculty.common import _save_activity_revision
 from app.core.config import settings
 from app.core.database import get_db
 from app.main import app
@@ -31,11 +36,13 @@ from app.models.entities import (
     ActivityKind,
     AuditEvent,
     Course,
+    CourseAnnouncement,
     CourseMember,
     DocumentChunk,
     Exam,
     ExamAttempt,
     ExamItem,
+    GradingWorkerHeartbeat,
     InstructionalDocument,
     LearningActivity,
     MLPrediction,
@@ -54,6 +61,8 @@ from app.services.ml_predictor.exam_history import course_exam_ids, released_exa
 from app.services.ml_predictor.audit import record_prediction_outcome
 from app.services.ml_predictor.feature_engineering import extract_features_from_dataframe
 from app.services.ml_predictor.targets import next_course_activity
+from app.services.judge0.client import Judge0UnavailableError, judge0_client
+from app.services.monitoring import record_grading_worker_heartbeat
 
 pytestmark = pytest.mark.integration
 TEST_JWT_SECRET = "bytequest-faculty-admin-tests-only-secret"
@@ -119,6 +128,11 @@ def workspace(monkeypatch, request):
     app.dependency_overrides[get_db] = override_db
     monkeypatch.setattr(settings, "SUPABASE_JWT_SECRET", TEST_JWT_SECRET)
     monkeypatch.setattr(settings, "SUPABASE_URL", "")
+
+    async def sandbox_available():
+        return True
+
+    monkeypatch.setattr(judge0_client, "check_execution", sandbox_available)
 
     ids = {name: uuid.uuid4() for name in ["admin", "faculty", "other_faculty", "student", "other_student"]}
     now = datetime.now(timezone.utc)
@@ -379,6 +393,68 @@ def workspace(monkeypatch, request):
         yield client, new_session, ids
 
 
+@pytest.mark.parametrize("role", ["other_student", "other_faculty"])
+def test_local_rls_hides_unassigned_course_and_roster(workspace, role):
+    client, db_session, ids = workspace
+    assert client.get("/api/v1/faculty/performance", headers=_token(ids[role]),
+                      params={"course_id": str(ids["course_a"])}).status_code == 403
+
+    with db_session() as db:
+        # The fixture rolls back this grant. Exercise RLS itself, even though the
+        # deployed browser role is already denied SELECT by the table grants.
+        db.execute(text("GRANT SELECT ON public.courses, public.course_members TO authenticated"))
+        db.execute(text("SET LOCAL ROLE authenticated"))
+        claims = json.dumps({"sub": str(ids[role]), "role": "authenticated"})
+        db.execute(text("SELECT set_config('request.jwt.claims', :claims, true)"), {"claims": claims})
+        assert db.scalar(text("SELECT auth.uid()")) == ids[role]
+        assert db.scalar(text("SELECT row_security_active('public.courses')")) is True
+        assert db.scalar(text("SELECT row_security_active('public.course_members')")) is True
+        params = {"course": ids["course_a"]}
+        assert db.scalar(text("SELECT count(*) FROM public.courses WHERE id = :course"), params) == 0
+        assert db.scalar(text("SELECT count(*) FROM public.course_members WHERE course_id = :course"), params) == 0
+
+
+def test_two_concurrent_saves_cannot_commit_the_same_activity_version(workspace):
+    _, db_session, _ = workspace
+    with db_session() as db:
+        engine = db.connection().engine
+
+    activity_id = uuid.uuid4()
+    with Session(engine) as db:
+        db.add(LearningActivity(
+            id=activity_id, title="Original", topic_concept="concurrency test",
+            activity_type=ActivityKind.quiz, language=ProgrammingLang.python,
+        ))
+        db.commit()
+
+    ready = Barrier(2, timeout=10)
+
+    def save(title):
+        with Session(engine) as db:
+            activity = db.get(LearningActivity, activity_id)
+            expected = activity.content_version
+            ready.wait()
+            try:
+                _save_activity_revision(db, activity, expected, {"title": title})
+            except HTTPException as error:
+                assert error.detail["code"] == "version_conflict"
+                return error.status_code, title
+            db.commit()
+            return 200, title
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = dict(pool.map(save, ["First tab", "Second tab"]))
+        assert set(results) == {200, 409}
+        with Session(engine) as db:
+            saved = db.get(LearningActivity, activity_id)
+            assert (saved.title, saved.content_version) == (results[200], 2)
+    finally:
+        with Session(engine) as db:
+            db.delete(db.get(LearningActivity, activity_id))
+            db.commit()
+
+
 def test_students_cannot_reach_faculty_or_admin_surfaces(workspace):
     client, _db, ids = workspace
     headers = _token(ids["student"])
@@ -573,6 +649,9 @@ def test_performance_and_ml_are_course_scoped(workspace):
     assert client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_b']}", headers=headers).status_code == 403
     assert client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_a']}", headers=_token(ids["admin"])).status_code == 403
 
+    assert client.get(f"/api/v1/faculty/gradebook?course_id={ids['course_b']}", headers=headers).status_code == 403
+    book = client.get(f"/api/v1/faculty/gradebook?course_id={ids['course_a']}", headers=headers).json()
+    assert [row["student_id"] for row in book["students"]] == [str(ids["student"])]
     detail = client.get(
         f"/api/v1/faculty/performance/students/{ids['student']}?course_id={ids['course_a']}", headers=headers
     )
@@ -586,6 +665,225 @@ def test_performance_and_ml_are_course_scoped(workspace):
     assert client.get(
         f"/api/v1/faculty/ml/students/{ids['other_student']}?course_id={ids['course_a']}", headers=headers
     ).status_code == 404
+
+
+def test_activity_analysis_totals_and_practice_scope(workspace):
+    client, db_session, ids = workspace
+    now = datetime.now(timezone.utc)
+    with db_session() as db:
+        enrolled = [ids["other_student"]]
+        for _ in range(4):
+            student_id = uuid.uuid4()
+            email = f"analysis-{student_id}@example.test"
+            db.execute(text(
+                "insert into auth.users (id, aud, role, email, encrypted_password) "
+                "values (:id, 'authenticated', 'authenticated', :email, '')"
+            ), {"id": student_id, "email": email})
+            db.add(Profile(id=student_id, pseudonym_id=f"test_{student_id.hex[:12]}", role=UserRole.student,
+                           year_level=1, semester=1, enrolled_language=ProgrammingLang.python,
+                           email=email, account_status="active"))
+            enrolled.append(student_id)
+        db.flush()
+        db.add_all(CourseMember(course_id=ids["course_a"], profile_id=student_id,
+                                member_role="student", status="active") for student_id in enrolled)
+        quiz = LearningActivity(
+            course_id=ids["course_a"], created_by=ids["faculty"], title="Quiz analysis",
+            activity_type=ActivityKind.quiz, language=ProgrammingLang.python, topic_concept="arithmetic",
+            review_status=ReviewState.published, quiz_questions_json=QUIZ_QUESTIONS,
+        )
+        empty = LearningActivity(
+            course_id=ids["course_a"], created_by=ids["faculty"], title="Empty activity",
+            activity_type=ActivityKind.challenge, language=ProgrammingLang.python, topic_concept="arithmetic",
+            review_status=ReviewState.published,
+        )
+        exam = Exam(created_by=ids["faculty"], title="Exam", opens_at=now,
+                    closes_at=now + timedelta(hours=1), duration_minutes=30)
+        db.add_all([quiz, empty, exam])
+        db.flush()
+        exam_attempt = ExamAttempt(exam_id=exam.id, student_id=enrolled[0], attempt_number=1,
+                                   started_at=now, due_at=now + timedelta(minutes=30))
+        db.add(exam_attempt)
+        db.flush()
+        db.get(LearningActivity, ids["published"]).pass_mark_percent = 65
+        for learner, scores in zip(enrolled, [(10, 40, 59.9), (19.9,), (20,), (30, 40, 79.9), ()]):
+            for number, score in enumerate(scores, start=1):
+                db.add(ActivityAttempt(
+                    student_id=learner, activity_id=ids["published"], attempt_number=number,
+                    score_percentage=score, is_successful=score >= 65,
+                    error_category="logic_error" if learner == enrolled[0] else "syntax_error",
+                ))
+        db.add_all([
+            ActivityAttempt(student_id=enrolled[0], activity_id=ids["published"], attempt_number=4,
+                            score_percentage=100, is_successful=True, exam_attempt_id=exam_attempt.id),
+            ActivityAttempt(student_id=enrolled[0], activity_id=quiz.id, attempt_number=1,
+                            score_percentage=100, is_successful=True, exam_attempt_id=exam_attempt.id),
+            ActivityAttempt(student_id=enrolled[0], activity_id=quiz.id, attempt_number=2,
+                            score_percentage=33.33, is_successful=False, quiz_answers_json={"q1": "a", "q2": "B"}),
+            ActivityAttempt(student_id=enrolled[0], activity_id=quiz.id, attempt_number=3,
+                            score_percentage=100, is_successful=True, quiz_answers_json={"q1": "A", "q2": "A", "q3": "A"}),
+            ActivityAttempt(student_id=enrolled[1], activity_id=quiz.id, attempt_number=1,
+                            score_percentage=100, is_successful=True, quiz_answers_json={"q1": "A", "q2": "A", "q3": "A"}),
+            ActivityAttempt(student_id=enrolled[2], activity_id=quiz.id, attempt_number=1,
+                            score_percentage=0, is_successful=False),
+        ])
+        for index, learner in enumerate([enrolled[0], ids["student"], ids["student"]]):
+            db.add(HintUse(student_id=learner, activity_id=ids["published"], request_key=f"qa-{index}",
+                           source="reviewed", body="Hint"))
+        quiz_id, empty_id = quiz.id, empty.id
+        db.commit()
+    headers = _token(ids["faculty"])
+    def get(activity_id, as_role="faculty"):
+        return client.get(f"/api/v1/faculty/activities/{activity_id}/analysis", headers=_token(ids[as_role]))
+
+    response = get(ids["published"])
+    assert response.status_code == 200, response.text
+    body = response.json()
+    values = {"class_size": 6, "attempted": 5, "passed": 2, "pass_rate": 0.4, "first_try_pass_rate": 0.2,
+              "median_attempts_to_pass": 2, "stuck": 1, "not_started": 1, "pass_mark_percent": 65,
+              "excludes_exam_attempts": True, "hint_use": {"learners": 2, "passed": 1}}
+    assert {key: body[key] for key in values} == values
+    assert [item["count"] for item in body["score_distribution"]] == [1, 1, 1, 1, 1]
+    assert [(item["category"], item["count"]) for item in body["error_categories"]] == [
+        ("syntax_error", 4), ("logic_error", 3),
+    ]
+    assert "questions" not in body
+    assert str(enrolled[0]) not in response.text
+    for role in ("student", "other_faculty", "admin"):
+        assert get(ids["published"], role).status_code in {403, 404}
+    assert get(ids["draft"]).status_code == 404
+
+    blank = get(empty_id).json()
+    assert blank["attempted"] == 0 and blank["not_started"] == 6
+    assert blank["pass_mark_percent"] == 100
+    assert all(blank[name] is None for name in ("pass_rate", "first_try_pass_rate", "median_attempts_to_pass"))
+    question_data = get(quiz_id).json()
+    assert question_data["error_categories"] == []
+    assert question_data["hint_use"] is None
+    assert question_data["pass_mark_percent"] == 75
+    assert question_data["first_try_pass_rate"] == pytest.approx(1 / 3)
+    assert [(row["correct"], row["recorded"]) for row in question_data["questions"]] == [(2, 2), (1, 2), (1, 2)]
+    assert "correct_answer" not in str(question_data["questions"])
+
+    book = client.get(f"/api/v1/faculty/gradebook?course_id={ids['course_a']}", headers=headers).json()
+    column = next(item for item in book["activities"] if item["activity_id"] == str(ids["published"]))
+    assert (column["attempted"], column["passed"]) == (body["attempted"], body["passed"])
+    progress = client.get(
+        f"/api/v1/faculty/performance?course_id={ids['course_a']}&activity_id={ids['published']}&stuck_only=true",
+        headers=headers,
+    ).json()
+    assert [row["student_id"] for row in progress["students"]] == [str(enrolled[0])]
+    assert progress["students"][0]["attempt_count"] == 3
+
+
+def test_course_announcements_crud_is_scoped_and_audited(workspace):
+    client, db_session, ids = workspace
+    endpoint = "/api/v1/faculty/announcements"
+    feed = "/api/v1/pilot/announcements"
+    course = str(ids["course_a"])
+    faculty = _token(ids["faculty"])
+    other_faculty = _token(ids["other_faculty"])
+    student = _token(ids["student"])
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    payload = {"course_id": course, "title": "  Lab update  ", "body": "  Bring headphones.\n<strong>Plain text</strong>  ",
+               "expires_at": expires_at}
+    for role in ("admin", "student", "other_faculty"):
+        assert client.post(endpoint, headers=_token(ids[role]), json=payload).status_code == 403
+        assert client.get(endpoint, headers=_token(ids[role]), params={"course_id": course}).status_code == 403
+    response = client.post(endpoint, headers=faculty, json=payload)
+    assert response.status_code == 201, response.text
+    posted = response.json()
+    assert posted["title"] == "Lab update" and posted["body"] == "Bring headphones.\n<strong>Plain text</strong>"
+    assert posted["expired"] is False and posted["pinned"] is False
+    announcement_id = posted["id"]
+    version = {"expected_updated_at": posted["updated_at"]}
+    route = f"{endpoint}/{announcement_id}"
+    preflight_headers = {"Origin": settings.CORS_ORIGINS[0], "Access-Control-Request-Method": "DELETE",
+                         "Access-Control-Request-Headers": "authorization"}
+    preflight = client.options(route, headers=preflight_headers)
+    assert preflight.status_code == 200
+    assert preflight.headers["Access-Control-Allow-Origin"] == preflight_headers["Origin"]
+    assert "DELETE" in preflight.headers["Access-Control-Allow-Methods"]
+    assert client.options(route, headers={**preflight_headers, "Origin": "https://outside.example.test"}).status_code == 400
+    for headers in (other_faculty, _token(ids["admin"]), student):
+        assert client.patch(route, headers=headers, json={"title": "Wrong course", **version}).status_code == 403
+        assert client.delete(route, headers=headers).status_code == 403
+    assert client.get(feed, headers=faculty).status_code == 403
+    assert client.get(feed, headers=_token(ids["other_student"])).json() == {"items": []}
+    shown = client.get(feed, headers=student).json()["items"]
+    assert len(shown) == 1 and shown[0]["id"] == announcement_id
+    assert shown[0]["course_title"] == "Introduction to Python" and shown[0]["author_name"] == "Faculty"
+    assert not {"author_id", "email", "pseudonym_id"}.intersection(shown[0])
+
+    changed = client.patch(route, headers=faculty, json={"body": "Updated", "pinned": True, "expires_at": None, **version})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["body"] == "Updated" and changed.json()["pinned"] is True
+    assert changed.json()["expires_at"] is None and changed.json()["updated_at"] > posted["updated_at"]
+    stale = client.patch(route, headers=faculty, json={"body": "Stale edit", **version})
+    assert stale.status_code == 409 and stale.json()["detail"]["code"] == "version_conflict"
+    with db_session() as db:
+        item = db.get(CourseAnnouncement, uuid.UUID(announcement_id))
+        item.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+    assert client.get(feed, headers=student).json() == {"items": []}
+    expired = client.get(endpoint, headers=faculty, params={"course_id": course}).json()["items"][0]
+    assert expired["expired"] is True
+    edited = client.patch(route, headers=faculty, json={"title": "Expired edit", "expected_updated_at": expired["updated_at"]})
+    assert edited.status_code == 200
+    assert client.patch(route, headers=faculty, json={
+        "expires_at": None, "expected_updated_at": edited.json()["updated_at"],
+    }).json()["expired"] is False
+    with db_session() as db:
+        member = db.query(CourseMember).filter_by(course_id=ids["course_a"], profile_id=ids["student"]).one()
+        member.status = "removed"
+        db.commit()
+    assert client.get(feed, headers=student).json() == {"items": []}
+    with db_session() as db:
+        db.query(CourseMember).filter_by(course_id=ids["course_a"], profile_id=ids["student"]).one().status = "active"
+        db.get(Profile, ids["student"]).account_status = "deactivated"
+        db.commit()
+    assert client.get(feed, headers=student).status_code == 403
+
+    assert client.delete(route, headers=faculty).status_code == 204
+    assert client.get(endpoint, headers=faculty, params={"course_id": course}).json()["items"] == []
+    assert client.delete(route, headers=faculty).status_code == 404
+    with db_session() as db:
+        events = db.query(AuditEvent).filter_by(course_id=ids["course_a"], entity_id=announcement_id).all()
+        assert {event.action for event in events} == {"announcement.created", "announcement.updated", "announcement.deleted"}
+        assert all(event.actor_id == ids["faculty"] for event in events)
+
+
+def test_course_announcement_validation_and_limits(workspace):
+    client, db_session, ids = workspace
+    endpoint = "/api/v1/faculty/announcements"
+    faculty = _token(ids["faculty"])
+    payload = {"course_id": str(ids["course_a"]), "title": "Notice", "body": "Message"}
+    for changes in (
+        {"title": " "}, {"title": "x" * 121}, {"body": "x" * 2001}, {"body": "a\x00b"},
+        {"author_id": str(ids["faculty"])}, {"pinned": "yes"},
+        {"expires_at": "2020-01-01T00:00:00Z"}, {"expires_at": "2099-01-01T09:00:00"},
+    ):
+        assert client.post(endpoint, headers=faculty, json={**payload, **changes}).status_code == 422
+    created = client.post(endpoint, headers=faculty, json=payload).json()
+    route = f"{endpoint}/{created['id']}"
+    for changes in ({}, {"title": None}, {"pinned": None}, {"course_id": str(ids["course_b"])}):
+        assert client.patch(route, headers=faculty, json={"expected_updated_at": created["updated_at"], **changes}).status_code == 422
+    now = datetime.now(timezone.utc)
+    with db_session() as db:
+        db.add_all(CourseAnnouncement(
+            course_id=ids["course_a"], title=f"Notice {i}", body="Message", created_at=now + timedelta(seconds=i),
+            pinned=i in {2, 3}, expires_at=now - timedelta(days=1) if i == 3 else None,
+        ) for i in range(1, 50))
+        db.commit()
+    rejected = client.post(endpoint, headers=faculty, json=payload)
+    assert rejected.status_code == 409 and rejected.json()["detail"]["code"] == "announcement_limit"
+    listed = client.get(endpoint, headers=faculty, params={"course_id": str(ids["course_a"])}).json()
+    assert len(listed["items"]) == listed["limit"] == 50
+    assert [item["title"] for item in listed["items"][:3]] == ["Notice 3", "Notice 2", "Notice 49"]
+    feed = client.get("/api/v1/pilot/announcements", headers=_token(ids["student"])).json()["items"]
+    assert len(feed) == 10
+    assert [item["title"] for item in feed[:2]] == ["Notice 2", "Notice 49"]
+    assert all(item["title"] != "Notice 3" for item in feed)
+    assert feed[0]["author_name"] == "Your instructor"
 
 
 def test_forecast_history_and_quality_never_cross_course_boundaries(workspace, monkeypatch):
@@ -761,6 +1059,18 @@ def test_public_signup_username_is_reserved_with_auth_user(workspace):
 
     created = uuid.uuid4()
     duplicate = uuid.uuid4()
+    first_school_id = f"00-{created.int % 99_999 + 1:05d}"
+    second_school_id = f"01-{duplicate.int % 99_999 + 1:05d}"
+    first_email = f"signup-{created}@example.test"
+    second_email = f"signup-{duplicate}@example.test"
+    roster = "/api/v1/admin/student-registration-roster"
+    assert client.put(roster, headers=_token(ids["faculty"]),
+                      json={"school_id": first_school_id, "email": first_email}).status_code == 403
+    assert client.put(roster, headers=_token(ids["admin"]),
+                      json={"school_id": "26-00000", "email": first_email}).status_code == 422
+    for school_id, email in ((first_school_id, first_email), (second_school_id, second_email)):
+        assert client.put(roster, headers=_token(ids["admin"]),
+                          json={"school_id": school_id, "email": email}).status_code == 200
     sql = text("""
         INSERT INTO auth.users (id, instance_id, aud, role, email, encrypted_password, raw_user_meta_data)
         VALUES (:id, '00000000-0000-0000-0000-000000000000', 'authenticated',
@@ -768,37 +1078,51 @@ def test_public_signup_username_is_reserved_with_auth_user(workspace):
     """)
     with db_session() as db:
         db.execute(sql, {"id": created, "email": f"signup-{created}@example.test",
-                         "metadata": '{"username":"FreshHandle","bytequest_role":"admin","school_id":" 00123 ","year_level":3,"block_section":"F"}'})
+                         "metadata": json.dumps({"username": "FreshHandle", "bytequest_role": "admin",
+                                                 "school_id": f" {first_school_id} ", "year_level": 3, "block_section": "F"})})
         db.commit()
         profile = db.get(Profile, created)
         assert profile.username == "freshhandle"
         assert profile.role == UserRole.student
         assert profile.enrolled_language == ProgrammingLang.cpp
         assert profile.pseudonym_id == f"stu_{created.hex}"
-        assert (profile.school_id, profile.year_level, profile.block_section) == ("00123", 3, "F")
+        assert (profile.school_id, profile.year_level, profile.block_section) == (first_school_id, 3, "F")
 
     assert client.get(endpoint, params={"username": "FRESHHANDLE"}).json() == {"available": False}
+    assert client.put(roster, headers=_token(ids["admin"]),
+                      json={"school_id": first_school_id, "email": second_email}).status_code == 409
+    with db_session() as db:
+        with pytest.raises(DBAPIError, match="Student registration could not be verified"):
+            db.execute(sql, {"id": duplicate, "email": second_email,
+                             "metadata": json.dumps({"username": "SecondHandle", "school_id": first_school_id,
+                                                     "year_level": 3, "block_section": "F"})})
+        db.rollback()
+
     with db_session() as db:
         with pytest.raises(IntegrityError):
             db.execute(sql, {"id": duplicate, "email": f"signup-{duplicate}@example.test",
-                             "metadata": '{"username":"freshhandle","school_id":" 00123 ","year_level":3,"block_section":"F"}'})
+                             "metadata": json.dumps({"username": "freshhandle", "school_id": second_school_id,
+                                                     "year_level": 3, "block_section": "F"})})
         db.rollback()
 
     with db_session() as db:
         with pytest.raises(DBAPIError):
             db.execute(sql, {"id": duplicate, "email": f"signup-{duplicate}@example.test",
-                             "metadata": '{"username":"name123","school_id":" 00123 ","year_level":3,"block_section":"F"}'})
+                             "metadata": json.dumps({"username": "name123", "school_id": second_school_id,
+                                                     "year_level": 3, "block_section": "F"})})
         db.rollback()
 
     with db_session() as db:
         with pytest.raises(DBAPIError, match="Invalid student registration fields"):
             db.execute(sql, {"id": duplicate, "email": f"signup-{duplicate}@example.test",
-                             "metadata": '{"username":"SecondHandle","school_id":"00123","year_level":3,"block_section":"G"}'})
+                             "metadata": json.dumps({"username": "SecondHandle", "school_id": second_school_id,
+                                                     "year_level": 3, "block_section": "G"})})
         db.rollback()
 
     with db_session() as db:
         db.execute(sql, {"id": duplicate, "email": f"signup-{duplicate}@example.test",
-                         "metadata": '{"username":"SecondHandle","school_id":"00123","year_level":4,"block_section":"A"}'})
+                         "metadata": json.dumps({"username": "SecondHandle", "school_id": second_school_id,
+                                                 "year_level": 4, "block_section": "A"})})
         db.commit()
         assert db.get(Profile, duplicate).username == "secondhandle"
 
@@ -1136,7 +1460,9 @@ def test_monitoring_reports_real_states_and_audit_is_searchable(workspace):
     monitoring = client.get("/api/v1/admin/monitoring", headers=headers)
     assert monitoring.status_code == 200, monitoring.text
     body = monitoring.json()
-    assert [service["service"] for service in body["services"]] == ["api", "rag_index", "code_runner", "prediction"]
+    assert [service["service"] for service in body["services"]] == [
+        "api", "rag_index", "code_runner", "grading_worker", "judge0", "prediction",
+    ]
     rag = next(service for service in body["services"] if service["service"] == "rag_index")
     assert rag["status"] == "failed"
     assert rag["trace_id"]
@@ -1156,6 +1482,31 @@ def test_monitoring_reports_real_states_and_audit_is_searchable(workspace):
     audit = client.get("/api/v1/admin/audit?search=setting", headers=headers)
     assert audit.status_code == 200
     assert isinstance(audit.json()["items"], list)
+
+
+@pytest.mark.parametrize("worker_running", [False, True])
+def test_monitoring_distinguishes_worker_and_sandbox_outages(workspace, monkeypatch, worker_running):
+    client, make_session, ids = workspace
+    with make_session() as db:
+        record_grading_worker_heartbeat(db)
+        record_grading_worker_heartbeat(db)
+        if not worker_running:
+            db.get(GradingWorkerHeartbeat, 1).seen_at = datetime.now(timezone.utc) - timedelta(minutes=2)
+        db.commit()
+
+    if worker_running:
+        async def sandbox_unavailable():
+            raise Judge0UnavailableError("private sandbox details")
+
+        monkeypatch.setattr(judge0_client, "check_execution", sandbox_unavailable)
+
+    response = client.get("/api/v1/admin/monitoring", headers=_token(ids["admin"]))
+    assert response.status_code == 200
+    states = {service["service"]: service["status"] for service in response.json()["services"]}
+    assert states["api"] == "healthy"
+    assert states["grading_worker"] == ("healthy" if worker_running else "stale")
+    assert states["judge0"] == ("failed" if worker_running else "healthy")
+    assert "private sandbox details" not in response.text
 
 
 def _consent(monkeypatch, db_session, student_id, version="test-v1"):

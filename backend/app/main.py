@@ -20,6 +20,7 @@ from app.api.faculty import router as faculty_router
 from app.api.faculty_ml import router as faculty_ml_router
 from app.api.admin import router as admin_router
 from app.api.chat import router as chat_router
+from app.api.chat_history import router as chat_history_router
 from app.core.config import settings
 from app.core.database import engine
 from app.core.request_size import RequestSizeLimitMiddleware
@@ -29,6 +30,7 @@ from app.services.ml_predictor.predictor import (
     load_ml_models,
 )
 from app.services.judge0.client import judge0_client
+from app.services.monitoring import SandboxHealth
 from app.services.storage.supabase_storage import avatar_storage, pdf_storage
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,7 @@ async def lifespan(app: FastAPI):
     app.state.sequencer_mode = "rule_based"
     app.state.model_version = None
     app.state.ml_model_report = None
+    app.state.sandbox_health = SandboxHealth()
 
     limits = httpx.Limits(
         max_connections=40,
@@ -116,7 +119,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     expose_headers=["Retry-After"],
 )
@@ -136,6 +139,7 @@ app.include_router(pilot_router)
 app.include_router(submission_jobs_router)
 app.include_router(exams_router)
 app.include_router(chat_router)
+app.include_router(chat_history_router)
 
 
 @app.get("/health", tags=["Health"])

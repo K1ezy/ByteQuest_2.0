@@ -2,21 +2,25 @@
 
 import hashlib
 import logging
+import uuid
+from time import monotonic
 from datetime import datetime, timedelta, timezone
 
 import anyio
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy.exc import OperationalError, TimeoutError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError, TimeoutError
 from sqlalchemy.orm import Session
 
 from app.api.submissions import CodeSubmissionRequest, run_code_submission
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.models.entities import ActivityAttempt, Profile, SubmissionJob
+from app.models.entities import Profile, SubmissionJob
 
 from app.services.exam_worker import claim_exam, grade_exam
 from app.services.email_worker import deliver_one
+from app.services.monitoring import record_grading_worker_heartbeat
+from app.services.submission_claims import SubmissionClaim, finish_submission, lock_submission_claim
 
 logger = logging.getLogger(__name__)
 
@@ -53,20 +57,16 @@ def sanitize_grading_result_for_student(raw_result: dict, is_exam: bool = False,
         test_results = eval_copy.get("test_results", [])
         if isinstance(test_results, list):
             visible_tests = []
-            hidden_passed = 0
-            hidden_total = 0
             for tc in test_results:
                 if not isinstance(tc, dict):
                     continue
-                is_hidden = tc.get("is_hidden", False)
-                if is_hidden:
-                    hidden_total += 1
-                    if tc.get("passed"):
-                        hidden_passed += 1
-                else:
+                if not tc.get("is_hidden", False):
                     visible_tests.append(tc)
             eval_copy["test_results"] = visible_tests
-            eval_copy["hidden_summary"] = {"passed": hidden_passed, "total": hidden_total}
+            eval_copy["hidden_summary"] = {
+                "passed": max(0, eval_copy.get("passed_test_cases", 0) - sum(bool(tc.get("passed")) for tc in visible_tests)),
+                "total": max(0, eval_copy.get("total_test_cases", 0) - len(visible_tests)),
+            }
         sanitized["evaluation"] = eval_copy
 
     return sanitized
@@ -84,11 +84,12 @@ def recover_stale_submission_jobs(db_session: Session | None = None) -> int:
     try:
         stale_jobs = db_session.query(SubmissionJob).filter(
             SubmissionJob.status == "running",
-            SubmissionJob.updated_at < cutoff,
+            SubmissionJob.updated_at <= cutoff,
         ).with_for_update(skip_locked=True).all()
         recovered_count = 0
         for job in stale_jobs:
             job.status = "queued" if job.attempts < settings.SUBMISSION_MAX_RETRIES else "failed"
+            job.claim_token = None
             job.error_message = "Worker timeout recovery triggered"
             job.updated_at = datetime.now(timezone.utc)
             job.next_attempt_at = datetime.now(timezone.utc)
@@ -102,13 +103,16 @@ def recover_stale_submission_jobs(db_session: Session | None = None) -> int:
             db_session.close()
 
 
-def claim() -> str | None:
+def claim(job_id: str | None = None) -> SubmissionClaim | None:
     with SessionLocal() as db:
         recover_stale_submission_jobs(db)
-        job = db.query(SubmissionJob).filter(
+        ready = db.query(SubmissionJob).filter(
             SubmissionJob.status == "queued",
             SubmissionJob.next_attempt_at <= datetime.now(timezone.utc),
-        ).order_by(
+        )
+        if job_id is not None:
+            ready = ready.filter(SubmissionJob.id == job_id)
+        job = ready.order_by(
             SubmissionJob.created_at, SubmissionJob.id
         ).with_for_update(skip_locked=True).first()
         if job is None:
@@ -116,55 +120,65 @@ def claim() -> str | None:
         job.status = "running"
         job.attempts += 1
         job.updated_at = datetime.now(timezone.utc)
-        job_id = str(job.id)
+        job.claim_token = uuid.uuid4()
+        owned = SubmissionClaim(job.id, job.claim_token)
         db.commit()
-        return job_id
+        return owned
 
 
-def run_one(job_id: str) -> None:
+def run_one(owned: SubmissionClaim) -> None:
     with SessionLocal() as db:
-        job = db.query(SubmissionJob).filter(SubmissionJob.id == job_id).first()
+        job = db.query(SubmissionJob).filter(
+            SubmissionJob.id == owned.job_id,
+            SubmissionJob.status == "running",
+            SubmissionJob.claim_token == owned.token,
+        ).first()
         if job is None:
             return
         try:
-            previous = db.query(ActivityAttempt).filter(ActivityAttempt.submission_job_id == job.id).first()
-            if previous is not None and job.result_json is not None:
-                result = job.result_json
-            else:
-                user = db.get(Profile, job.student_id)
-                # This worker is intentionally independent of app.main. Importing
-                # the API app here used to couple a long-lived worker to router
-                # changes and fail jobs after a deploy (e.g. a new entity class).
-                result = run_code_submission(
-                    None,
-                    CodeSubmissionRequest(activity_id=job.activity_id, source_code=job.source_code,
-                                          dry_run_only=job.dry_run_only,
-                                          time_spent_seconds=job.time_spent_seconds or 0),
-                    user, db, submission_job_id=job.id,
-                )
-            job = db.get(SubmissionJob, job_id)
-            job.status = "completed"
-            job.result_json = jsonable_encoder(result)
-            job.error_message = None
+            user = db.get(Profile, job.student_id)
+            result = run_code_submission(
+                None,
+                CodeSubmissionRequest(activity_id=job.activity_id, source_code=job.source_code,
+                                      dry_run_only=job.dry_run_only,
+                                      time_spent_seconds=job.time_spent_seconds or 0),
+                user, db, submission_claim=owned,
+            )
+            # Official grading commits its own result with the attempt and XP.
+            if result is not None:
+                job = lock_submission_claim(db, owned)
+                if job is not None:
+                    finish_submission(job, jsonable_encoder(result))
+                    db.commit()
+            return
         except HTTPException as exc:
-            db.rollback()
-            job = db.get(SubmissionJob, job_id)
-            retryable = exc.status_code >= 500 and job.attempts < settings.SUBMISSION_MAX_RETRIES
-            job.status = "queued" if retryable else "failed"
-            if retryable:
-                job.next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=2 ** job.attempts)
-            job.error_message = str(exc.detail)[:500]
+            retryable = exc.status_code >= 500
+            retry_after = (exc.headers or {}).get("Retry-After", "")
+            error = str(exc.detail)[:500]
         except Exception:
-            logger.exception("Submission job failed (job_id=%s)", job_id)
-            db.rollback()
-            job = db.get(SubmissionJob, job_id)
-            retryable = job.attempts < settings.SUBMISSION_MAX_RETRIES
-            job.status = "queued" if retryable else "failed"
-            if retryable:
-                job.next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=2 ** job.attempts)
-            job.error_message = "Grading is unavailable. Your draft is safe; try again later."
-        job.updated_at = datetime.now(timezone.utc)
+            logger.exception("Submission job failed (job_id=%s)", owned.job_id)
+            retryable = True
+            retry_after = ""
+            error = "Grading is unavailable. Your draft is safe; try again later."
+        db.rollback()
+        job = lock_submission_claim(db, owned)
+        if job is None:
+            return
+        now = datetime.now(timezone.utc)
+        retryable = retryable and job.attempts < settings.SUBMISSION_MAX_RETRIES
+        job.status = "queued" if retryable else "failed"
+        job.claim_token = None
+        if retryable:
+            delay = max(2 ** job.attempts, int(retry_after) if retry_after.isdecimal() else 0)
+            job.next_attempt_at = now + timedelta(seconds=delay)
+        job.error_message = error
+        job.updated_at = now
         db.commit()
+
+
+def _write_heartbeat() -> None:
+    with SessionLocal.begin() as db:
+        record_grading_worker_heartbeat(db)
 
 
 async def main() -> None:
@@ -172,10 +186,13 @@ async def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     prefer_exam = True
     active = 0
-    active_exam = False
+    active_exams = 0
+    # Keep a slot available for practice whenever the worker has more than one slot.
+    exam_limit = min(settings.EXAM_GRADING_CONCURRENCY, max(1, settings.SUBMISSION_WORKER_CONCURRENCY - 1))
+    next_heartbeat = 0.0
 
     async def process(kind: str, item_id) -> None:
-        nonlocal active, active_exam
+        nonlocal active, active_exams
         try:
             if kind == "exam":
                 await anyio.to_thread.run_sync(grade_exam, item_id)
@@ -186,17 +203,23 @@ async def main() -> None:
         finally:
             active -= 1
             if kind == "exam":
-                active_exam = False
+                active_exams -= 1
 
     async with anyio.create_task_group() as tasks:
         while True:
-            if active >= settings.SUBMISSION_WORKER_CONCURRENCY:
-                await anyio.sleep(0.1)
-                continue
+            if monotonic() >= next_heartbeat:
+                next_heartbeat = monotonic() + 15
+                try:
+                    await anyio.to_thread.run_sync(_write_heartbeat)
+                except SQLAlchemyError as exc:
+                    logger.warning("Could not write grading worker heartbeat (%s).", type(exc).__name__)
             try:
-                exam_id = await anyio.to_thread.run_sync(claim_exam) if prefer_exam and not active_exam else None
+                if active >= settings.SUBMISSION_WORKER_CONCURRENCY:
+                    await anyio.sleep(0.1)
+                    continue
+                exam_id = await anyio.to_thread.run_sync(claim_exam) if prefer_exam and active_exams < exam_limit else None
                 job_id = await anyio.to_thread.run_sync(claim) if not exam_id else None
-                if not job_id and not exam_id and not active_exam and not prefer_exam:
+                if not job_id and not exam_id and active_exams < exam_limit and not prefer_exam:
                     exam_id = await anyio.to_thread.run_sync(claim_exam)
                 sent = False
                 if not exam_id and not job_id and active == 0:
@@ -209,7 +232,7 @@ async def main() -> None:
             if exam_id or job_id:
                 active += 1
                 if exam_id:
-                    active_exam = True
+                    active_exams += 1
                 tasks.start_soon(process, "exam" if exam_id else "job", exam_id or job_id)
             elif active == 0:
                 if not sent:

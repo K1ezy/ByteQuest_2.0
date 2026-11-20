@@ -37,6 +37,10 @@ class Judge0UnavailableError(Exception):
 class Judge0CircuitOpenError(Exception):
     """Raised immediately when the Judge0 Circuit Breaker is in the OPEN state."""
 
+    def __init__(self, message: str, retry_after: int):
+        super().__init__(message)
+        self.retry_after = retry_after
+
 
 @dataclass
 class CircuitBreaker:
@@ -53,9 +57,10 @@ class CircuitBreaker:
             if self.state == "OPEN":
                 elapsed = time.monotonic() - (self.last_failure_time or 0.0)
                 if elapsed < self.recovery_timeout_seconds:
-                    remaining = max(1, int(self.recovery_timeout_seconds - elapsed))
+                    remaining = max(1, math.ceil(self.recovery_timeout_seconds - elapsed))
                     raise Judge0CircuitOpenError(
-                        f"Code execution sandbox is temporarily busy. Please retry in {remaining} seconds."
+                        f"Code execution sandbox is temporarily busy. Please retry in {remaining} seconds.",
+                        retry_after=remaining,
                     )
                 logger.info("Judge0 Circuit Breaker entering HALF_OPEN state.")
                 self.state = "HALF_OPEN"
@@ -63,7 +68,7 @@ class CircuitBreaker:
             if self.state == "HALF_OPEN":
                 if self.half_open_probe_active:
                     raise Judge0CircuitOpenError(
-                        "Code execution sandbox is recovering. Please retry shortly."
+                        "Code execution sandbox is recovering. Please retry shortly.", retry_after=2,
                     )
                 self.half_open_probe_active = True
 
@@ -244,6 +249,23 @@ class Judge0Client:
     def set_http_client(self, client: Optional[httpx.AsyncClient]) -> None:
         """Use the application-lifespan client so requests reuse keep-alive connections."""
         self._http_client = client
+
+    async def check_execution(self) -> bool:
+        """Run a small health check without touching the grading circuit breaker."""
+        try:
+            async with asyncio.timeout(5):
+                languages = await self._get_language_ids()
+                tokens = await self._submit_batch_tokens([{
+                    "language_id": languages[ProgrammingLang.python],
+                    "source_code": _b64_encode("print('bytequest-health')"),
+                    "expected_output": _b64_encode("bytequest-health"),
+                    "cpu_time_limit": 1,
+                    "enable_network": False,
+                }])
+                result, = await self._poll_batch_results(tokens)
+        except TimeoutError as exc:
+            raise Judge0UnavailableError("Judge0 execution check timed out.") from exc
+        return result["status"]["id"] == 3
 
     @asynccontextmanager
     async def _client(self):
@@ -499,6 +521,8 @@ class Judge0Client:
                         "expected_output": _b64_encode(tc.expected_stdout.strip()),
                         "cpu_time_limit": cpu_limit_sec,
                         "memory_limit": mem_limit_kb,
+                        # Student code never gets network access, whatever the server default is.
+                        "enable_network": False,
                     }
                 )
 

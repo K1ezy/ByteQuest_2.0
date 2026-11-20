@@ -15,7 +15,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func
+from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -40,6 +41,7 @@ from app.services.account_provisioning import (
     invite_auth_user,
 )
 from app.services.audit import record_audit
+from app.services.attempt_visibility import guard_solution_reopen
 from app.services.course_access import (
     courses_for_user,
     membership_map,
@@ -48,6 +50,7 @@ from app.services.course_access import (
 )
 from app.services.materials import (
     material_draft_count,
+    max_upload_bytes,
     retry_material,
     serialize_material,
     upload_material,
@@ -90,6 +93,10 @@ def admin_user(user: Profile = Depends(get_current_user)) -> Profile:
     return require_administrator(user)
 
 
+async def sandbox_health(request: Request, _user: Profile = Depends(admin_user)) -> dict:
+    return await request.app.state.sandbox_health.check()
+
+
 def _role_value(profile: Profile | None) -> str | None:
     if profile is None:
         return None
@@ -100,7 +107,12 @@ def _role_value(profile: Profile | None) -> str | None:
 # Dashboard
 # ---------------------------------------------------------------------------
 @router.get("/dashboard")
-def admin_dashboard(request: Request, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
+def admin_dashboard(
+    request: Request,
+    user: Profile = Depends(admin_user),
+    db: Session = Depends(get_db),
+    sandbox: dict = Depends(sandbox_health),
+):
     accounts = _all_accounts(db)
     attention_accounts = [account for account in accounts if account["needs_action"]]
     courses = courses_for_user(db, user, include_archived=True)
@@ -118,7 +130,7 @@ def admin_dashboard(request: Request, user: Profile = Depends(admin_user), db: S
         .limit(100)
         .all()
     )
-    services = service_health(db, request.app.state)
+    services = service_health(db, request.app.state, sandbox)
     overall = overall_health(services)
     recent = audit_query(db, limit=6).all()
     actors = {
@@ -423,6 +435,56 @@ class AccountCreate(BaseModel):
         if not EMAIL_PATTERN.match(value):
             raise ValueError("Enter a valid email address, for example name@example.edu.")
         return value
+
+
+class StudentRegistrationApproval(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    school_id: str = Field(pattern=r"^[0-9]{2}-[0-9]{5}$", min_length=8, max_length=8)
+    email: str = Field(min_length=5, max_length=320)
+
+    @field_validator("school_id")
+    @classmethod
+    def validate_school_id(cls, value: str) -> str:
+        if value.endswith("-00000"):
+            raise ValueError("The sequence in the School ID must start at 00001.")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        if not EMAIL_PATTERN.fullmatch(value):
+            raise ValueError("Enter the email address listed in the school roster.")
+        return value.lower()
+
+
+@router.put("/student-registration-roster")
+def approve_student_registration(
+    payload: StudentRegistrationApproval,
+    user: Profile = Depends(admin_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        approved = db.scalar(text("""
+            INSERT INTO bytequest_private.student_registration_roster AS roster (school_id, email)
+            SELECT :school_id, :email
+            WHERE NOT EXISTS (
+                SELECT 1 FROM public.profiles
+                WHERE role = 'student' AND school_id = :school_id
+            )
+            ON CONFLICT (school_id) DO UPDATE SET email = excluded.email
+            WHERE roster.claimed_by IS NULL
+            RETURNING school_id
+        """), payload.model_dump())
+    except IntegrityError as exc:
+        if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) != "student_registration_roster_email_key":
+            raise
+        raise HTTPException(status_code=409, detail="This email is already approved for another School ID.") from exc
+    if approved is None:
+        raise HTTPException(status_code=409, detail="This School ID is already attached to a student account.")
+    record_audit(db, actor=user, action="student_registration.approved", entity_type="student_registration",
+                 summary="Approved a school roster entry for student registration.")
+    db.commit()
+    return {"message": "Student sign-up approved for this School ID and email."}
 
 
 @router.post("/accounts", status_code=status.HTTP_201_CREATED)
@@ -858,6 +920,7 @@ def admin_materials(
         "items": visible,
         "total": len(visible),
         "counts": material_status_counts(current),
+        "max_upload_bytes": max_upload_bytes(db),
         "courses": [
             {"id": str(course.id), "code": course.code, "title": course.title}
             for course in db.query(Course).filter(Course.status == "active").order_by(Course.title).all()
@@ -1122,6 +1185,10 @@ def update_availability(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "invalid_schedule", "field": "closes_at", "message": "The closing time must be after the opening time."},
         )
+    closed_at = activity.closed_at
+    if payload.closed is not None:
+        closed_at = (activity.closed_at or datetime.now(timezone.utc)) if payload.closed else None
+    guard_solution_reopen(activity, closed_at=closed_at, closes_at=closes_at)
     activity.opens_at = opens_at
     activity.closes_at = closes_at
     if payload.closed is not None:
@@ -1215,8 +1282,9 @@ def monitoring(
     audit_search: Optional[str] = None,
     user: Profile = Depends(admin_user),
     db: Session = Depends(get_db),
+    sandbox: dict = Depends(sandbox_health),
 ):
-    services = service_health(db, request.app.state)
+    services = service_health(db, request.app.state, sandbox)
     jobs = job_query(db, service=service, status=job_status, search=search).all()
     documents = {
         document.id: document

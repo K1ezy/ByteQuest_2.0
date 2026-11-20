@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.quotas import reserve
+from app.services.attempt_visibility import workshop_shareable_activity_clause
 from app.core.security import get_current_user
 from app.models.entities import (
     LearningActivity,
@@ -61,7 +62,7 @@ class QuestGroupView(BaseModel):
 
 
 def _published_activities(
-    db: Session, activity_ids: list[uuid.UUID], language: ProgrammingLang
+    db: Session, activity_ids: list[uuid.UUID], language: ProgrammingLang, owner_id: uuid.UUID,
 ) -> list[LearningActivity]:
     unique_ids = set(activity_ids)
     if not unique_ids:
@@ -72,19 +73,21 @@ def _published_activities(
             LearningActivity.id.in_(unique_ids),
             LearningActivity.language == language,
             LearningActivity.review_status == ReviewState.published,
+            LearningActivity.archived_at.is_(None),
+            workshop_shareable_activity_clause(owner_id),
         )
         .all()
     )
     if len(activities) != len(unique_ids):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Choose published activities in the group's language.",
+            detail="Choose published activities you can share in the group's language.",
         )
     return activities
 
 
 def _group_views(db: Session, groups: list[QuestGroup], current_user: Profile) -> list[QuestGroupView]:
-    """Build views for many workshops with two queries in total, not two per workshop."""
+    """Build views for many workshops with two queries in total."""
     group_ids = [group.id for group in groups]
     if not group_ids:
         return []
@@ -98,9 +101,12 @@ def _group_views(db: Session, groups: list[QuestGroup], current_user: Profile) -
     for group_id, activity_id in (
         db.query(QuestGroupActivity.group_id, QuestGroupActivity.activity_id)
         .join(LearningActivity, LearningActivity.id == QuestGroupActivity.activity_id)
+        .join(QuestGroup, QuestGroup.id == QuestGroupActivity.group_id)
         .filter(
             QuestGroupActivity.group_id.in_(group_ids),
             LearningActivity.review_status == ReviewState.published,
+            LearningActivity.archived_at.is_(None),
+            workshop_shareable_activity_clause(QuestGroup.created_by),
         )
         .order_by(LearningActivity.sequence_order, LearningActivity.id)
     ):
@@ -151,8 +157,8 @@ def create_quest_group(
 ) -> QuestGroupView:
     if current_user.role not in (UserRole.instructor, UserRole.admin):
         raise HTTPException(status_code=403, detail="Faculty or admin access is required to create a quest.")
-    activities = _published_activities(db, payload.activity_ids, payload.language)
-    reserve("group_create", current_user.id)
+    activity_ids = [activity.id for activity in _published_activities(db, payload.activity_ids, payload.language, current_user.id)]
+    reserve("group_create", current_user.id, session=db, commit=True)
     for _ in range(3):
         group = QuestGroup(
             name=payload.name,
@@ -165,7 +171,7 @@ def create_quest_group(
             db.add(group)
             db.flush()
             db.add(QuestGroupMember(group_id=group.id, profile_id=current_user.id))
-            db.add_all(QuestGroupActivity(group_id=group.id, activity_id=activity.id) for activity in activities)
+            db.add_all(QuestGroupActivity(group_id=group.id, activity_id=activity_id) for activity_id in activity_ids)
             db.commit()
             db.refresh(group)
             return _group_view(db, group, current_user)
@@ -183,7 +189,9 @@ def join_quest_group(
     code = payload.code.strip().replace("-", "").upper()
     if len(code) != 8 or any(char not in CODE_ALPHABET for char in code):
         raise HTTPException(status_code=422, detail="Enter the eight-character quest code.")
-    reserve("group_join", current_user.id)
+    # Charge a valid-format guess before lookup using the request's own connection.
+    # A second connection per request can exhaust the pool when a class joins together.
+    reserve("group_join", current_user.id, session=db, commit=True)
     group = db.query(QuestGroup).filter(QuestGroup.join_code == code).first()
     if group is None:
         raise HTTPException(status_code=404, detail="No quest matches that code.")
@@ -217,7 +225,7 @@ def add_group_activities(
         raise HTTPException(status_code=404, detail="Quest not found.")
     if group.created_by != current_user.id and current_user.role != UserRole.admin:
         raise HTTPException(status_code=404, detail="Quest not found.")
-    activities = _published_activities(db, payload.activity_ids, group.language)
+    activities = _published_activities(db, payload.activity_ids, group.language, group.created_by)
     existing_ids = {
         activity_id
         for (activity_id,) in db.query(QuestGroupActivity.activity_id).filter(QuestGroupActivity.group_id == group.id).all()

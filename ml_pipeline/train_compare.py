@@ -79,6 +79,11 @@ PRIMARY_SELECTION_METRIC = "average_precision"
 SELECTION_TIE_TOLERANCE = 0.005
 # Naive references the reported models must beat to mean anything.
 BASELINE_STRATEGIES = {"majority_class": "most_frequent", "prevalence": "prior"}
+def _encodes_account_id(student_ids: pd.Series) -> bool:
+    """True when any id embeds a dash-less UUID, as profiles.pseudonym_id does."""
+    return bool(student_ids.astype(str).str.contains(r"(?i)[0-9a-f]{32}", regex=True).any())
+
+
 REQUIRED_COLUMNS = {
     "id",
     "student_id",
@@ -227,7 +232,12 @@ def _validate_training_frame(df: pd.DataFrame) -> pd.DataFrame:
     if student_ids.str.fullmatch(
         r"(?i)(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"
     ).any():
-        raise ValueError("student_id cannot be a raw UUID; export pseudonym_id values instead.")
+        raise ValueError("student_id cannot be a raw UUID; export research codes instead.")
+    if _encodes_account_id(student_ids):
+        raise ValueError(
+            "student_id encodes an account id (pseudonym_id is 'stu_' plus the account UUID); "
+            "export research codes instead."
+        )
 
     valid_rows["created_at"] = pd.to_datetime(
         valid_rows["created_at"], errors="coerce", utc=True
@@ -326,6 +336,8 @@ def prepare_ml_dataset(
             raise ValueError("Exam rows need pseudonymous student_id and course_id values.")
         if exams["student_id"].astype(str).str.contains(r"\S+@\S+\.\S+", regex=True).any() or exams["student_id"].astype(str).str.fullmatch(r"\d+|[0-9a-fA-F-]{36}").any():
             raise ValueError("Exam student_id must be pseudonymous.")
+        if _encodes_account_id(exams["student_id"].astype(str)):
+            raise ValueError("Exam student_id encodes an account id; export research codes instead.")
 
     feature_rows: list[dict[str, float]] = []
     labels: list[int] = []

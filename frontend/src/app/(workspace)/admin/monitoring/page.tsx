@@ -103,7 +103,7 @@ function Monitoring() {
       <PageHeading
         eyebrow="ADMINISTRATION"
         title="Platform monitoring"
-        description="Service health, retryable processing jobs and the read-only audit trail. States come from recorded activity, not static labels."
+        description="Check service health, retry processing jobs and review the audit trail."
         status={
           data ? (
             <StatusChip

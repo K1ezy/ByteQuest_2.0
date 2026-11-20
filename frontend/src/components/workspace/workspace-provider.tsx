@@ -10,6 +10,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  type ComponentType,
   type ReactNode,
 } from "react";
 import { getErrorMessage } from "@/lib/api";
@@ -65,7 +66,9 @@ export function safeReturnTo(value: string | null, fallback: string): string {
   return path === root || path.startsWith(root + "/") ? path + url.search + url.hash : fallback;
 }
 
-export function WorkspaceProvider({ role, children }: { role: WorkspaceRole; children: ReactNode }) {
+export function WorkspaceProvider({ role, children, shell: Shell }: {
+  role: WorkspaceRole; children: ReactNode; shell?: ComponentType<{ children: ReactNode }>;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -180,6 +183,8 @@ export function WorkspaceProvider({ role, children }: { role: WorkspaceRole; chi
       <Link className="button button-primary" href={role === "admin" ? "/admin/courses" : "/instructor"}>View courses</Link>
     </section>;
   }
+
+  if (Shell) return <WorkspaceContext.Provider value={value}><Shell>{body}</Shell></WorkspaceContext.Provider>;
 
   return <WorkspaceContext.Provider value={value}>
     <div className="workspace-shell">

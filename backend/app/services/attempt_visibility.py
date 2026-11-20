@@ -2,19 +2,28 @@
 
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
+from fastapi import HTTPException
 from sqlalchemy import and_, exists, or_
 
 from app.models.entities import (
     ActivityAttempt,
+    ActivityKind,
     CourseMember,
     ExamAttempt,
     LearningActivity,
     QuestGroupActivity,
     QuestGroupMember,
+    QuestGroup,
     Profile,
     ReviewState,
+    UserRole,
 )
+
+
+def practice_attempt_clause():
+    return ActivityAttempt.exam_attempt_id.is_(None)
 
 
 def learner_visible_attempt_clause():
@@ -27,7 +36,7 @@ def learner_visible_attempt_clause():
             ExamAttempt.submitted_at <= ExamAttempt.result_released_at,
         )
     )
-    return or_(ActivityAttempt.exam_attempt_id.is_(None), released_exam_attempt)
+    return or_(practice_attempt_clause(), released_exam_attempt)
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -46,6 +55,58 @@ def activity_is_closed(activity: LearningActivity, now: datetime | None = None) 
         return True
     closes_at = _as_utc(activity.closes_at)
     return closes_at is not None and closes_at <= (now or datetime.now(timezone.utc))
+
+
+def activity_accepts_submissions_clause(now: datetime | None = None):
+    moment = now or datetime.now(timezone.utc)
+    return and_(
+        LearningActivity.closed_at.is_(None),
+        or_(LearningActivity.closes_at.is_(None), LearningActivity.closes_at > moment),
+    )
+
+
+def workshop_shareable_activity_clause(owner_id):
+    """A workshop may share global activities or content its owner can teach."""
+    teaches_course = exists().where(
+        CourseMember.profile_id == owner_id,
+        CourseMember.course_id == LearningActivity.course_id,
+        CourseMember.member_role == "instructor",
+        CourseMember.status == "active",
+    ).correlate_except(CourseMember)
+    authorized_owner = exists().where(
+        Profile.id == owner_id,
+        Profile.account_status == "active",
+        or_(Profile.role == UserRole.admin, and_(Profile.role == UserRole.instructor, teaches_course)),
+    ).correlate_except(Profile)
+    return or_(LearningActivity.course_id.is_(None), authorized_owner)
+
+
+def guard_solution_reopen(
+    activity: LearningActivity, *, closed_at: datetime | None, closes_at: datetime | None,
+) -> None:
+    """Refuse a schedule change that would reopen a closed, published challenge.
+
+    A challenge's reference solution unlocks for students once it closes, so reopening
+    it would let a student submit the copied solution for first-solve XP, stars and a
+    false pass in the research data. Running it again needs a new version.
+    """
+    now = datetime.now(timezone.utc)
+    if (
+        activity.activity_type != ActivityKind.challenge
+        or activity.review_status != ReviewState.published
+        or not activity_is_closed(activity, now)
+    ):
+        return
+    after = SimpleNamespace(closed_at=closed_at, closes_at=closes_at)
+    if not activity_is_closed(after, now):  # type: ignore[arg-type]
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "solution_exposed",
+                "message": "Students can already see this challenge's solution, so it can't reopen. "
+                "Create a new version to run it again.",
+            },
+        )
 
 
 def activity_has_opened(activity: LearningActivity, now: datetime | None = None) -> bool:
@@ -74,8 +135,10 @@ def student_activity_clause(student_id: uuid.UUID):
             QuestGroupActivity.activity_id == LearningActivity.id,
             QuestGroupMember.group_id == QuestGroupActivity.group_id,
             QuestGroupMember.profile_id == student_id,
+            QuestGroup.id == QuestGroupActivity.group_id,
+            workshop_shareable_activity_clause(QuestGroup.created_by),
         )
-    )
+    ).correlate(LearningActivity)
     return or_(LearningActivity.course_id.is_(None), in_course, in_workshop)
 
 

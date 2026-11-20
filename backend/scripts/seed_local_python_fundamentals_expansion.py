@@ -58,6 +58,7 @@ from app.models.entities import (  # noqa: E402
     TestCase,
     UserRole,
 )
+from app.services.challenge_verification import challenge_is_verified  # noqa: E402
 from app.services.gamification.quiz_content import parse_quiz_questions  # noqa: E402
 
 
@@ -446,7 +447,7 @@ def seed_challenge(db, spec, owner, group) -> None:
             )
 
     if activity.review_status == ReviewState.draft:
-        if not activity.judge0_verified:
+        if not challenge_is_verified(activity):
             print(f"Verifying reference solution with Judge0: {spec['title']}")
             for attempt in range(2):
                 try:

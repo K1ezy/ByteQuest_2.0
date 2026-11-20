@@ -511,7 +511,7 @@ function QuestsPageContent() {
                         <div className="quest-card-body">
                           <div className="quest-card-head">
                             <div className="quest-card-badges">
-                              <span className="activity-number">Quest #{quest.sequence_order}</span>
+                              <span className="activity-number">Quest #{quest.position ?? quest.sequence_order}</span>
                               <span className="tag">
                                 {quest.activity_type === "quiz"
                                   ? "CONCEPT CHECK"

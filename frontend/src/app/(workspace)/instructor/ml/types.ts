@@ -23,6 +23,8 @@ export type Forecast = {
   predicted_pass: boolean;
   model_version: string;
   selected_model: "logreg" | "random_forest";
+  /** Both models' chance of passing; `probability` is the selected one. */
+  probabilities?: { logreg: number; random_forest: number };
   as_of: string;
   actual_outcome: boolean | null;
   advisory: string;

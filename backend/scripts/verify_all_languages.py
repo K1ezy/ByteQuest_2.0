@@ -1,124 +1,84 @@
-"""Smoke-check ByteQuest's Judge0 client against Python, C++, and Java."""
+"""Verify the configured Judge0 sandbox without reading learner data or writing grades."""
 
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
-from uuid import UUID
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.models.entities import ProgrammingLang
+from app.services.judge0.client import Judge0Client, TestCaseInput
 
 
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
-
-# Importing the ORM initializes an engine. Keep this check detached from any
-# hosted database; it reads only the known local seed fixtures and writes none.
-os.environ["DATABASE_URL"] = (
-    "postgresql+psycopg2://postgres:postgres@127.0.0.1:54322/postgres"
-)
-
-from app.core.database import SessionLocal  # noqa: E402
-from app.models.entities import (  # noqa: E402
-    ActivityKind,
-    LearningActivity,
-    ProgrammingLang,
-    ReviewState,
-    TestCase,
-)
-from app.services.judge0.client import Judge0Client, TestCaseInput  # noqa: E402
-
-
-SEED_ACTIVITY_IDS = {
-    ProgrammingLang.cpp: UUID("a0000000-0000-4000-8000-000000000001"),
-    ProgrammingLang.python: UUID("a0000000-0000-4000-8000-000000000002"),
-    ProgrammingLang.java: UUID("a0000000-0000-4000-8000-000000000003"),
+# Every solution here is a small synthetic program. The first and second cases
+# distinguish passing a visible sample from passing official hidden cases.
+PROGRAMS = {
+    ProgrammingLang.python: {
+        "reference": "print(int(input()) * 2)",
+        "wrong answer": "print(-1)",
+        "hidden case failure": "print(6)",
+        "runtime error": "raise RuntimeError('pilot check')",
+        "timeout": "while True: pass",
+        "syntax error": "if True print(6)",
+    },
+    ProgrammingLang.cpp: {
+        "reference": "#include <iostream>\nint main(){ int n; std::cin >> n; std::cout << n * 2; }",
+        "wrong answer": "#include <iostream>\nint main(){ std::cout << -1; }",
+        "hidden case failure": "#include <iostream>\nint main(){ std::cout << 6; }",
+        "runtime error": "#include <cstdlib>\nint main(){ std::abort(); }",
+        "timeout": "int main(){ volatile unsigned n = 0; for(;;) n = n + 1; }",
+        "syntax error": "int main( {",
+    },
+    ProgrammingLang.java: {
+        "reference": "import java.util.Scanner; class Main { public static void main(String[] a) { System.out.println(new Scanner(System.in).nextInt() * 2); } }",
+        "wrong answer": "class Main { public static void main(String[] a) { System.out.println(-1); } }",
+        "hidden case failure": "class Main { public static void main(String[] a) { System.out.println(6); } }",
+        "runtime error": "class Main { public static void main(String[] a) { throw new RuntimeException(); } }",
+        "timeout": "class Main { static volatile long n; public static void main(String[] a) { while(true) n++; } }",
+        "syntax error": "class Main { public static void main(String[] a) { int n = ; } }",
+    },
+}
+EXPECTED = {
+    "reference": (2, {"none"}),
+    "wrong answer": (0, {"logic_error"}),
+    "hidden case failure": (1, {"logic_error"}),
+    "runtime error": (0, {"runtime_error"}),
+    "timeout": (0, {"timeout"}),
+    "syntax error": (0, {"syntax_error"}),
 }
 
 
 async def verify_compilers() -> int:
-    client = Judge0Client()
-    failures: list[str] = []
-    db = SessionLocal()
-
-    print("Milestone 1A — seeded reference solutions via ByteQuest Judge0 client")
-    try:
-        for language, activity_id in SEED_ACTIVITY_IDS.items():
+    judge = Judge0Client()
+    cases = [
+        TestCaseInput("visible", 0, "3\n", "6", time_limit_ms=1000),
+        TestCaseInput("hidden", 1, "4\n", "8", time_limit_ms=1000, is_hidden=True),
+    ]
+    failures = []
+    for language, programs in PROGRAMS.items():
+        for kind, source in programs.items():
+            expected_count, categories = EXPECTED[kind]
+            # Judge0 classifies Python parser errors as a nonzero runtime exit.
+            if language == ProgrammingLang.python and kind == "syntax error":
+                categories = categories | {"runtime_error"}
             try:
-                activity = (
-                    db.query(LearningActivity)
-                    .filter(
-                        LearningActivity.id == activity_id,
-                        LearningActivity.activity_type == ActivityKind.challenge,
-                        LearningActivity.language == language,
-                        LearningActivity.review_status == ReviewState.published,
-                    )
-                    .one_or_none()
-                )
-                if activity is None or not activity.reference_solution_code:
-                    raise RuntimeError("Published seeded challenge/reference solution is missing.")
-
-                rows = (
-                    db.query(TestCase)
-                    .filter(TestCase.activity_id == activity.id)
-                    .order_by(TestCase.order_index.asc())
-                    .all()
-                )
-                if not rows:
-                    raise RuntimeError("Seeded challenge has no test cases.")
-
-                test_cases = [
-                    TestCaseInput(
-                        test_case_id=str(row.id),
-                        order_index=row.order_index,
-                        stdin=row.stdin,
-                        expected_stdout=row.expected_stdout,
-                        time_limit_ms=row.time_limit_ms,
-                        memory_limit_kb=row.memory_limit_kb,
-                        is_hidden=False,
-                        weight=row.weight,
-                    )
-                    for row in rows
-                ]
-                summary = await client.evaluate_submission(
-                    language=language,
-                    source_code=activity.reference_solution_code,
-                    test_cases=test_cases,
-                )
-                statuses = ", ".join(
-                    f"{result.status_description} (ID={result.status_id})"
-                    for result in summary.test_results
-                )
-                passed = (
-                    summary.is_successful
-                    and len(summary.test_results) == len(test_cases)
-                    and all(result.status_id == 3 and result.passed for result in summary.test_results)
-                )
-                print(
-                    f"[{language.value.upper():6}] {'PASS' if passed else 'FAIL'} | "
-                    f"{statuses} | {summary.avg_execution_time_ms:.1f} ms avg"
-                )
-                if not passed:
-                    failures.append(language.value)
-                    for result in summary.test_results:
-                        if not result.passed:
-                            details = result.compile_output or result.stderr or result.stdout
-                            if details:
-                                print(f"  {result.test_case_id}: {details[:1000]}")
-            except Exception as exc:  # Report every language even when one call fails.
-                db.rollback()
-                failures.append(language.value)
-                print(f"[{language.value.upper():6}] ERROR | {type(exc).__name__}: {exc}")
-    finally:
-        db.close()
-
-    if failures:
-        print("Failed languages: " + ", ".join(failures))
-        return 1
-
-    print("All three language checks returned Accepted for both test cases.")
-    return 0
+                result = await judge.evaluate_submission(language, source, cases)
+            except Exception as exc:
+                print(f"Judge0 request failed ({type(exc).__name__}); check the private VM and sandbox services.")
+                return 1
+            passed = (
+                result.total_test_cases == len(cases)
+                and result.passed_test_cases == expected_count
+                and result.dominant_error_category in categories
+                and [case.test_case_id for case in result.test_results] == ["visible"]
+            )
+            print(f"{language.value} {kind}: {'PASS' if passed else 'FAIL'} "
+                  f"({result.passed_test_cases}/{result.total_test_cases}, {result.dominant_error_category})")
+            if not passed:
+                failures.append((language.value, kind))
+    return int(bool(failures))
 
 
 if __name__ == "__main__":

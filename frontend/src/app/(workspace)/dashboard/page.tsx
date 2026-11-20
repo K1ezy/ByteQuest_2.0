@@ -1,13 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { ApiError, apiRequest, getErrorMessage } from "@/lib/api";
 import { useShellProfile } from "@/components/app-shell";
 import { MemoryCheck } from "@/components/memory-check";
 import { ProgressRecap } from "@/components/progress-recap";
-import { useNow } from "@/components/workspace/ui";
+import { StudentAnnouncements } from "@/components/student-announcements";
+import { useApi, useNow } from "@/components/workspace/ui";
 import { timeGreeting } from "@/lib/greeting";
+import { studentAnnouncementsPath, type StudentAnnouncement } from "@/lib/workspace";
+import type { Profile } from "@/lib/types";
 
 interface Dashboard {
   recommendation: { rationale: string; target_activity_id: string | null };
@@ -55,17 +58,26 @@ const activityHref = (kind: "quiz" | "challenge", id: string) => `/${kind === "q
 const vars = (values: Record<string, string | number>) => values as CSSProperties;
 
 export default function DashboardPage() {
+  const profile = useShellProfile();
+  return <DashboardContent key={profile.id} profile={profile} />;
+}
+
+function DashboardContent({ profile }: { profile: Profile }) {
   const [data, setData] = useState<Dashboard | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
-  const profile = useShellProfile();
+  const heading = useRef<HTMLHeadingElement>(null);
   const now = useNow();
+  const { data: announcements, reload: reloadAnnouncements } = useApi<{ items: StudentAnnouncement[] }>(studentAnnouncementsPath);
   const [errorStatus, setErrorStatus] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showAllAttempts, setShowAllAttempts] = useState(false);
   const [error, setError] = useState("");
   const load = useCallback(async (initial = false) => {
-    if (!initial) setRefreshing(true);
+    if (!initial) {
+      setRefreshing(true);
+      reloadAnnouncements();
+    }
     setError("");
     try {
       const [dashboardResult, progressResult] = await Promise.allSettled([
@@ -82,7 +94,7 @@ export default function DashboardPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [reloadAnnouncements]);
 
   useEffect(() => {
     // Initial load synchronizes this client page with the authenticated API.
@@ -117,7 +129,7 @@ export default function DashboardPage() {
       <header className="dashboard-heading">
         <div>
           <p className="eyebrow-label">Your learning journey</p>
-          <h1>{timeGreeting(profile.display_name || (profile.handle_chosen === false ? "" : profile.username), now)}</h1>
+          <h1 ref={heading} tabIndex={-1}>{timeGreeting(profile.display_name || (profile.handle_chosen === false ? "" : profile.username), now)}</h1>
           <p className="pilot-lead">{lead}</p>
         </div>
         {data && <button className="button button-outline small dashboard-refresh" type="button" onClick={() => void load()}
@@ -126,6 +138,8 @@ export default function DashboardPage() {
           {refreshing ? "Refreshing…" : "Refresh"}
         </button>}
       </header>
+
+      <StudentAnnouncements items={announcements?.items ?? []} now={now} onEmpty={() => heading.current?.focus()} />
 
       {loading && <div className="pilot-dashboard-grid dashboard-skeleton" role="status" aria-label="Loading your dashboard">
         <div className="dashboard-main-column">

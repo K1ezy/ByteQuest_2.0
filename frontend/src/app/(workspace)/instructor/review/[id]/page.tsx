@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ApiError, getErrorMessage } from "@/lib/api";
 import { safeReturnTo, useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
 import { StudentPreviewCard } from "@/components/workspace/student-preview";
+import { SaveConflict } from "@/components/instructor/save-conflict";
 import {
   Button,
   ConfirmDialog,
@@ -20,8 +21,10 @@ import {
 import {
   approveDraft,
   friendlyLoadError, formatDateTime,
+  getDraft,
   rejectDraft,
   saveDraft,
+  verifyActivity,
   type ActivityDetail,
   type TestCasePayload,
 } from "@/lib/workspace";
@@ -105,8 +108,9 @@ function DraftWorkspace() {
   const [form, setForm] = useState<DraftForm | null>(null);
   const [baseline, setBaseline] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [notice, setNotice] = useState<{ tone: "success" | "error" | "info" | "warning"; text: string } | null>(null);
-  const [busy, setBusy] = useState<"save" | "reject" | "approve" | "">("");
+  const [notice, setNotice] = useState<{ tone: "success" | "error" | "info" | "warning"; text: string; retrySave?: boolean } | null>(null);
+  const [conflict, setConflict] = useState(false);
+  const [busy, setBusy] = useState<"save" | "verify" | "reject" | "approve" | "">("");
   const [activeCitation, setActiveCitation] = useState(0);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
@@ -269,6 +273,10 @@ function DraftWorkspace() {
       setNotice({ tone: "success", text: result.message });
       await refreshCourses();
     } catch (caught) {
+      if (caught instanceof ApiError && caught.code === "version_conflict") {
+        setConflict(true);
+        return;
+      }
       const parsed = fieldErrorFrom(caught);
       if (parsed.field) {
         setErrors({ [parsed.field]: parsed.message });
@@ -277,7 +285,26 @@ function DraftWorkspace() {
       setNotice({
         tone: "error",
         text: `${parsed.message} Your edits were not lost — save again to retry.`,
+        retrySave: true,
       });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function verifyRevision() {
+    if (!data || dirty) return;
+    setBusy("verify");
+    setNotice(null);
+    try {
+      const result = await verifyActivity(data.activity_id);
+      setData(await getDraft(data.activity_id));
+      setNotice({ tone: result.activity.judge0_verified ? "success" : "error", text: result.message });
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.code === "version_conflict") {
+        reload();
+      }
+      setNotice({ tone: "error", text: getErrorMessage(caught) });
     } finally {
       setBusy("");
     }
@@ -349,6 +376,9 @@ function DraftWorkspace() {
     );
   }
 
+  const needsVerification = data.activity_type === "challenge" && !data.judge0_verified;
+  const needsSample = data.activity_type === "challenge" && !data.exam_only && !form.tests.some((test) => !test.is_hidden);
+
   return (
     <>
       <PageHeading
@@ -380,10 +410,15 @@ function DraftWorkspace() {
         }
       />
 
+      {conflict ? <SaveConflict changes={form} onReload={async () => {
+        setData(await getDraft(activityId));
+        setErrors({});
+        setConflict(false);
+      }} /> : null}
       {notice ? (
         <Notice tone={notice.tone === "success" ? "success" : notice.tone === "error" ? "error" : "info"} onDismiss={() => setNotice(null)}>
           {notice.text}
-          {notice.tone === "error" && busy === "" ? (
+          {notice.retrySave && busy === "" ? (
             <>
               {" "}
               <button type="button" className="ws-inline-link" onClick={() => void saveRevision()}>
@@ -517,8 +552,11 @@ function DraftWorkspace() {
 
               <div className="ws-panel-head ws-subhead">
                 <div>
-                  <h3>Grading cases</h3>
+                  <h3 id="review-grading-cases" tabIndex={-1}>Grading cases</h3>
                   <p className="ws-muted">Hidden inputs and expected outputs are never sent to students.</p>
+                  {editable && needsSample ? (
+                    <p className="ws-muted">Make one case visible so students can run a sample after publication.</p>
+                  ) : null}
                 </div>
                 {editable ? (
                   <Button
@@ -806,8 +844,15 @@ function DraftWorkspace() {
         <div className="ws-sticky-status">
           {dirty ? <StatusChip state="pending" label="Unsaved changes" tone="wait" /> : <StatusChip state="ready" label="All changes saved" />}
           <span className="ws-muted">
-            {data.review_status === "published" ? "Published content is read-only." : "Saving keeps this draft in review."}
+            {data.exam_only ? "Exam-only. Add it to a restricted exam from the Exams page."
+              : data.review_status === "published" ? "Published content is read-only." : "Saving keeps this draft in review."}
           </span>
+          {editable && needsSample ? (
+            <span className="ws-muted" id="review-sample-required">
+              Make one grading case visible so students can run a sample.{" "}
+              <a className="ws-inline-link" href="#review-grading-cases">Go to grading cases</a>
+            </span>
+          ) : null}
         </div>
         <div className="ws-inline-actions">
           <Button
@@ -818,12 +863,23 @@ function DraftWorkspace() {
           >
             {busy === "save" ? "Saving…" : "Save revision"}
           </Button>
+          {editable && needsVerification ? (
+            <Button
+              variant="outline"
+              disabled={dirty || busy !== ""}
+              onClick={() => void verifyRevision()}
+              aria-busy={busy === "verify"}
+            >
+              {busy === "verify" ? "Verifying…" : "Verify with Judge0"}
+            </Button>
+          ) : null}
           <Button variant="danger" disabled={!editable || busy !== ""} onClick={() => setRejectOpen(true)}>
             Reject draft
           </Button>
           <Button
             variant="primary"
-            disabled={!editable || dirty || busy !== ""}
+            disabled={!editable || dirty || needsVerification || needsSample || busy !== "" || data.exam_only}
+            aria-describedby={needsSample ? "review-sample-required" : undefined}
             onClick={() => {
               setApproveError("");
               setApproveOpen(true);

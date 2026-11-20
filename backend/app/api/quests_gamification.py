@@ -24,7 +24,8 @@ from app.models.entities import (
     StudentBadge,
     UserRole,
 )
-from app.services.gamification.badges import evaluate_and_award_badges
+from app.services.gamification.badges import award_badges
+from app.services.gamification.completion_rewards import completed_activity_ids
 from app.services.gamification.codex import CodexResponse, codex_summary
 from app.services.gamification.mastery_map import MasteryMapResponse, first_visible_completions, mastery_map
 from app.services.gamification.progression import grant_xp
@@ -78,6 +79,9 @@ class QuestCard(BaseModel):
     topic_concept: str
     difficulty_level: int
     sequence_order: int
+    # 1-based place in this learner's own list. sequence_order is global across every
+    # course on the track, so it would number a new class's first quest #10.
+    position: int = 0
     added_at: datetime
     added_at_estimated: bool
     xp_reward: int
@@ -87,6 +91,7 @@ class QuestCard(BaseModel):
     # Best solve-quality stars (1-3) on a solved code challenge; None otherwise.
     stars: Optional[int] = None
     is_closed: bool = False
+    pass_mark_percent: int | None = None
     quiz_questions: Optional[list[PublicQuizQuestion]] = None
 
 
@@ -109,6 +114,7 @@ class QuizSubmissionResponse(BaseModel):
     new_level: int
     level_up: bool = False
     new_badges_unlocked: list[str]
+    badge_xp_awarded: int = 0
     next_step_recommendation: NextStepRecommendation
 
 
@@ -227,8 +233,9 @@ def get_mastery_map(
 def list_published_quests(
     current_user: Profile = Depends(get_current_user),
     db: Session = Depends(get_db),
+    details_for: uuid.UUID | None = None,
 ) -> list[QuestCard]:
-    """List safe published quest details for every signed-in role."""
+    """List visible quests with detail for every quest or just the requested one."""
     now = datetime.now(timezone.utc)
     visibility = (
         published_track_clause(current_user, now) if current_user.role == UserRole.student
@@ -256,13 +263,13 @@ def list_published_quests(
 
     quests: list[QuestCard] = []
     for activity in activities:
+        include_detail = details_for is None or activity.id == details_for
         public_questions = None
         if activity.activity_type == ActivityKind.quiz:
             try:
-                public_questions = [
-                    public_question(question)
-                    for question in _load_quiz_questions(activity)
-                ]
+                questions = _load_quiz_questions(activity)
+                if include_detail:
+                    public_questions = [public_question(question) for question in questions]
             except ValueError:
                 logger.warning(
                     "Skipping published quiz with invalid content (activity_id=%s)",
@@ -287,14 +294,17 @@ def list_published_quests(
                 added_at=added_at,
                 added_at_estimated=published_at is None,
                 xp_reward=activity.xp_reward,
-                problem_statement=activity.problem_statement,
-                starter_code=activity.starter_code,
+                problem_statement=activity.problem_statement if include_detail else None,
+                starter_code=activity.starter_code if include_detail else None,
                 is_completed=activity.id in completed_activity_ids,
                 stars=challenge_stars.get(activity.id),
                 is_closed=activity_is_closed(activity, now),
+                pass_mark_percent=(activity.pass_mark_percent or 100) if activity.activity_type == ActivityKind.challenge else None,
                 quiz_questions=public_questions,
             )
         )
+    for position, quest in enumerate(quests, start=1):
+        quest.position = position
     return quests
 
 
@@ -307,13 +317,13 @@ def submit_conceptual_quiz(
 ) -> QuizSubmissionResponse:
     """Grade an enrolled student's quiz and record the result atomically."""
     _ensure_student(current_user)
+    accepted_at = datetime.now(timezone.utc)
     activity = (
         db.query(LearningActivity)
         .filter(
             LearningActivity.id == payload.activity_id,
-            LearningActivity.language == current_user.enrolled_language,
             LearningActivity.activity_type == ActivityKind.quiz,
-            LearningActivity.review_status == ReviewState.published,
+            published_track_clause(current_user, accepted_at),
         )
         .first()
     )
@@ -322,6 +332,8 @@ def submit_conceptual_quiz(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Published quiz activity not found.",
         )
+    if activity_is_closed(activity, accepted_at):
+        raise HTTPException(status_code=409, detail="This quiz is closed for submissions.")
 
     try:
         questions = _load_quiz_questions(activity)
@@ -351,7 +363,9 @@ def submit_conceptual_quiz(
                 detail="An answer contains an invalid option key.",
             )
 
-    reserve("quiz_submit", current_user.id)
+    # The authenticated request already holds a connection. Reserve quota and
+    # persist the grade together so simultaneous submissions need only one.
+    reserve("quiz_submit", current_user.id, session=db)
 
     correct_count = sum(
         1
@@ -381,20 +395,9 @@ def submit_conceptual_quiz(
         .scalar()
         or 0
     )
-    prior_success = (
-        db.query(ActivityAttempt.id)
-        .filter(
-            ActivityAttempt.student_id == student.id,
-            ActivityAttempt.activity_id == activity.id,
-            ActivityAttempt.is_successful.is_(True),
-            learner_visible_attempt_clause(),
-        )
-        .first()
-        is not None
-    )
     xp_earned = (
         max(0, int(activity.xp_reward or 0))
-        if is_successful and not prior_success
+        if is_successful and not completed_activity_ids(db, student.id, {activity.id})
         else 0
     )
 
@@ -422,7 +425,7 @@ def submit_conceptual_quiz(
         is_successful=new_attempt.is_successful,
     )
 
-    new_badges = evaluate_and_award_badges(db, student)
+    new_badges, badge_xp = award_badges(db, student)
     recommendation = determine_next_task_rule_based(
         db, student, activity, new_attempt
     )
@@ -441,6 +444,7 @@ def submit_conceptual_quiz(
         new_level=student.current_level,
         level_up=student.current_level > level_before,
         new_badges_unlocked=new_badges,
+        badge_xp_awarded=badge_xp,
         next_step_recommendation=NextStepRecommendation(**recommendation),
     )
     record_shadow_prediction(

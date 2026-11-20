@@ -117,6 +117,7 @@ async def one_student(client: httpx.AsyncClient, token: str, activity_id: uuid.U
             if job["status"] in ("completed", "failed"):
                 return {"student": index, "status": job["status"],
                         "seconds": round(time.monotonic() - submitted_at, 2),
+                        **(job.get("result") or {}).get("timing", {}),
                         "acceptance_seconds": round(acceptance_seconds, 3), "error": job.get("error")}
             await asyncio.sleep(2)
         return {"student": index, "status": "pending", "seconds": 90, "error": None}
@@ -167,6 +168,11 @@ def main() -> None:
         if acceptances:
             print(f"Acceptance p50: {statistics.median(acceptances):.3f}s; "
                   f"p95: {acceptances[(95 * len(acceptances) + 99) // 100 - 1]:.3f}s")
+        for label, metric in (("Ready queue", "ready_queue_seconds"), ("Final grading run", "final_run_seconds")):
+            timings = sorted(item[metric] for item in results if metric in item)
+            if timings:
+                print(f"{label} p50: {statistics.median(timings):.3f}s; "
+                      f"p95: {timings[(95 * len(timings) + 99) // 100 - 1]:.3f}s")
         with SessionLocal() as db:
             user_ids = [user_id for user_id, _ in users]
             attempts = db.query(ActivityAttempt.student_id).filter(

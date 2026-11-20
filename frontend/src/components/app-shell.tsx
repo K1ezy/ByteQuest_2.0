@@ -6,7 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { apiRequest, ApiError, getErrorMessage } from "@/lib/api";
 import { getSupabase } from "@/lib/supabase";
 import { subscribeToProfileUpdates } from "@/lib/profile-events";
-import { belongsTo, canOpenPath, pageLabel, primaryNavigation, questRedirect, roleLabels } from "@/lib/navigation";
+import { belongsTo, canOpenPath, pageLabel, primaryNavigation, questRedirect, roleLabels, usesInstructorCourseShell } from "@/lib/navigation";
 import type { Profile } from "@/lib/types";
 import { destinationFor } from "@/components/home-redirect";
 import { AccountMenu } from "@/components/account-menu";
@@ -129,7 +129,8 @@ function isActiveDestination(pathname: string, href: string, index: number) {
 export function AppShell({ profile, children }: { profile: Profile; children: ReactNode }) {
   const pathname = usePathname();
   const params = useSearchParams();
-  const title = pageLabel(pathname);
+  const hasInstructorCourseShell = profile.role === "instructor" && usesInstructorCourseShell(pathname);
+  const title = hasInstructorCourseShell && pathname === "/instructor" ? "Dashboard" : pageLabel(pathname);
   const titleKey = pathname + "?" + params.toString();
   const focusExit = profile.role === "student" && /^\/(arena|quiz|exams)\/[^/]+$/.exec(pathname);
   const currentCourse = params.get("course");
@@ -137,6 +138,8 @@ export function AppShell({ profile, children }: { profile: Profile; children: Re
   useEffect(() => {
     document.title = title + " · ByteQuest";
   }, [title]);
+
+  if (hasInstructorCourseShell) return children;
 
   /* Layout: one slim top bar (brand, chat, account) and the primary destinations.
      Wide screens show the destinations as a sidebar; phones show the same links as a

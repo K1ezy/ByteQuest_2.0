@@ -9,7 +9,7 @@ vi.mock("@/lib/supabase", () => ({ getSupabase: () => ({ auth: { signUp: mocks.s
 
 import { signUpStudent } from "./student-signup";
 
-const registration = { schoolId: " 00123 ", yearLevel: 3, blockSection: "F" };
+const registration = { schoolId: " 26-00123 ", yearLevel: 3, blockSection: "F" };
 
 afterEach(() => vi.clearAllMocks());
 
@@ -22,7 +22,7 @@ it("saves the normalized public username with signup for immediate and email-con
     expect(mocks.check).toHaveBeenCalledWith("adahandle");
     expect(mocks.signUp).toHaveBeenLastCalledWith({
       email: "learner@example.test", password: "password",
-      options: { data: { username: "adahandle", school_id: "00123", year_level: 3, block_section: "F" } },
+      options: { data: { username: "adahandle", school_id: "26-00123", year_level: 3, block_section: "F" } },
     });
   }
 });
@@ -38,6 +38,6 @@ it("reports a signup race while allowing a different username retry", async () =
   mocks.check.mockResolvedValue(true);
   mocks.signUp.mockResolvedValueOnce({ data: { session: null }, error: { message: "Database error saving new user" } })
     .mockResolvedValueOnce({ data: { session: null }, error: null });
-  await expect(signUpStudent("learner@example.test", "password", "firsthandle", registration)).rejects.toThrow("may have just been taken");
+  await expect(signUpStudent("learner@example.test", "password", "firsthandle", registration)).rejects.toThrow("match the school roster");
   await expect(signUpStudent("learner@example.test", "password", "secondhandle", registration)).resolves.toHaveProperty("data.session", null);
 });

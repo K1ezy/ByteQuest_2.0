@@ -57,6 +57,8 @@ type WorkspaceActivity = {
 
 type Challenge = {
   activity_id: string;
+  content_version: number;
+  exam_only?: boolean;
   activity_type: "challenge";
   source_document_id: string | null;
   title: string;
@@ -84,6 +86,8 @@ type QuizQuestion = {
 
 type ConceptualQuiz = {
   activity_id: string;
+  content_version: number;
+  exam_only?: boolean;
   activity_type: "quiz";
   source_document_id: string | null;
   title: string;
@@ -99,7 +103,7 @@ type ConceptualQuiz = {
 };
 
 type Workspace = { documents: WorkspaceDocument[]; activities: WorkspaceActivity[] };
-type BusyAction = "upload" | "version" | "generate" | "load" | "save" | "verify" | "review" | "publish" | "archive" | "restore" | "reprocess" | "download" | "metadata" | "";
+type BusyAction = "generate" | "load" | "save" | "verify" | "review" | "publish" | "";
 
 const emptyWorkspace: Workspace = { documents: [], activities: [] };
 const languageName: Record<ProgrammingLanguage, string> = { cpp: "C++", python: "Python", java: "Java" };
@@ -118,10 +122,6 @@ export default function InstructorPage() {
   const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace);
   const [selectedDocument, setSelectedDocument] = useState("");
   const selectedDocumentRef = useRef("");
-  const [file, setFile] = useState<File | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [documentTitle, setDocumentTitle] = useState("");
-  const [documentDescription, setDocumentDescription] = useState("");
   const [language, setLanguage] = useState<ProgrammingLanguage>("python");
   const [topic, setTopic] = useState("");
   const [difficulty, setDifficulty] = useState(2);
@@ -148,12 +148,8 @@ export default function InstructorPage() {
     setSelectedDocument(selectedId);
 
     if (!selected) {
-      setDocumentTitle("");
-      setDocumentDescription("");
       setTopic("");
     } else if (selected.document_id !== current) {
-      setDocumentTitle(selected.title);
-      setDocumentDescription(selected.description || "");
       setLanguage(selected.language);
       setTopic(selected.topic_concept || "");
     }
@@ -161,14 +157,8 @@ export default function InstructorPage() {
   }, []);
 
   function selectDocument(document: WorkspaceDocument) {
-    if (document.document_id !== selectedDocument) {
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      setFile(null);
-    }
     selectedDocumentRef.current = document.document_id;
     setSelectedDocument(document.document_id);
-    setDocumentTitle(document.title);
-    setDocumentDescription(document.description || "");
     setLanguage(document.language);
     setTopic(document.topic_concept || "");
   }
@@ -188,101 +178,6 @@ export default function InstructorPage() {
     try { await loadWorkspace(); }
     catch (caught) { setError(getErrorMessage(caught)); }
     finally { setBusy(""); }
-  }
-
-  async function uploadDocument(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!file) { setError("Choose a PDF file first."); return; }
-    setBusy("upload"); setError(""); setMessage("");
-    try {
-      const data = new FormData();
-      data.append("file", file);
-      data.append("title", documentTitle.trim());
-      if (documentDescription.trim()) data.append("description", documentDescription.trim());
-      data.append("language_tag", language);
-      if (topic.trim()) data.append("topic_concept", topic.trim());
-      const result = await apiRequest<{ document_id: string; title: string }>("/instructor/documents/upload", { method: "POST", body: data });
-      await loadWorkspace(result.document_id);
-      setFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      setMessage(`Saved “${result.title}”. You can generate a challenge from it now.`);
-    } catch (caught) { setError(getErrorMessage(caught)); }
-    finally { setBusy(""); }
-  }
-
-  async function uploadDocumentVersion() {
-    if (!selectedDocument || !file) { setError("Choose the current source document and corrected PDF first."); return; }
-    const current = workspace.documents.find((document) => document.document_id === selectedDocument);
-    if (!current?.is_current || current.archived_at) { setError("Select the active document version before replacing it."); return; }
-    setBusy("version"); setError(""); setMessage("");
-    try {
-      const data = new FormData();
-      data.append("file", file);
-      data.append("title", documentTitle.trim() || current.title);
-      if (documentDescription.trim()) data.append("description", documentDescription.trim());
-      data.append("language_tag", language);
-      if (topic.trim()) data.append("topic_concept", topic.trim());
-      const result = await apiRequest<{ document_id: string; title: string; version_number: number }>(`/instructor/documents/${selectedDocument}/versions`, { method: "POST", body: data });
-      await loadWorkspace(result.document_id);
-      setFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      setMessage(`Saved “${result.title}” as version ${result.version_number}. The previous PDF and linked activities remain available.`);
-    } catch (caught) { setError(getErrorMessage(caught)); }
-    finally { setBusy(""); }
-  }
-
-  async function updateDocumentMetadata(document: WorkspaceDocument) {
-    setBusy("metadata"); setError(""); setMessage("");
-    try {
-      await apiRequest(`/instructor/documents/${document.document_id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ title: documentTitle.trim(), description: documentDescription.trim() || null, language_tag: language, topic_concept: topic.trim() || null }),
-      });
-      await loadWorkspace(document.document_id);
-      setMessage("Document details saved. Its PDF and version history are unchanged.");
-    } catch (caught) { setError(getErrorMessage(caught)); }
-    finally { setBusy(""); }
-  }
-
-  async function archiveDocument(document: WorkspaceDocument) {
-    if (!window.confirm(`Archive “${document.title}” version ${document.version_number}? It will be hidden from new challenge generation, while its PDF, history, and existing activities are kept.`)) return;
-    setBusy("archive"); setError(""); setMessage("");
-    try {
-      await apiRequest(`/instructor/documents/${document.document_id}/archive`, { method: "POST" });
-      await loadWorkspace();
-      setMessage("Document archived. Its stored PDF and existing challenges are preserved.");
-    } catch (caught) { setError(getErrorMessage(caught)); }
-    finally { setBusy(""); }
-  }
-
-  async function restoreDocument(document: WorkspaceDocument) {
-    setBusy("restore"); setError(""); setMessage("");
-    try {
-      await apiRequest(`/instructor/documents/${document.document_id}/restore`, { method: "POST" });
-      const refreshedWorkspace = await loadWorkspace(document.document_id);
-      const restored = refreshedWorkspace.documents.find((version) => version.document_id === document.document_id);
-      if (restored) selectDocument(restored);
-      setMessage(`Restored “${document.title}” version ${document.version_number} as the active version.`);
-    } catch (caught) { setError(getErrorMessage(caught)); }
-    finally { setBusy(""); }
-  }
-
-  async function reprocessDocument(document: WorkspaceDocument) {
-    setBusy("reprocess"); setError(""); setMessage("");
-    try {
-      await apiRequest(`/instructor/documents/${document.document_id}/reprocess`, { method: "POST" });
-      await loadWorkspace(document.document_id);
-      setMessage(`Rebuilt the search index for “${document.title}”.`);
-    } catch (caught) { setError(getErrorMessage(caught)); }
-    finally { setBusy(""); }
-  }
-
-  async function downloadDocument(document: WorkspaceDocument) {
-    setBusy("download"); setError(""); setMessage("");
-    try {
-      const result = await apiRequest<{ download_url: string }>(`/instructor/documents/${document.document_id}/download`);
-      window.location.assign(result.download_url);
-    } catch (caught) { setError(getErrorMessage(caught)); setBusy(""); }
   }
 
   async function generateChallenge(event: FormEvent<HTMLFormElement>) {
@@ -340,6 +235,7 @@ export default function InstructorPage() {
       const saved = await apiRequest<Challenge>(`/instructor/activities/${challenge.activity_id}`, {
         method: "PATCH",
         body: JSON.stringify({
+          content_version: challenge.content_version,
           title: challenge.title, topic_concept: challenge.topic_concept, problem_statement: challenge.problem_statement,
           starter_code: challenge.starter_code, reference_solution_code: challenge.reference_solution_code,
           difficulty_level: Number(challenge.difficulty_level), xp_reward: Number(challenge.xp_reward),
@@ -398,7 +294,7 @@ export default function InstructorPage() {
     try {
       const saved = await apiRequest<ConceptualQuiz>(`/instructor/activities/${quiz.activity_id}/quiz`, {
         method: "PATCH",
-        body: JSON.stringify({ title: quiz.title, topic_concept: quiz.topic_concept, problem_statement: quiz.problem_statement, difficulty_level: Number(quiz.difficulty_level), xp_reward: Number(quiz.xp_reward), quiz_questions_json: quiz.quiz_questions_json }),
+        body: JSON.stringify({ content_version: quiz.content_version, title: quiz.title, topic_concept: quiz.topic_concept, problem_statement: quiz.problem_statement, difficulty_level: Number(quiz.difficulty_level), xp_reward: Number(quiz.xp_reward), quiz_questions_json: quiz.quiz_questions_json }),
       });
       setQuiz(saved); setQuizDirty(false); await loadWorkspace();
       setMessage("Quiz edits saved. Review it again before publishing.");
@@ -431,7 +327,7 @@ export default function InstructorPage() {
           </div>
           <h1>Authoring Studio</h1>
           <Link href={profile.role === "admin" ? "/admin/teaching" : "/instructor/materials" + courseSuffix}>Back to {profile.role === "admin" ? "Instructor Workspace" : "Materials"}</Link>
-<p>Upload course material, generate a challenge, then review and validate the saved draft.</p>
+<p>Pick course material, generate a challenge or quiz, then review and validate the saved draft.</p>
         </div>
       </div>
       {checkingAccess ? <div className="panel" role="status">Loading your instructor workspace…</div> : (
@@ -440,17 +336,8 @@ export default function InstructorPage() {
           <div className="instructor-layout">
             <div className="instructor-sidebar">
               <section className="panel stack">
-                <div><p className="eyebrow-label">STEP 1</p><h2 className="panel-title">Course material</h2><p className="panel-subtitle">Upload a text-based PDF to use as challenge context.</p></div>
-                <form className="stack" onSubmit={uploadDocument}>
-                  <div className="field"><label htmlFor="doc-title">Document title</label><input id="doc-title" required minLength={2} maxLength={255} value={documentTitle} onChange={(event) => setDocumentTitle(event.target.value)} /></div>
-                  <div className="field"><label htmlFor="doc-file">PDF file</label><input ref={fileInputRef} id="doc-file" name="pdf" type="file" accept="application/pdf,.pdf" required onChange={(event) => setFile(event.target.files?.[0] || null)} /></div>
-                  <div className="field"><label htmlFor="doc-description">Short description <span className="optional-label">optional</span></label><textarea id="doc-description" rows={3} maxLength={4000} value={documentDescription} onChange={(event) => setDocumentDescription(event.target.value)} /></div>
-                  <button className="button secondary" type="submit" disabled={anyBusy || !file}>{busy === "upload" ? "Processing PDF…" : "Upload as a new document"}</button>
-                </form>
-                {selectedDocument && <div className="document-management-actions">
-                  <button className="button" type="button" disabled={anyBusy || !file || !workspace.documents.some((document) => document.document_id === selectedDocument && document.is_current && !document.archived_at)} onClick={() => void uploadDocumentVersion()}>{busy === "version" ? "Saving new version…" : "Upload as next version"}</button>
-                  <button className="button quiet" type="button" disabled={anyBusy || !workspace.documents.some((document) => document.document_id === selectedDocument && document.is_current && !document.archived_at)} onClick={() => { const selected = workspace.documents.find((document) => document.document_id === selectedDocument); if (selected) void updateDocumentMetadata(selected); }}>{busy === "metadata" ? "Saving details…" : "Save document details"}</button>
-                </div>}
+                <div><p className="eyebrow-label">STEP 1</p><h2 className="panel-title">Course material</h2><p className="panel-subtitle">Pick a processed PDF below. Upload, replace or archive PDFs in the Materials library.</p></div>
+                <Link className="button secondary" href={profile.role === "admin" ? "/admin/materials" : "/instructor/materials" + courseSuffix}>Open Materials library</Link>
               </section>
 
               <section className="panel stack">
@@ -473,11 +360,6 @@ export default function InstructorPage() {
               <h3 className="library-subheading">Course documents <span>{workspace.documents.length}</span></h3>
               {workspace.documents.length ? <div className="workspace-list">{workspace.documents.map((document) => <div className={`workspace-list-row document-row${selectedDocument === document.document_id ? " selected" : ""}`} key={document.document_id}>
                 <div className="document-row-main"><button className="document-select" type="button" onClick={() => selectDocument(document)} aria-pressed={selectedDocument === document.document_id}><strong>{document.title}</strong><span>{languageName[document.language]} · {document.topic_concept || "No topic"} · v{document.version_number} · {document.total_chunks} sections · {document.file_size_bytes ? `${Math.ceil(document.file_size_bytes / 1024)} KB retained` : "PDF not retained"}</span></button>
-                  <div className="document-actions">
-                    {document.file_size_bytes ? <button className="text-button" type="button" disabled={anyBusy} onClick={() => void downloadDocument(document)}>{busy === "download" ? "Preparing…" : "Download PDF"}</button> : null}
-                    {document.is_current && !document.archived_at && document.file_size_bytes ? <button className="text-button" type="button" disabled={anyBusy} onClick={() => void reprocessDocument(document)}>{busy === "reprocess" ? "Reprocessing…" : "Reprocess"}</button> : null}
-                    {!document.is_current || document.archived_at ? <button className="text-button" type="button" disabled={anyBusy} onClick={() => void restoreDocument(document)}>{busy === "restore" ? "Restoring…" : "Restore version"}</button> : <button className="text-button remove-case" type="button" disabled={anyBusy} onClick={() => void archiveDocument(document)}>{busy === "archive" ? "Archiving…" : "Archive"}</button>}
-                  </div>
                 </div>
                 <span className={`status-pill ${document.archived_at ? "pending" : document.is_current && document.processing_status === "completed" ? "good" : "pending"}`}>{document.archived_at ? "archived" : document.is_current ? document.processing_status : "superseded"}</span>
               </div>)}</div> : <p className="muted-copy">Uploaded documents will appear here and remain available after you return.</p>}
@@ -514,9 +396,9 @@ export default function InstructorPage() {
             <div className="editor-actions">
               {editable && <button className="button secondary" type="button" onClick={() => void saveDraft()} disabled={anyBusy}>{busy === "save" ? "Saving and validating…" : challengeDirty ? "Save edits and revalidate" : "Save and revalidate"}</button>}
               {editable && !challenge.judge0_verified && <button className="button quiet" type="button" onClick={() => void verifyDraft()} disabled={anyBusy || challengeDirty}>{busy === "verify" ? "Checking Judge0…" : "Retry Judge0 validation"}</button>}
-              {editable && <button className="button" type="button" onClick={() => void publishDraft()} disabled={anyBusy || !challenge.judge0_verified || !challenge.reviewed_by || challengeDirty}>{busy === "publish" ? "Publishing…" : "Publish challenge"}</button>}
+              {editable && !challenge.exam_only && <button className="button" type="button" onClick={() => void publishDraft()} disabled={anyBusy || !challenge.judge0_verified || !challenge.reviewed_by || challengeDirty}>{busy === "publish" ? "Publishing…" : "Publish challenge"}</button>}
             </div>
-            {editable && <p className="muted-copy">{challengeDirty ? "Unsaved changes must be saved and pass Judge0 before publishing." : !challenge.judge0_verified ? "Publishing stays locked until the saved reference solution passes Judge0." : !challenge.reviewed_by ? "Review the saved instructions, reference solution, and grading cases, then check the confirmation before publishing." : "The saved, Judge0-verified challenge has been reviewed and is ready to publish."}</p>}
+            {editable && <p className="muted-copy">{challenge.exam_only ? "Save and verify this exam-only challenge, then add it from the Exams page." : challengeDirty ? "Unsaved changes must be saved and pass Judge0 before publishing." : !challenge.judge0_verified ? "Publishing stays locked until the saved reference solution passes Judge0." : !challenge.reviewed_by ? "Review the saved instructions, reference solution, and grading cases, then check the confirmation before publishing." : "The saved, Judge0-verified challenge has been reviewed and is ready to publish."}</p>}
           </section>}
 
           {quiz && <section className="panel challenge-editor-panel quiz-editor-panel">
@@ -542,9 +424,9 @@ export default function InstructorPage() {
             {editableQuiz && quizDirty && <p className="verification-status failed">Save your latest edits before marking this quiz reviewed.</p>}
             <div className="editor-actions">
               {editableQuiz && <button className="button secondary" type="button" onClick={() => void saveQuizDraft()} disabled={anyBusy}>{busy === "save" ? "Saving…" : quizDirty ? "Save quiz edits" : "Save quiz draft"}</button>}
-              {editableQuiz && <button className="button" type="button" onClick={() => void publishQuiz()} disabled={anyBusy || quizDirty || !quiz.reviewed_by}>{busy === "publish" ? "Publishing…" : "Publish reviewed quiz"}</button>}
+              {editableQuiz && !quiz.exam_only && <button className="button" type="button" onClick={() => void publishQuiz()} disabled={anyBusy || quizDirty || !quiz.reviewed_by}>{busy === "publish" ? "Publishing…" : "Publish reviewed quiz"}</button>}
             </div>
-            {editableQuiz && <p className="muted-copy">A quiz can be published only after its saved content has been reviewed. Published quizzes cannot be edited.</p>}
+            {editableQuiz && <p className="muted-copy">{quiz.exam_only ? "Save this exam-only quiz, then add it from the Exams page." : "A quiz can be published only after its saved content has been reviewed. Published quizzes cannot be edited."}</p>}
           </section>}
         </>
       )}

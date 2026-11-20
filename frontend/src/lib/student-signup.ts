@@ -1,5 +1,6 @@
 import { checkUsernameAvailability } from "@/lib/api";
 import { getSupabase } from "@/lib/supabase";
+import { isStudentSchoolId, STUDENT_SCHOOL_ID_ERROR } from "@/lib/school-id";
 
 export async function signUpStudent(email: string, password: string, username: string, registration: {
   schoolId: string;
@@ -12,8 +13,9 @@ export async function signUpStudent(email: string, password: string, username: s
     throw new Error("Username must be 3–44 letters, without spaces or numbers.");
   }
   const schoolId = registration.schoolId.trim();
-  if (!schoolId || schoolId.length > 64) throw new Error("Enter a School ID of 1–64 characters.");
   const isStudent = !registration.role || registration.role === "student";
+  if (isStudent && !isStudentSchoolId(schoolId)) throw new Error(STUDENT_SCHOOL_ID_ERROR);
+  if (!isStudent && (!schoolId || schoolId.length > 64)) throw new Error("Enter a School ID of 1–64 characters.");
   if (isStudent && (![1, 2, 3, 4].includes(registration.yearLevel) || !/^[A-F]$/.test(registration.blockSection))) {
     throw new Error("Choose your year level and block section.");
   }
@@ -28,6 +30,9 @@ export async function signUpStudent(email: string, password: string, username: s
     } },
   });
   if (result.error) {
+    if (isStudent && /database error saving new user|duplicate key/i.test(result.error.message)) {
+      throw new Error("Account could not be created. Check that your School ID and email match the school roster and your username is available.");
+    }
     if (/database error saving new user|duplicate key|username/i.test(result.error.message)) {
       throw new Error("Account could not be created. The username may have just been taken; choose another and try again.");
     }

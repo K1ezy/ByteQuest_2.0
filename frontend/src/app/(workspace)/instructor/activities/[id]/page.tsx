@@ -1,11 +1,14 @@
 "use client";
 
+import { fromManilaDateTimeInput, formatManilaDateTime, toManilaDateTimeInput } from "@/lib/activity-date";
+
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, getErrorMessage } from "@/lib/api";
 import { safeReturnTo, useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
 import { StudentPreviewCard } from "@/components/workspace/student-preview";
+import { SaveConflict } from "@/components/instructor/save-conflict";
 import {
   Button,
   ConfirmDialog,
@@ -20,11 +23,10 @@ import {
 import {
   activityStateLabel,
   createActivityVersion,
-  friendlyLoadError, formatDateTime,
-  fromDateTimeInput,
+  friendlyLoadError,
+  getActivity,
   publishActivity,
   scheduleActivity,
-  toDateTimeInput,
   updateActivity,
   verifyActivity,
   type ActivityDetail,
@@ -45,6 +47,8 @@ type EditorForm = {
   problem: string;
   difficulty: number;
   xp: number;
+  /** Blank keeps the default pass rule. */
+  passMark: string;
   starter: string;
   reference: string;
   tests: TestCasePayload[];
@@ -63,6 +67,7 @@ function formFrom(detail: ActivityDetail): EditorForm {
     problem: detail.problem_statement || "",
     difficulty: detail.difficulty_level,
     xp: detail.xp_reward,
+    passMark: detail.pass_mark_percent == null ? "" : String(detail.pass_mark_percent),
     starter: detail.starter_code || "",
     reference: detail.reference_solution_code || "",
     tests: (detail.test_cases || []).map((test) => ({ ...test })),
@@ -73,8 +78,8 @@ function formFrom(detail: ActivityDetail): EditorForm {
       correct_answer: question.correct_answer,
     })),
     contentVersion: detail.content_version,
-    opensAt: toDateTimeInput(detail.opens_at),
-    closesAt: toDateTimeInput(detail.closes_at),
+    opensAt: toManilaDateTimeInput(detail.opens_at),
+    closesAt: toManilaDateTimeInput(detail.closes_at),
   };
 }
 
@@ -119,11 +124,13 @@ function ActivityEditor() {
   const [step, setStep] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<{ tone: "success" | "error" | "info" | "warning"; text: string } | null>(null);
+  const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState<"save" | "schedule" | "verify" | "publish" | "version" | "">("");
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishChecked, setPublishChecked] = useState(false);
   const [publishError, setPublishError] = useState("");
   const [previewSeen, setPreviewSeen] = useState(false);
+  const focusGradingCases = useRef(false);
 
   useEffect(() => {
     if (!data) return;
@@ -145,6 +152,10 @@ function ActivityEditor() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (step === 3) setPreviewSeen(true);
+    if (step === 1 && focusGradingCases.current) {
+      focusGradingCases.current = false;
+      document.getElementById("activity-grading-cases")?.focus();
+    }
   }, [step]);
 
   const locked = Boolean(data) && (data?.review_status === "published" || (data?.attempt_count || 0) > 0);
@@ -185,9 +196,11 @@ function ActivityEditor() {
         if (question.options.some((option) => !option.text.trim())) found[`question-${index}-options`] = "Every option needs text.";
       });
     }
-    if (target.opensAt && target.closesAt && new Date(target.closesAt) <= new Date(target.opensAt)) {
+    if (target.opensAt && target.closesAt && target.closesAt <= target.opensAt) {
       found.closesAt = "The closing time must be after the opening time.";
     }
+    if (target.opensAt && !fromManilaDateTimeInput(target.opensAt)) found.opensAt = "Enter a valid opening time in Asia/Manila.";
+    if (target.closesAt && !fromManilaDateTimeInput(target.closesAt)) found.closesAt = "Enter a valid closing time in Asia/Manila.";
     return found;
   }
 
@@ -200,6 +213,9 @@ function ActivityEditor() {
     if (target.difficulty !== baseline.difficulty) payload.difficulty_level = target.difficulty;
     if (target.xp !== baseline.xp) payload.xp_reward = target.xp;
     if (data?.activity_type === "challenge") {
+      if (target.passMark !== baseline.passMark) {
+        payload.pass_mark_percent = target.passMark.trim() === "" ? null : Number(target.passMark);
+      }
       if (target.starter !== baseline.starter) payload.starter_code = target.starter;
       if (target.reference !== baseline.reference) payload.reference_solution_code = target.reference;
       if (JSON.stringify(target.tests) !== JSON.stringify(baseline.tests)) {
@@ -231,6 +247,10 @@ function ActivityEditor() {
       setNotice({ tone: "success", text: result.message });
       await refreshCourses();
     } catch (caught) {
+      if (caught instanceof ApiError && caught.code === "version_conflict") {
+        setConflict(true);
+        return;
+      }
       const parsed = fieldErrorFrom(caught);
       if (parsed.field) setErrors({ [parsed.field]: parsed.message });
       setNotice({ tone: "error", text: `${parsed.message} Your edits were kept — save again to retry.` });
@@ -242,17 +262,22 @@ function ActivityEditor() {
   async function saveSchedule() {
     if (!data || !form) return;
     const found = validate(form);
-    if (found.closesAt) {
-      setErrors({ closesAt: found.closesAt });
+    if (found.opensAt || found.closesAt) {
+      setErrors({ ...(found.opensAt ? { opensAt: found.opensAt } : {}), ...(found.closesAt ? { closesAt: found.closesAt } : {}) });
       return;
     }
+    setErrors({});
     setBusy("schedule");
     setNotice(null);
     try {
-      const result = await scheduleActivity(data.activity_id, fromDateTimeInput(form.opensAt), fromDateTimeInput(form.closesAt));
+      const result = await scheduleActivity(data.activity_id, fromManilaDateTimeInput(form.opensAt), fromManilaDateTimeInput(form.closesAt), form.contentVersion);
       setData(result.activity);
       setNotice({ tone: "success", text: result.message });
     } catch (caught) {
+      if (caught instanceof ApiError && caught.code === "version_conflict") {
+        setConflict(true);
+        return;
+      }
       setNotice({ tone: "error", text: `${getErrorMessage(caught)} Your entered times are still here.` });
     } finally {
       setBusy("");
@@ -334,6 +359,7 @@ function ActivityEditor() {
 
   const preview = localPreview(data, form);
   const quiz = data.activity_type === "quiz";
+  const needsSample = !quiz && !data.exam_only && !form.tests.some((test) => !test.is_hidden);
 
   return (
     <>
@@ -364,6 +390,11 @@ function ActivityEditor() {
         actions={<Link className="button button-outline" href={returnTo}>← Back to activities</Link>}
       />
 
+      {conflict ? <SaveConflict changes={form} onReload={async () => {
+        setData(await getActivity(activityId));
+        setErrors({});
+        setConflict(false);
+      }} /> : null}
       {notice ? (
         <Notice tone={notice.tone === "success" ? "success" : notice.tone === "error" ? "error" : notice.tone === "warning" ? "warning" : "info"} onDismiss={() => setNotice(null)}>
           {notice.text}
@@ -432,6 +463,13 @@ function ActivityEditor() {
               <label htmlFor="xp">XP reward</label>
               <input id="xp" type="number" min={10} max={10000} value={form.xp} disabled={!editable || busy !== ""} onChange={(event) => update({ xp: Number(event.target.value) })} />
             </div>
+            {data.activity_type === "challenge" && (
+              <div className="ws-field">
+                <label htmlFor="pass-mark">Pass mark (%)</label>
+                <input id="pass-mark" type="number" inputMode="numeric" min={1} max={100} placeholder="Default" value={form.passMark} disabled={!editable || busy !== ""} onChange={(event) => update({ passMark: event.target.value })} aria-describedby="pass-mark-help" />
+                <p id="pass-mark-help" className="ws-muted">Weighted score a submission needs to pass. Leave blank for the default: every test in practice, 80% in exams.</p>
+              </div>
+            )}
             <div className="ws-field full">
               <label htmlFor="problem">Student instructions</label>
               <textarea id="problem" rows={7} value={form.problem} disabled={!editable || busy !== ""} onChange={(event) => update({ problem: event.target.value })} aria-invalid={Boolean(errors.problem)} />
@@ -535,8 +573,11 @@ function ActivityEditor() {
               </div>
               <div className="ws-panel-head ws-subhead">
                 <div>
-                  <h3>Grading cases</h3>
+                  <h3 id="activity-grading-cases" tabIndex={-1}>Grading cases</h3>
                   <p className="ws-muted">Hidden inputs and expected outputs are withheld from students.</p>
+                  {editable && needsSample ? (
+                    <p className="ws-muted">Make one case visible so students can run a sample after publication.</p>
+                  ) : null}
                 </div>
                 <div className="ws-inline-actions">
                   {editable ? (
@@ -606,7 +647,8 @@ function ActivityEditor() {
           <div className="ws-form-grid">
             <div className="ws-field">
               <label htmlFor="opens-at">Opens at</label>
-              <input id="opens-at" type="datetime-local" value={form.opensAt} onChange={(event) => update({ opensAt: event.target.value })} disabled={busy !== ""} />
+              <input id="opens-at" type="datetime-local" value={form.opensAt} onChange={(event) => update({ opensAt: event.target.value })} disabled={busy !== ""} aria-invalid={Boolean(errors.opensAt)} />
+              <FieldError>{errors.opensAt}</FieldError>
               <p className="ws-muted">Leave empty to open immediately when published.</p>
             </div>
             <div className="ws-field">
@@ -619,7 +661,7 @@ function ActivityEditor() {
                 {busy === "schedule" ? "Saving schedule…" : "Save schedule"}
               </Button>
               <span className="ws-muted">
-                Students see {form.opensAt ? `an opening time of ${formatDateTime(fromDateTimeInput(form.opensAt))}` : "immediate access"}; existing attempts are unaffected by schedule changes.
+                Students see {form.opensAt ? `an opening time of ${formatManilaDateTime(fromManilaDateTimeInput(form.opensAt))}` : "immediate access"}; existing attempts are unaffected by schedule changes.
               </span>
             </div>
           </div>
@@ -630,7 +672,7 @@ function ActivityEditor() {
             <div>
               <StudentPreviewCard
                 preview={preview}
-                schedule={{ opens_at: fromDateTimeInput(form.opensAt), closes_at: fromDateTimeInput(form.closesAt), state: data.state, timezone: "Asia/Manila" }}
+                schedule={{ opens_at: fromManilaDateTimeInput(form.opensAt), closes_at: fromManilaDateTimeInput(form.closesAt), state: data.state, timezone: "Asia/Manila" }}
               />
             </div>
             <aside className="ws-preview-side">
@@ -638,6 +680,7 @@ function ActivityEditor() {
               <ul className="ws-check-list">
                 <li className={completion[0] ? "is-done" : ""}>Details complete</li>
                 <li className={completion[1] ? "is-done" : ""}>{quiz ? "Questions and answer keys" : "Grading cases and reference solution"}</li>
+                {!quiz && !data.exam_only ? <li className={!needsSample ? "is-done" : ""}>Visible sample case</li> : null}
                 <li className={completion[2] ? "is-done" : ""}>Schedule {form.opensAt || form.closesAt ? "set" : "optional"}</li>
                 <li className={!dirty ? "is-done" : ""}>All edits saved</li>
                 {!quiz ? <li className={data.judge0_verified ? "is-done" : ""}>Judge0 verification</li> : null}
@@ -647,16 +690,31 @@ function ActivityEditor() {
                 Answer keys: {quiz ? form.questions.length : 0} · hidden grading cases: {form.tests.filter((test) => test.is_hidden).length} · never
                 shown to students.
               </p>
-              {(data.attempt_count || 0) > 0 ? (
+              {data.exam_only ? (
+                <p className="ws-muted">This activity stays private. Add it to a restricted exam from the Exams page.</p>
+              ) : (data.attempt_count || 0) > 0 ? (
                 <Button variant="outline" onClick={() => void createVersion()} disabled={busy !== ""}>
                   {busy === "version" ? "Creating version…" : "Create new version"}
                 </Button>
               ) : (
-                <Button variant="primary" onClick={() => { setPublishError(""); setPublishOpen(true); }} disabled={!editable || dirty || busy !== "" || !completion[0] || !completion[1] || (!quiz && !data.judge0_verified)}>
+                <Button
+                  variant="primary"
+                  onClick={() => { setPublishError(""); setPublishOpen(true); }}
+                  disabled={!editable || dirty || busy !== "" || !completion[0] || !completion[1] || needsSample || (!quiz && !data.judge0_verified)}
+                  aria-describedby={needsSample ? "activity-sample-required" : undefined}
+                >
                   Publish activity
                 </Button>
               )}
-              {dirty ? <p className="ws-muted">Save your changes before publishing so students receive the reviewed version.</p> : null}
+              {editable && needsSample ? (
+                <>
+                  <p id="activity-sample-required" className="ws-muted">Make one grading case visible so students can run a sample.</p>
+                  <Button variant="outline" onClick={() => { focusGradingCases.current = true; setStep(1); }}>
+                    Go to grading cases
+                  </Button>
+                </>
+              ) : null}
+              {dirty && !data.exam_only ? <p className="ws-muted">Save your changes before publishing so students receive the reviewed version.</p> : null}
               {quiz && form.questions.length < 3 ? (
                 <p className="ws-muted">A quiz needs between 3 and 10 complete questions to publish.</p>
               ) : null}
@@ -703,11 +761,11 @@ function ActivityEditor() {
       >
         <p>
           <strong>{form.title}</strong> will become available to students in {data.course?.title}
-          {form.opensAt ? ` from ${formatDateTime(fromDateTimeInput(form.opensAt))}` : " immediately"}
-          {form.closesAt ? ` until ${formatDateTime(fromDateTimeInput(form.closesAt))}` : ""}. Existing attempts are not
+          {form.opensAt ? ` from ${formatManilaDateTime(fromManilaDateTimeInput(form.opensAt))}` : " immediately"}
+          {form.closesAt ? ` until ${formatManilaDateTime(fromManilaDateTimeInput(form.closesAt))}` : ""}. Existing attempts are not
           changed.
         </p>
-        <StudentPreviewCard preview={preview} schedule={{ opens_at: fromDateTimeInput(form.opensAt), closes_at: fromDateTimeInput(form.closesAt), state: data.state, timezone: "Asia/Manila" }} compact />
+        <StudentPreviewCard preview={preview} schedule={{ opens_at: fromManilaDateTimeInput(form.opensAt), closes_at: fromManilaDateTimeInput(form.closesAt), state: data.state, timezone: "Asia/Manila" }} compact />
         <label className="ws-check">
           <input type="checkbox" checked={publishChecked} onChange={(event) => setPublishChecked(event.target.checked)} />
           <span>I reviewed this student-visible preview and confirm publication.</span>

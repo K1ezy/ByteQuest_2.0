@@ -257,9 +257,12 @@ class LearningActivity(Base):
     reference_solution_code = Column(Text, nullable=True)
     quiz_questions_json = Column(JSONB, nullable=True)
     judge0_verified = Column(Boolean, default=False, nullable=False)
+    exam_only = Column(Boolean, nullable=False, server_default=text("false"))
     judge0_verification_log = Column(JSONB, nullable=True)
     reviewed_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=True)
     xp_reward = Column(Integer, default=50, nullable=False)
+    # NULL keeps the default pass rule (see app.services.pass_mark).
+    pass_mark_percent = Column(Integer, nullable=True)
     course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True)
     generation_json = Column(JSONB, nullable=True)
     content_version = Column(Integer, nullable=False, default=1, server_default=text("1"))
@@ -465,6 +468,7 @@ class SubmissionJob(Base):
     result_json = Column(JSONB, nullable=True)
     error_message = Column(Text, nullable=True)
     attempts = Column(Integer, nullable=False, server_default=text("0"))
+    claim_token = Column(UUID(as_uuid=True), nullable=True)
     next_attempt_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     # App clock, like activity_attempts: hint, run and attempt order is compared across tables.
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()"))
@@ -509,6 +513,8 @@ class ResearchConsent(Base):
 
 class Exam(Base):
     __tablename__ = "exams"
+
+    restricted_course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=True)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     created_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=False, index=True)
@@ -555,6 +561,9 @@ class ExamAttempt(Base):
     due_at = Column(DateTime(timezone=True), nullable=False)
     submitted_at = Column(DateTime(timezone=True), nullable=True)
     grading_claimed_at = Column(DateTime(timezone=True), nullable=True)
+    grading_token = Column(UUID(as_uuid=True), nullable=True)
+    grading_attempts = Column(Integer, nullable=False, server_default=text("0"))
+    grading_retry_at = Column(DateTime(timezone=True), nullable=True)
     result_released_at = Column(DateTime(timezone=True), nullable=True)
     last_saved_at = Column(DateTime(timezone=True), nullable=True)
     answers_json = Column(JSONB, nullable=False, default=dict)
@@ -700,6 +709,21 @@ class Course(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
+class CourseAnnouncement(Base):
+    __tablename__ = "course_announcements"
+    __table_args__ = (Index("ix_course_announcements_course_created", "course_id", text("created_at DESC")),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
+    author_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True)
+    title = Column(Text, nullable=False)
+    body = Column(Text, nullable=False)
+    pinned = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()"))
+
+
 class CourseMember(Base):
     __tablename__ = "course_members"
     __table_args__ = (UniqueConstraint("course_id", "profile_id", "member_role", name="uq_course_member"),)
@@ -732,6 +756,14 @@ class ProcessingJob(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     last_checked_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class GradingWorkerHeartbeat(Base):
+    __tablename__ = "grading_worker_heartbeat"
+    __table_args__ = (CheckConstraint("id = 1"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=False)
+    seen_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class PlatformSetting(Base):

@@ -53,6 +53,7 @@ def test_faculty_forecast_uses_the_recorded_winner_and_hides_legacy_probability(
                                  rf_prob=0.8, model_version="v2", created_at=None, actual_outcome=None)
     forecast = _forecast(prediction, target)
     assert forecast["probability"] == 0.8
+    assert forecast["probabilities"] == {"logreg": 0.1, "random_forest": 0.8}
     assert forecast["label"] == "Likely to pass"
     assert forecast["predicted_pass"] is True
     prediction.rf_prob = 0.5
@@ -76,3 +77,19 @@ def test_older_feature_schema_artifacts_are_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(predictor, "_model_load_error", None)
     with pytest.raises(predictor.ModelArtifactError, match="metadata schema is unsupported"):
         predictor.load_ml_models()
+
+
+def test_training_rejects_ids_that_encode_an_account():
+    from ml_pipeline.train_compare import _validate_training_frame
+
+    row = {
+        "id": "row1", "student_id": f"stu_{uuid4().hex}", "activity_id": "activity1", "attempt_number": 1,
+        "created_at": "2026-01-01T12:00:00Z", "language": "python", "topic_concept": "loops",
+        "activity_type": "quiz", "difficulty_level": 1, "is_successful": True, "score_percentage": 90,
+        "error_category": "none", "compiler_status_id": None, "execution_time_ms": None,
+        "time_spent_seconds": 60,
+    }
+    with pytest.raises(ValueError, match="encodes an account id"):
+        _validate_training_frame(pd.DataFrame([row]))
+    row["student_id"] = "rs_3f2a9c0d1e4b5a6c7d8e"
+    assert len(_validate_training_frame(pd.DataFrame([row]))) == 1

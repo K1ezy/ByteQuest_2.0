@@ -6,7 +6,7 @@ import { apiRequest, getErrorMessage } from "@/lib/api";
 import { ActivityDateFilter } from "@/components/activity-date-filter";
 import { activityDateMatches, formatActivityDate } from "@/lib/activity-date";
 
-interface ExamCard { id: string; title: string; exam_number: number; added_at: string; opens_at: string; closes_at: string; duration_minutes: number; results_released: boolean }
+interface ExamCard { id: string; title: string; exam_number: number; added_at: string; opens_at: string; closes_at: string; duration_minutes: number; results_released: boolean; can_start: boolean; can_resume: boolean }
 const localTime = (value: string) => new Date(value).toLocaleString("en-PH", { timeZone: "Asia/Manila", dateStyle: "medium", timeStyle: "short" });
 
 export default function ExamsPage() {
@@ -39,7 +39,9 @@ export default function ExamsPage() {
       {exam.exam_number > 0 && <p className="activity-number">Exam #{exam.exam_number}</p>}
       <h2>{exam.title}</h2><p>{localTime(exam.opens_at)} to {localTime(exam.closes_at)} · {exam.duration_minutes} minutes once started</p>
       {exam.added_at && <p className="activity-added-date">Published <time dateTime={exam.added_at}>{formatActivityDate(exam.added_at)}</time></p>}
-      <Link className="button button-primary" href={`/exams/${exam.id}`}>View exam</Link>
+      <Link className="button button-primary" href={`/exams/${exam.id}`}>
+        {exam.can_resume ? "Resume exam" : exam.can_start ? "Open exam" : "View exam"}
+      </Link>
     </section>)}
   </div>;
 }

@@ -11,6 +11,7 @@ ByteQuest lets students practice coding challenges and quizzes in **C++, Python,
 - **Sandboxed grading** — the FastAPI backend sends code to a private Judge0 instance and returns only safe results. The browser never calls Judge0 directly.
 - **Gamification** — attempts, XP, levels, badges, and deterministic rule-based next-task recommendations.
 - **Instructor tools** — lesson documents are turned into challenges (RAG + Gemini), auto-checked by Judge0, and published only after instructor review.
+- **Student tutor** — course-aware Gemini chat, temporary conversations, and hints after a failed coding sample. Saved chat history uses the release configuration.
 - **Research pipeline** — shared feature engineering and offline model comparison. ML recommendations stay shadow-only until consented classroom data is available; deterministic sequencing is the live default.
 - **Public usernames** — every student, instructor, and administrator has a unique, editable `@username` made of 3–44 letters. Display names remain primary; research pseudonyms stay internal.
 - **Faculty Machine Learning dashboard** — `/faculty/ml` shows course-scoped quiz, coding, and released exam history, student trends, forecast readiness, saved next-activity forecasts, and observed model quality. Forecasts are advisory and never change grades or progression.
@@ -23,7 +24,7 @@ ByteQuest lets students practice coding challenges and quizzes in **C++, Python,
 | Backend | FastAPI (Python 3.11) · SQLAlchemy |
 | Data | Supabase — PostgreSQL, Auth, Storage, pgvector |
 | Code execution | Judge0 Extra CE 1.13.1 (private Ubuntu VM) |
-| AI | Google Gemini (challenge generation, embeddings, hints) |
+| AI | Gemini 3.5 Flash-Lite for tutoring and authoring, Gemini Embedding 2 for document search |
 | ML | Offline scikit-learn comparison of Logistic Regression and Random Forest on a student-disjoint 60/20/20 split |
 | Infra | Docker Compose · Caddy · PowerShell launch scripts |
 
@@ -44,7 +45,7 @@ FastAPI backend (localhost:8000–8010)
 ```text
 ByteQuest_2.0/
 ├── backend/        # FastAPI app: api routes, core, models, services, scripts, tests
-├── frontend/       # Next.js + TypeScript app; all styling in src/app/globals.css
+├── frontend/       # Next.js and TypeScript app with shared and workspace-specific styles
 ├── infra/          # Local launcher, VM config, and VPS deployment templates
 ├── ml_pipeline/    # Shared features and offline model comparison
 ├── supabase/       # Database migrations and idempotent local seed data
@@ -97,7 +98,7 @@ Apply `supabase/migrations/20261111154648_usernames_ml_dashboard.sql` and `supab
 
 Profile owners edit their username on `/profile`; the username is a public display handle, not a login credential. Faculty use **Machine Learning** in the workspace navigation to view historical course results and forecast states. The Performance page continues to show grades and attempt history.
 
-New students choose a unique public username when signing up. It must contain 3–44 letters and is stored in lowercase; sign-in still uses email. Apply `supabase/migrations/20261112144247_student_signup_username.sql` before deploying the new signup form. The Auth signup transaction creates the profile with the chosen username, while administrator-invited accounts continue to receive starter usernames.
+New students choose a unique public username of 3–44 letters and sign in using email. Student self-registration requires the school-issued ID, such as `26-00001`, and the corresponding roster email. Apply the current migration set and prepare the approved roster before opening hosted self-registration. [School-issued registration migration](supabase/migrations/20261119041043_school_issued_student_registration.sql)
 
 There is **no approved active model** in the repository. Historical charts work now; real probabilities require institution-approved de-identified training exports, a reviewed model run and activation manifest, research approval, and each learner's current consent. The [training export and review guide](ml_pipeline/README.md) documents the released-exam feature schema. Synthetic development runs must not be activated or presented as learner forecasts.
 
@@ -111,9 +112,10 @@ There is **no approved active model** in the repository. Historical charts work 
 
 ## Documentation
 
+- [Current system status and weekly change log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md) — current features, readiness scores, verification, and UI/UX priorities.
 - [Master plan](docs/MASTER_PLAN.md) — architecture, invariants, schema, and roadmap (source of truth).
 - [Local end-to-end guide](docs/LOCAL_E2E.md) — setup plus full instructor/student workflows.
 - [Local API security](docs/LOCAL_API_SECURITY.md) — route permissions, quotas, and request limits.
 - [Verification evidence](docs/verification/) — dated records and outstanding gates.
 
-> **Status:** Core browser-to-database coding flow is verified locally across C++, Python, and Java. Faculty can review real course history in the ML dashboard; forecasting remains unavailable until an approved model and consented data are in place. See the [master plan](docs/MASTER_PLAN.md) and [verification log](docs/verification/) for current detail.
+Core coding workflows have local evidence across C++, Python, and Java. The supervised classroom pilot remains pending hosted acceptance. [Current release status](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md)

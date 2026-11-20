@@ -31,6 +31,7 @@ from app.models.entities import (
     TestCase,
     UserRole,
 )
+from app.services.challenge_verification import challenge_is_verified
 
 
 ACTIVITY_ID = uuid.uuid5(uuid.NAMESPACE_URL, "bytequest:local-demo:python-basics-quiz:v1")
@@ -146,7 +147,7 @@ def seed_python_challenge() -> None:
                 raise SystemExit("The reserved Python demo challenge differs from the curated fixture; no data was changed.")
 
         if challenge.review_status == ReviewState.draft:
-            if not challenge.judge0_verified:
+            if not challenge_is_verified(challenge):
                 verified = asyncio.run(reverify_instructor_draft(CHALLENGE_ID, owner, db))
                 if not verified["judge0_verified"]:
                     raise SystemExit("Judge0 could not verify the Python demo challenge. Start the VM and rerun this script.")

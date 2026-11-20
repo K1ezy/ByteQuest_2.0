@@ -12,7 +12,7 @@ from app.core.database import get_db
 from app.core.quotas import MANILA
 from app.core.security import get_current_user
 from app.models.entities import ConceptReview, Profile, _utcnow
-from app.services.gamification.badges import evaluate_and_award_badges
+from app.services.gamification.badges import award_badges
 from app.services.gamification.mastery_map import first_visible_completions, visible_concept_activities
 from app.services.gamification.memory import (
     MIN_REVIEW_SIZE, REVIEW_SIZE, REVIEW_XP, ReviewHistory, ReviewOverview, eligible_concepts, memory_schedule,
@@ -44,6 +44,7 @@ class ReviewResult(BaseModel):
     new_level: int
     level_up: bool
     new_badges_unlocked: list[str]
+    badge_xp_awarded: int = 0
     next_due_at: datetime
     next_check_days: int
     stage: int
@@ -220,11 +221,11 @@ def submit_review(
     review.answers_json = {"answers": payload.answers}
     grant_xp(student, xp)
     db.flush()
-    badges = evaluate_and_award_badges(db, student)
+    badges, badge_xp = award_badges(db, student)
     response = ReviewResult(
         correct=correct, total=review.total, passed=passed, xp_awarded=xp,
         new_total_xp=student.xp_points, new_level=student.current_level, level_up=student.current_level > level_before,
-        new_badges_unlocked=badges, next_due_at=next_check.due_at,
+        new_badges_unlocked=badges, badge_xp_awarded=badge_xp, next_due_at=next_check.due_at,
         next_check_days=(next_check.due_at.astimezone(MANILA).date() - now.astimezone(MANILA).date()).days,
         stage=next_check.stage,
     )

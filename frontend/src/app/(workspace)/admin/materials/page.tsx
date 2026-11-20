@@ -75,6 +75,7 @@ function AdminMaterials() {
     [appliedSearch, courseFilter, status],
   );
   const { data, error, loading, reload } = useApi<AdminMaterialList>(path);
+  const maxUploadBytes = data?.max_upload_bytes;
 
   function updateQuery(patch: Record<string, string | null>) {
     const next = new URLSearchParams(searchParams.toString());
@@ -92,6 +93,9 @@ function AdminMaterials() {
     if (upload.title.trim().length < 2) found.title = "Enter a title of at least 2 characters.";
     if (!upload.file) found.file = "Choose a PDF file.";
     else if (!upload.file.name.toLowerCase().endsWith(".pdf")) found.file = "Only PDF files are supported.";
+    else if (maxUploadBytes && upload.file.size > maxUploadBytes) {
+      found.file = `The PDF must be ${maxUploadBytes / 1024 ** 2} MiB or smaller.`;
+    }
     setErrors(found);
     if (Object.keys(found).length > 0 || !upload.file) return;
     const formData = new FormData();
@@ -239,8 +243,11 @@ function AdminMaterials() {
             </div>
             <div className="ws-field">
               <label htmlFor="admin-material-file">PDF file</label>
-              <input ref={fileRef} id="admin-material-file" type="file" accept="application/pdf,.pdf" onChange={(event) => setUpload({ ...upload, file: event.target.files?.[0] || null })} aria-invalid={Boolean(errors.file)} />
+              <input ref={fileRef} id="admin-material-file" type="file" accept="application/pdf,.pdf" onChange={(event) => setUpload({ ...upload, file: event.target.files?.[0] || null })} aria-invalid={Boolean(errors.file)} aria-describedby="admin-material-file-help" />
               <FieldError>{errors.file}</FieldError>
+              <p className="ws-muted" id="admin-material-file-help">
+                {maxUploadBytes ? `Up to ${maxUploadBytes / 1024 ** 2} MiB. ` : ""}Use a PDF with selectable text.
+              </p>
             </div>
             <div className="ws-field">
               <label htmlFor="admin-material-topic">Topic (optional)</label>

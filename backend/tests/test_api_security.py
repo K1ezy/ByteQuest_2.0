@@ -62,6 +62,29 @@ def test_request_body_limit_precedes_authentication():
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
 
 
+def test_material_upload_accepts_multipart_framing_at_50_mib():
+    files = {"file": ("lesson.pdf", b"%PDF-".ljust(50 * 1024 * 1024, b" "), "application/pdf")}
+    with TestClient(app) as client:
+        response = client.post("/api/v1/faculty/materials", files=files)
+    assert response.status_code == 401
+
+
+def test_streamed_material_upload_over_request_limit_returns_413():
+    def multipart_body():
+        yield (b'--test\r\nContent-Disposition: form-data; name="file"; filename="lesson.pdf"\r\n'
+               b'Content-Type: application/pdf\r\n\r\n%PDF-')
+        chunk = b" " * (1024 * 1024)
+        for _ in range(52):
+            yield chunk
+        yield b"\r\n--test--\r\n"
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/faculty/materials", content=multipart_body(),
+                               headers={"Content-Type": "multipart/form-data; boundary=test"})
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "request_too_large"
+
+
 def test_streamed_body_without_content_length_is_limited():
     messages = []
 
@@ -235,7 +258,7 @@ def test_chat_requires_active_enrollment_only_for_students(flow, monkeypatch, ro
 
     provider_calls = []
 
-    def fake_reply(messages, system_instruction):
+    def fake_reply(messages, system_instruction, turn):
         provider_calls.append(messages)
         return "Trace the loop one iteration at a time."
 

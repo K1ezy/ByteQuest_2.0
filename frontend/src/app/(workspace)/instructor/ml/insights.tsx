@@ -211,6 +211,17 @@ function ForecastDetails({ forecast }: { forecast: NonNullable<StudentRow["forec
           {forecast.model_version}
         </dd>
       </div>
+      {forecast.probabilities && (
+        <div>
+          <dt>Both models</dt>
+          <dd>
+            Logistic regression {Math.round(forecast.probabilities.logreg * 100)}%
+            {forecast.selected_model === "logreg" ? " (used)" : ""} · Random forest{" "}
+            {Math.round(forecast.probabilities.random_forest * 100)}%
+            {forecast.selected_model === "random_forest" ? " (used)" : ""}
+          </dd>
+        </div>
+      )}
       <div>
         <dt>Forecast date</dt>
         <dd>{formatDateTime(forecast.as_of)}</dd>

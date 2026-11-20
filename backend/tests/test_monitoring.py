@@ -20,7 +20,7 @@ def test_old_failures_do_not_hide_a_recovered_runner():
     assert "2 of the last 4" in result["detail"]
 
 
-def test_a_job_stuck_in_the_queue_means_the_worker_is_down():
+def test_a_job_stuck_in_the_queue_marks_the_queue_stale():
     jobs = [job("queued", 5), job("completed", 6)]
 
     assert runner_status(jobs, NOW)["status"] == "stale"

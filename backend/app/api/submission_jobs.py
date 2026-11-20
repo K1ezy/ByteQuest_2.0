@@ -3,17 +3,18 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.api.exams import require_practice_help_available
 from app.core.database import get_db
 from app.core.quotas import reserve
 from app.core.security import get_current_user
-from app.services.attempt_visibility import activity_is_closed, student_visible_activity_clause
+from app.services.attempt_visibility import activity_is_closed, practice_attempt_clause, student_visible_activity_clause
 from app.services.gamification.rollout import mechanic_state
 from app.models.entities import (
-    ActivityKind, LearningActivity, Profile, ReviewState, SubmissionJob, UserRole,
+    ActivityAttempt, ActivityKind, LearningActivity, Profile, ProgrammingLang, ReviewState, SubmissionJob, UserRole,
 )
 
 router = APIRouter(prefix="/api/v1/submission-jobs", tags=["Submission Jobs"])
@@ -32,6 +33,23 @@ class SubmitJob(BaseModel):
     time_spent_seconds: int = Field(default=0, ge=0, le=86_400)
 
 
+class ComparedAttempt(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    attempt_number: int
+    submitted_code: str | None
+    passed_test_cases: int
+    total_test_cases: int
+    score_percentage: float
+    is_successful: bool
+
+
+class SubmissionComparison(BaseModel):
+    language: ProgrammingLang
+    current: ComparedAttempt
+    previous: ComparedAttempt | None
+
+
 def view(job: SubmissionJob, db: Session, student: Profile) -> dict:
     result = job.result_json
     if result is not None:
@@ -44,6 +62,21 @@ def view(job: SubmissionJob, db: Session, student: Profile) -> dict:
         "error": job.error_message, "created_at": job.created_at,
         "attempts": job.attempts, "next_attempt_at": job.next_attempt_at,
     }
+
+
+def _retry_failed_job(job: SubmissionJob, db: Session, student_id: uuid.UUID) -> None:
+    if job.status != "failed":
+        return
+    reserve("practice_code" if job.dry_run_only else "official_submit", student_id, session=db)
+    now = datetime.now(timezone.utc)
+    job.status = "queued"
+    job.claim_token = None
+    job.attempts = 0
+    job.error_message = None
+    job.next_attempt_at = now
+    job.updated_at = now
+    db.commit()
+    db.refresh(job)
 
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
@@ -65,14 +98,7 @@ def submit_job(
         if (existing.activity_id != body.activity_id or existing.source_code != body.source_code
                 or existing.dry_run_only != body.dry_run_only):
             raise HTTPException(409, "Idempotency key was already used for different work.")
-        # If the prior job failed, reset it so clicking "Run sample again" actually executes code.
-        if existing.status == "failed":
-            existing.status = "queued"
-            existing.attempts = 0
-            existing.error_message = None
-            existing.next_attempt_at = datetime.now(timezone.utc)
-            db.commit()
-            db.refresh(existing)
+        _retry_failed_job(existing, db, user.id)
         return view(existing, db, user)
 
     # 15-second duplicate click window protection (Explicitly excludes failed jobs)
@@ -120,4 +146,75 @@ def get_job(job_id: uuid.UUID, user: Profile = Depends(get_current_user), db: Se
     ).first()
     if job is None:
         raise HTTPException(404, "Submission not found.")
+    return view(job, db, user)
+
+
+@router.get("/{job_id}/comparison")
+def compare_submission(
+    job_id: uuid.UUID,
+    response: Response,
+    user: Profile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SubmissionComparison:
+    unavailable = HTTPException(404, "Comparison unavailable for this submission.")
+    if user.role != UserRole.student:
+        raise unavailable
+    completed = db.query(SubmissionJob, LearningActivity.language).join(
+        LearningActivity, LearningActivity.id == SubmissionJob.activity_id,
+    ).filter(
+        SubmissionJob.id == job_id,
+        SubmissionJob.student_id == user.id,
+        SubmissionJob.status == "completed",
+        SubmissionJob.dry_run_only.is_(False),
+        LearningActivity.activity_type == ActivityKind.challenge,
+    ).one_or_none()
+    if completed is None:
+        raise unavailable
+    require_practice_help_available(db, user.id)
+    job, language = completed
+
+    attempts = db.query(ActivityAttempt).filter(
+        ActivityAttempt.student_id == user.id,
+        ActivityAttempt.activity_id == job.activity_id,
+        practice_attempt_clause(),
+        ActivityAttempt.exam_item_id.is_(None),
+        # Exam item grades retain result JSON even if their foreign keys are cleared.
+        ActivityAttempt.result_json.is_(None),
+    )
+    current = attempts.filter(ActivityAttempt.submission_job_id == job.id).one_or_none()
+    if current is None:
+        try:
+            legacy_id = uuid.UUID(str((job.result_json or {}).get("attempt_id")))
+        except ValueError:
+            raise unavailable from None
+        current = attempts.filter(
+            ActivityAttempt.id == legacy_id,
+            ActivityAttempt.submission_job_id.is_(None),
+        ).one_or_none()
+        if current is None or current.submitted_code not in (None, job.source_code):
+            raise unavailable
+
+    previous = attempts.filter(ActivityAttempt.attempt_number < current.attempt_number).order_by(
+        ActivityAttempt.attempt_number.desc(),
+    ).first()
+    response.headers["Cache-Control"] = "private, no-store"
+    return SubmissionComparison(
+        language=language,
+        current=ComparedAttempt.model_validate(current),
+        previous=ComparedAttempt.model_validate(previous) if previous is not None else None,
+    )
+
+
+@router.post("/{job_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+def retry_job(job_id: uuid.UUID, user: Profile = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != UserRole.student:
+        raise HTTPException(404, "Submission not found.")
+    # Serialize retry and duplicate-key submit using the same lock order.
+    db.query(Profile).filter(Profile.id == user.id).with_for_update().one()
+    job = db.query(SubmissionJob).filter(
+        SubmissionJob.id == job_id, SubmissionJob.student_id == user.id,
+    ).first()
+    if job is None:
+        raise HTTPException(404, "Submission not found.")
+    _retry_failed_job(job, db, user.id)
     return view(job, db, user)

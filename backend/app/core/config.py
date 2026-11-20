@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     SUPABASE_JWT_SECRET: str = "super-secret-jwt-token-replace-in-env"
     
     # Gemini AI (Rule 1 & Rule 2)
+    GEMINI_ENABLED: bool = True
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL_ID: str = "gemini-3.5-flash-lite"
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
@@ -45,10 +46,13 @@ class Settings(BaseSettings):
     GEMINI_EMBEDDING_DIM: int = 768
 
     # Bounded learning-assistant chat. These caps are enforced server-side.
+    CHAT_HISTORY_ENABLED: bool | None = None
     CHAT_MAX_MESSAGES: int = Field(default=12, ge=1, le=30)
     CHAT_MAX_MESSAGE_CHARS: int = Field(default=4_000, ge=1, le=8_000)
     CHAT_MAX_TOTAL_CHARS: int = Field(default=16_000, ge=1, le=50_000)
+    CHAT_QUICK_MAX_OUTPUT_TOKENS: int = Field(default=350, ge=50, le=2_000)
     CHAT_MAX_OUTPUT_TOKENS: int = Field(default=600, ge=50, le=2_000)
+    CHAT_DETAILED_MAX_OUTPUT_TOKENS: int = Field(default=1_100, ge=50, le=2_000)
     CHAT_TIMEOUT_SECONDS: float = Field(default=20.0, ge=5, le=60)
     
     # Judge0 CE (Rule 3)
@@ -74,6 +78,7 @@ class Settings(BaseSettings):
     SUBMISSION_MAX_RETRIES: int = 3
     SUBMISSION_STALE_TIMEOUT_SECONDS: int = 120
     SUBMISSION_WORKER_CONCURRENCY: int = Field(default=3, ge=1, le=4)
+    EXAM_GRADING_CONCURRENCY: int = Field(default=1, ge=1, le=2)
     EXAM_AUTOSAVE_GRACE_SECONDS: int = 15
 
     # Research and ML shadow settings
@@ -95,6 +100,12 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
+
+    @property
+    def chat_history_enabled(self) -> bool:
+        if self.CHAT_HISTORY_ENABLED is not None:
+            return self.CHAT_HISTORY_ENABLED
+        return self.ENVIRONMENT.lower() != "production"
 
     @model_validator(mode="after")
     def validate_cors_origins(self):

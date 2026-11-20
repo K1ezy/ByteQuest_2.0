@@ -14,7 +14,7 @@ import { apiRequest, getErrorMessage } from "@/lib/api";
 
 /* ------------------------------------------------------------------ hooks */
 
-export function useApi<T>(path: string | null) {
+export function useApi<T>(path: string | null, abortOnCleanup = false) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(Boolean(path));
@@ -22,12 +22,14 @@ export function useApi<T>(path: string | null) {
 
   useEffect(() => {
     if (!path) return;
+    const controller = abortOnCleanup ? new AbortController() : null;
     let active = true;
     // Synchronizing fetch state with a new request path is intentional here.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setError("");
-    apiRequest<T>(path)
+    const request = controller ? apiRequest<T>(path, { signal: controller.signal }) : apiRequest<T>(path);
+    request
       .then((result) => {
         if (active) setData(result);
       })
@@ -39,8 +41,9 @@ export function useApi<T>(path: string | null) {
       });
     return () => {
       active = false;
+      controller?.abort();
     };
-  }, [path, nonce]);
+  }, [path, nonce, abortOnCleanup]);
 
   const reload = useCallback(() => setNonce((value) => value + 1), []);
   return { data, error, loading, reload, setData };
@@ -398,10 +401,10 @@ export function SelectField({
   );
 }
 
-export function FieldError({ children }: { children?: ReactNode }) {
+export function FieldError({ children, id }: { children?: ReactNode; id?: string }) {
   if (!children) return null;
   return (
-    <p className="ws-field-error" role="alert">
+    <p className="ws-field-error" role="alert" id={id}>
       {children}
     </p>
   );
@@ -420,6 +423,7 @@ export function ConfirmDialog({
   tone = "primary",
   busy = false,
   hideConfirm = false,
+  confirmForm,
   variant = "dialog",
   onConfirm,
   onCancel,
@@ -432,6 +436,7 @@ export function ConfirmDialog({
   tone?: "primary" | "danger";
   busy?: boolean;
   hideConfirm?: boolean;
+  confirmForm?: string;
   /** "drawer" docks the same dialog to the right edge on wide screens. */
   variant?: "dialog" | "drawer";
   onConfirm?: () => void;
@@ -509,7 +514,13 @@ export function ConfirmDialog({
             {cancelLabel}
           </button>
           {hideConfirm ? null : (
-            <Button variant={tone === "danger" ? "danger" : "primary"} onClick={onConfirm} disabled={busy}>
+            <Button
+              variant={tone === "danger" ? "danger" : "primary"}
+              type={confirmForm ? "submit" : "button"}
+              form={confirmForm}
+              onClick={onConfirm}
+              disabled={busy}
+            >
               {busy ? "Working…" : confirmLabel}
             </Button>
           )}

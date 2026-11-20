@@ -26,6 +26,8 @@ def test_hidden_case_contributes_to_score_without_exposing_details(monkeypatch):
 
     async def submit_batch(payload, deadline=None):
         assert len(payload) == 2
+        # The manuscript's sandbox claim: network access is off for every case, explicitly.
+        assert all(item["enable_network"] is False for item in payload)
         return ["visible-token", "hidden-token"]
 
     async def poll_batch(tokens, **kwargs):

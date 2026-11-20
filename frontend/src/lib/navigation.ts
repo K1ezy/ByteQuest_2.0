@@ -26,6 +26,11 @@ export const primaryNavigation = {
 const studentOnly = /^\/(dashboard|quests|leaderboard|exams|arena|quiz|submissions|reviews)(?:\/|$)/;
 export const belongsTo = (path: string, root: string) => path === root || path.startsWith(root + "/");
 
+export function usesInstructorCourseShell(path: string) {
+  // Student Preview renders the learner's own chrome, so it keeps the plain shell.
+  return belongsTo(path, "/instructor") && !belongsTo(path, "/instructor/preview");
+}
+
 export function canOpenPath(role: Profile["role"], path: string): boolean {
   if (belongsTo(path, "/admin")) return role === "admin";
   if (belongsTo(path, "/instructor")) return role === "instructor";
@@ -78,6 +83,7 @@ export function pageLabel(path: string): string {
   }
   const label = path.split("/").filter(Boolean).at(-1) || "";
   if (belongsTo(path, "/instructor/review") && label !== "review") return "Review Draft";
+  if (belongsTo(path, "/instructor/activities") && label === "analysis") return "Activity Analysis";
   if (belongsTo(path, "/instructor/activities") && label !== "activities") return "Activity Editor";
   if (belongsTo(path, "/arena")) return "Coding Arena";
   if (belongsTo(path, "/quiz")) return "Concept Check";

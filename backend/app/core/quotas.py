@@ -50,6 +50,7 @@ POLICIES: dict[str, tuple[Rule, ...]] = {
         Rule("chat_message", "account", "day", 40),
         Rule("chat_generation", "global", "day", 1200),
     ),
+    "chat_conversation": (Rule("chat_conversation", "account", "day", 45),),
     "instructor_ai": (
         Rule("instructor_ai", "account", "hour", 2),
         Rule("instructor_ai", "account", "day", 8),
@@ -90,7 +91,7 @@ _CLEANUP = text("delete from public.api_rate_counters where expires_at < :cutoff
 
 def reserve(
     action: str, account_id: uuid.UUID | None = None, *,
-    now: datetime | None = None, session: Session | None = None,
+    now: datetime | None = None, session: Session | None = None, commit: bool = False,
 ) -> None:
     """Consume all buckets or none; raise a retryable HTTP error on failure."""
     rules = POLICIES[action]
@@ -121,7 +122,7 @@ def reserve(
                     )
             if now is None and secrets.randbelow(256) == 0:
                 db.execute(_CLEANUP, {"cutoff": instant - timedelta(days=7)})
-            if session is None:
+            if session is None or commit:
                 db.commit()
     except SQLAlchemyError as exc:
         raise HTTPException(

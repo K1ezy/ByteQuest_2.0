@@ -61,7 +61,7 @@ export function ReviewRunner({ id }: { id: string }) {
               </p>
               <p>{graded.correct} of {graded.total} correct{graded.xp_awarded > 0 ? ` · +${graded.xp_awarded} XP` : ""}</p>
               {graded.level_up ? <p className="reward-news is-level">Level up! You reached Level {graded.new_level}.</p> : null}
-              {graded.new_badges_unlocked.length ? <p className="reward-news is-badge">Badge unlocked: <strong>{graded.new_badges_unlocked.join(", ")}</strong></p> : null}
+              {graded.new_badges_unlocked.length ? <p className="reward-news is-badge">Badge unlocked: <strong>{graded.new_badges_unlocked.join(", ")}</strong>{graded.badge_xp_awarded ? ` (+${graded.badge_xp_awarded} bonus XP)` : null}</p> : null}
               <Link href="/dashboard" className="button button-primary">Return to dashboard</Link>
             </section>
           ) : question ? (

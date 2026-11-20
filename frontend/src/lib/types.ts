@@ -41,6 +41,8 @@ export interface Quest {
   topic_concept: string;
   difficulty_level: number;
   sequence_order: number;
+  /** Place in this learner's own quest list (what "Quest #" shows). */
+  position?: number;
   added_at: string;
   added_at_estimated: boolean;
   /** Best solve-quality stars (1-3) on a solved code challenge; null otherwise. */
@@ -50,6 +52,7 @@ export interface Quest {
   starter_code: string | null;
   is_completed: boolean;
   is_closed?: boolean;
+  pass_mark_percent?: number | null;
   quiz_questions?: QuizQuestion[] | null;
 }
 
@@ -151,6 +154,7 @@ export type ReviewResult = {
   new_level: number;
   level_up: boolean;
   new_badges_unlocked: string[];
+  badge_xp_awarded?: number;
   next_due_at: string;
   next_check_days: number;
   stage: number;

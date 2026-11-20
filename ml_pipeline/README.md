@@ -25,13 +25,17 @@ Do not use real student attempts until the required institutional approval and
 consent are in place. The CLI requires an explicit `--research-approved`
 confirmation before it will read a CSV. That flag is an operator attestation;
 it does not grant, verify, or replace institutional approval. Use only a
-de-identified export with pseudonymous `student_id` values, and never include
+de-identified export with research-code `student_id` values, and never include
 names, account UUIDs, contact details, IP addresses, or source code.
 
 ## Export an attempt dataset
 
-When approved, export one joined attempt/activity row per attempt. Use
-`pseudonym_id` as the group identifier. The training script rejects common
+When approved, export one joined attempt/activity row per attempt. Use the
+random research code (`bytequest_private.research_codes`, issued when a student
+accepts consent) as the group identifier, not `pseudonym_id`, which encodes the
+account id. Row identifiers are hashed with the code, so once the codes are
+destroyed at the end of the study (`backend/scripts/destroy_research_link.py`)
+the export cannot be joined back to accounts through ids. The training script rejects common
 identifying columns, email/UUID/numeric student identifiers, malformed rows,
 and non-chronological attempt sequences; these checks reduce accidental
 exposure but cannot prove that arbitrary identifiers are anonymous.
@@ -53,8 +57,8 @@ WITH latest_consent AS (
     ORDER BY student_id, event_order DESC
 )
 SELECT
-    aa.id::text AS id,
-    p.pseudonym_id AS student_id,
+    md5(rc.code || ':' || aa.id::text) AS id,
+    rc.code AS student_id,
     aa.activity_id::text AS activity_id,
     la.course_id::text AS course_id,
     aa.exam_attempt_id::text AS exam_attempt_id,
@@ -71,18 +75,18 @@ SELECT
     aa.execution_time_ms,
     aa.time_spent_seconds
 FROM public.activity_attempts AS aa
-JOIN public.profiles AS p ON p.id = aa.student_id
-JOIN latest_consent AS consent ON consent.student_id = p.id
+JOIN latest_consent AS consent ON consent.student_id = aa.student_id
     AND consent.choice = 'accepted'
     AND consent.document_version = :current_consent_version
+JOIN bytequest_private.research_codes AS rc ON rc.student_id = aa.student_id
 JOIN public.learning_activities AS la ON la.id = aa.activity_id
 WHERE aa.exam_attempt_id IS NULL AND la.course_id IS NOT NULL
-ORDER BY p.pseudonym_id, aa.created_at, aa.attempt_number, aa.id;
+ORDER BY rc.code, aa.created_at, aa.attempt_number, aa.id;
 ```
 
 Export released overall exam results separately. An exam is associated with a
 course only when **all** its items belong to that course; mixed-course exams are
-excluded. Use the same pseudonymous `student_id` values as the attempt export.
+excluded. Use the same research-code `student_id` values as the attempt export.
 Apply `20261111154648_usernames_ml_dashboard.sql` and
 `20261112000100_exam_attempt_release_time.sql` before exporting. The latter
 records a release time for each attempt; older retakes are backfilled with the
@@ -102,23 +106,23 @@ WITH latest_consent AS (
     HAVING count(*) = count(la.course_id)
        AND count(DISTINCT la.course_id) = 1
 )
-SELECT p.pseudonym_id AS student_id,
+SELECT rc.code AS student_id,
        ce.course_id::text AS course_id,
-       ea.id::text AS exam_attempt_id,
+       md5(rc.code || ':' || ea.id::text) AS exam_attempt_id,
        ea.result_released_at AS released_at,
        round((ea.score / ea.max_score * 100)::numeric, 2) AS score_percentage
 FROM public.exam_attempts AS ea
 JOIN public.exams AS e ON e.id = ea.exam_id
 JOIN course_exams AS ce ON ce.exam_id = e.id
-JOIN public.profiles AS p ON p.id = ea.student_id
-JOIN latest_consent AS consent ON consent.student_id = p.id
+JOIN latest_consent AS consent ON consent.student_id = ea.student_id
     AND consent.choice = 'accepted'
     AND consent.document_version = :current_consent_version
+JOIN bytequest_private.research_codes AS rc ON rc.student_id = ea.student_id
 WHERE ea.status = 'submitted'
   AND ea.result_released_at IS NOT NULL
   AND ea.submitted_at <= ea.result_released_at
   AND ea.max_score > 0
-ORDER BY p.pseudonym_id, ea.result_released_at, ea.id;
+ORDER BY rc.code, ea.result_released_at, ea.id;
 ```
 
 Save the approved, de-identified result as a CSV and train from the repository

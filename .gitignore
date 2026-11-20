@@ -80,6 +80,7 @@ ml_pipeline/data/raw/
 
 # Logs & Temporary Files
 logs/
+/output/
 *.log
 tmp/
 temp/

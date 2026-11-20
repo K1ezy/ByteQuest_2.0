@@ -1,45 +1,41 @@
 "use client";
 
-import { useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
-import { Button, Notice, PageHeading, useApi } from "@/components/workspace/ui";
+import { useSearchParams } from "next/navigation";
+import { useWorkspace } from "@/components/workspace/workspace-provider";
+import { useApi } from "@/components/workspace/ui";
 import { GamificationInsightsView, type GamificationInsightsData } from "@/components/instructor/gamification-insights";
-import { formatDateTime } from "@/lib/workspace";
+import { InlineEmpty, InlineError, PageHeader, RowSkeleton, Section, StatSkeleton } from "@/components/instructor/course-ui";
+import { formatManilaDateTime } from "@/lib/activity-date";
 
 function Insights({ courseId }: { courseId: string | null }) {
   const path = courseId ? `/faculty/gamification-insights?${new URLSearchParams({ course_id: courseId })}` : null;
-  const { data, error, loading, reload } = useApi<GamificationInsightsData>(path);
+  const { data, error, loading, reload } = useApi<GamificationInsightsData>(path, true);
+  const topic = useSearchParams()?.get("topic");
 
   return (
     <>
-      <PageHeading
-        eyebrow="INSTRUCTOR WORKSPACE"
+      <PageHeader
         title="Gamification Insights"
-        description="How your class engages with points, stars, the Codex and Mastery Memory. Class totals only, never individual learners."
-        actions={<Button variant="outline" onClick={reload} disabled={loading}>Refresh</Button>}
+        subtitle="How your class engages with points, stars, the Codex and Mastery Memory."
+        actions={<button type="button" className="ic-button" onClick={reload} disabled={loading || !courseId}>Refresh</button>}
       />
-      {!courseId ? <Notice tone="info">Choose a course to see its insights.</Notice> : null}
+      {!courseId ? <InlineEmpty>Choose a course to see its insights.</InlineEmpty> : null}
       {loading && !data ? (
         <div role="status" aria-label="Loading gamification insights">
-          <div className="ws-stat-grid">{[0, 1, 2, 3].map((index) => <span key={index} className="ws-skeleton" style={{ height: 96 }} />)}</div>
-          <span className="ws-skeleton insights-skeleton-chart" />
+          <StatSkeleton />
+          <RowSkeleton />
         </div>
       ) : null}
-      {error ? (
-        <section className="ws-panel">
-          <Notice tone="error">{error}</Notice>
-          <Button variant="outline" onClick={reload}>Try again</Button>
-        </section>
-      ) : null}
+      {error ? <InlineError onRetry={reload} /> : null}
       {data && !error ? (
         data.enrolled === 0 ? (
-          <section className="ws-panel empty-state">
-            <h2>No students enrolled yet</h2>
-            <p>Insights appear once students are assigned to {data.course_title} and start practising.</p>
-          </section>
+          <Section title="No students enrolled yet">
+            <InlineEmpty>Insights appear once students are assigned to {data.course_title} and start practising.</InlineEmpty>
+          </Section>
         ) : (
           <>
-            <p className="ws-row-meta">{data.course_code} · {data.course_title} · updated {formatDateTime(data.generated_at)}</p>
-            <GamificationInsightsView data={data} />
+            <GamificationInsightsView data={data} topic={topic} />
+            <p className="ws-row-meta">Updated {formatManilaDateTime(data.generated_at)}</p>
           </>
         )
       ) : null}
@@ -53,10 +49,4 @@ function CourseInsights() {
   return <Insights key={courseId || "no-course"} courseId={courseId} />;
 }
 
-export default function Page() {
-  return (
-    <WorkspaceSuspense label="Gamification Insights">
-      <CourseInsights />
-    </WorkspaceSuspense>
-  );
-}
+export default CourseInsights;

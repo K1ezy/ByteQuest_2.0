@@ -2,23 +2,11 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ApiError, apiRequest, getErrorMessage } from "@/lib/api";
-import {
-  resolveAuthenticatedUserId,
-  areExamAnswersCanonicallyEqual,
-  writeUnsyncedExamSnapshot,
-  readUnsyncedExamSnapshot,
-  clearUnsyncedExamSnapshot,
-  clearUnsyncedExamSnapshotIfMatched,
-} from "@/lib/supabase";
-
-export type ExamSyncBannerState =
-  | "saving"
-  | "saved"
-  | "unsaved_local"
-  | "conflict"
-  | "expired_submitted";
+import { resolveAuthenticatedUserId } from "@/lib/supabase";
+import type { Attempt, ExamItem } from "./exam-model";
+import { useExamAnswerSync } from "./use-exam-answer-sync";
 
 type HydrationState = "hydrating" | "ready" | "unauthenticated" | "error";
 
@@ -36,373 +24,41 @@ interface ExamInfo {
   server_now?: string;
 }
 
-interface QuizQuestion {
-  id: string;
-  prompt: string;
-  options: { key: string; text: string }[];
-}
-
-interface ExamItem {
-  id: string;
-  position: number;
-  points: number;
-  kind: "quiz" | "challenge";
-  title: string;
-  problem_statement: string;
-  questions?: QuizQuestion[];
-  starter_code?: string;
-  samples?: { stdin: string; expected_stdout: string }[];
-}
-
-interface AttemptResultItem {
-  item_id: string;
-  points_earned: number;
-  points_possible: number;
-  solution: string | Record<string, string>;
-}
-
-interface AttemptResult {
-  score: number;
-  max_score: number;
-  items: AttemptResultItem[];
-}
-
-interface Attempt {
-  id: string;
-  user_id?: string;
-  student_id?: string;
-  exam_id: string;
-  title: string;
-  status: string;
-  due_at: string;
-  /** Server cutoff: saves that arrive before this instant still count. */
-  answers_accepted_until?: string;
-  revision: number;
-  last_saved_at: string | null;
-  server_now?: string;
-  answers: Record<string, string | Record<string, string>>;
-  items: ExamItem[];
-  results_released: boolean;
-  result: AttemptResult | null;
-  score: number | null;
-}
-
-interface SaveAnswersResponse {
-  attempt_id?: string;
-  revision: number;
-  last_saved_at?: string;
-  saved_at?: string;
-  server_now?: string;
-  status?: string;
-}
-
-function formatClockTime(isoString: string | null | undefined): string | null {
-  if (!isoString) return null;
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
 export default function ExamPage() {
   const { id: examId } = useParams<{ id: string }>();
 
   const [hydrationState, setHydrationState] =
     useState<HydrationState>("hydrating");
-  const [authUserId, setAuthUserId] = useState<string | null>(null);
   const [info, setInfo] = useState<ExamInfo | null>(null);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
-  const [answers, setAnswers] = useState<Record<string, string | Record<string, string>>>({});
   const [activeIndex, setActiveIndex] = useState(0);
-  const [syncState, setSyncState] = useState<ExamSyncBannerState>("saved");
-  const [lastConfirmedSaveTime, setLastConfirmedSaveTime] = useState<string | null>(null);
-  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [sampleMessage, setSampleMessage] = useState("");
   const [topError, setTopError] = useState("");
-  const [submitErrorBanner, setSubmitErrorBanner] = useState<string | null>(null);
-  const [isSubmittingExam, setIsSubmittingExam] = useState(false);
 
-  const [conflictData, setConflictData] = useState<{
-    serverRevision: number;
-    serverSavedAt: string | null;
-    serverAnswers: Record<string, string | Record<string, string>>;
-    localUnsavedAnswers: Record<string, string | Record<string, string>>;
-  } | null>(null);
-
-  // Deterministic refs for single-pass hydration & single-flight save queue
-  const authUserIdRef = useRef<string | null>(null);
-  const reconciledAttemptKeyRef = useRef<string | null>(null);
-  const serverRevisionRef = useRef<number>(0);
-  const clientEditSeqRef = useRef<number>(0);
-  const lastConfirmedEditSeqRef = useRef<number>(0);
-  const latestAnswersRef = useRef<Record<string, string | Record<string, string>>>({});
-  const inFlightSavePromiseRef = useRef<Promise<boolean> | null>(null);
-  const retryCountRef = useRef<number>(0);
-  const lastSaveFailedTransientlyRef = useRef(false);
-  const deadlineAttemptRef = useRef<string | null>(null);
-  const [deadlineAttemptId, setDeadlineAttemptId] = useState<string | null>(null);
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const serverOffsetRef = useRef<number>(0);
-  const conflictBannerRef = useRef<HTMLElement | null>(null);
-  const flushSaveQueueRef = useRef<
-    ((currentAttempt: Attempt, overrideBaseRevision?: number) => Promise<boolean>) | null
-  >(null);
-
-  const clearTimers = useCallback(() => {
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
-    }
-    if (retryTimerRef.current) {
-      clearTimeout(retryTimerRef.current);
-      retryTimerRef.current = null;
-    }
-  }, []);
-
-  /**
-   * Transitions ONLY this attempt into the authoritative expired/completed state.
-   * Blast-radius isolation: NEVER purges snapshots for other exam attempts.
-   */
-  const enterAuthoritativeExpiredState = useCallback(
-    async (currentAttempt: Attempt, currentUserId: string) => {
-      clearTimers();
-      clearUnsyncedExamSnapshot(currentUserId, currentAttempt.id);
-      setConflictData(null);
-      setSyncState("expired_submitted");
-      try {
-        const finalAttempt = await apiRequest<Attempt>(`/exams/attempts/${currentAttempt.id}`);
-        setAttempt(finalAttempt);
-        setAnswers(finalAttempt.answers);
-        latestAnswersRef.current = finalAttempt.answers;
-        serverRevisionRef.current = finalAttempt.revision;
-        if (finalAttempt.last_saved_at) {
-          setLastConfirmedSaveTime(formatClockTime(finalAttempt.last_saved_at));
-        }
-      } catch {
-        setAttempt((prev) => (prev ? { ...prev, status: "auto_submitted" } : currentAttempt));
-      }
-    },
-    [clearTimers]
-  );
-
-  /**
-   * Enters the 409 Conflict flow while preserving both server and local copies.
-   */
-  const enterConflictResolutionFlow = useCallback(
-    async (
-      currentAttempt: Attempt,
-      currentUserId: string,
-      localDraftAnswers: Record<string, string | Record<string, string>>
-    ) => {
-      clearTimers();
-      try {
-        const freshServer = await apiRequest<Attempt>(`/exams/attempts/${currentAttempt.id}`);
-        serverRevisionRef.current = freshServer.revision;
-        if (freshServer.last_saved_at) {
-          setLastConfirmedSaveTime(formatClockTime(freshServer.last_saved_at));
-        }
-
-        if (freshServer.status !== "active") {
-          await enterAuthoritativeExpiredState(freshServer, currentUserId);
-          return;
-        }
-
-        if (areExamAnswersCanonicallyEqual(freshServer.answers, localDraftAnswers)) {
-          clearUnsyncedExamSnapshotIfMatched(
-            currentUserId,
-            freshServer.id,
-            clientEditSeqRef.current,
-            freshServer.answers,
-            freshServer.revision
-          );
-          setConflictData(null);
-          setSyncState("saved");
-          return;
-        }
-
-        setSyncState("conflict");
-        setConflictData({
-          serverRevision: freshServer.revision,
-          serverSavedAt: formatClockTime(freshServer.last_saved_at),
-          serverAnswers: freshServer.answers,
-          localUnsavedAnswers: { ...localDraftAnswers },
-        });
-        setTimeout(() => conflictBannerRef.current?.focus(), 50);
-      } catch {
-        setSyncState("unsaved_local");
-      }
-    },
-    [clearTimers, enterAuthoritativeExpiredState]
-  );
-
-  /**
-   * Single-Flight Save Queue & Bounded Retry Engine
-   */
-  const flushSaveQueue = useCallback(
-    async (
-      currentAttempt: Attempt,
-      overrideBaseRevision?: number
-    ): Promise<boolean> => {
-      const currentUserId = authUserIdRef.current;
-      if (!currentUserId || currentAttempt.status !== "active") {
-        return false;
-      }
-
-      if (inFlightSavePromiseRef.current) {
-        return inFlightSavePromiseRef.current;
-      }
-
-      const executeSingleFlight = async (): Promise<boolean> => {
-        let currentExpectedRevision = overrideBaseRevision ?? serverRevisionRef.current;
-        lastSaveFailedTransientlyRef.current = false;
-
-        try {
-          while (true) {
-            const snapshotSeq = clientEditSeqRef.current;
-            const snapshotAnswers = { ...latestAnswersRef.current };
-
-            setSyncState("saving");
-
-            const response = await apiRequest<SaveAnswersResponse>(
-              `/exams/attempts/${currentAttempt.id}/answers`,
-              {
-                method: "PUT",
-                body: JSON.stringify({
-                  expected_revision: currentExpectedRevision,
-                  answers: snapshotAnswers,
-                }),
-              }
-            );
-
-            retryCountRef.current = 0;
-            serverRevisionRef.current = response.revision;
-            currentExpectedRevision = response.revision;
-            lastConfirmedEditSeqRef.current = Math.max(
-              lastConfirmedEditSeqRef.current,
-              snapshotSeq
-            );
-            const confirmedTime = formatClockTime(response.last_saved_at || response.saved_at);
-            if (confirmedTime) {
-              setLastConfirmedSaveTime(confirmedTime);
-            }
-            if (response.server_now) {
-              serverOffsetRef.current = new Date(response.server_now).getTime() - Date.now();
-            }
-
-            if (response.status && response.status !== "active") {
-              await enterAuthoritativeExpiredState(currentAttempt, currentUserId);
-              return false;
-            }
-
-            // Watermark check: strictly clears ONLY if no newer edit occurred in flight
-            const fullyCleared = clearUnsyncedExamSnapshotIfMatched(
-              currentUserId,
-              currentAttempt.id,
-              snapshotSeq,
-              snapshotAnswers,
-              response.revision
-            );
-
-            if (!fullyCleared || clientEditSeqRef.current > snapshotSeq) {
-              inFlightSavePromiseRef.current = null;
-              continue;
-            }
-
-            setSyncState("saved");
-            setSubmitErrorBanner(null);
-            return true;
-          }
-        } catch (err) {
-          const snapshotAnswers = { ...latestAnswersRef.current };
-          if (err instanceof ApiError) {
-            if (err.status === 401) {
-              clearTimers();
-              setHydrationState("unauthenticated");
-              return false;
-            }
-            if (err.status === 409) {
-              if (
-                err.message.includes("Exam time has ended") ||
-                err.message.includes("no longer active")
-              ) {
-                await enterAuthoritativeExpiredState(currentAttempt, currentUserId);
-                return false;
-              }
-              await enterConflictResolutionFlow(currentAttempt, currentUserId, snapshotAnswers);
-              return false;
-            }
-            if (
-              err.status === 403 ||
-              err.status === 410 ||
-              err.code === "attempt_expired"
-            ) {
-              await enterAuthoritativeExpiredState(currentAttempt, currentUserId);
-              return false;
-            }
-          }
-
-          // Transient failure or 5xx: keep sessionStorage intact, bounded backoff retry
-          lastSaveFailedTransientlyRef.current = true;
-          setSyncState("unsaved_local");
-          const attemptNum = Math.min(retryCountRef.current + 1, 5);
-          retryCountRef.current = attemptNum;
-          const baseDelayMs = Math.min(1500 * Math.pow(2, attemptNum - 1), 15000);
-          const jitterMs = Math.floor(Math.random() * 400);
-
-          if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-          retryTimerRef.current = setTimeout(() => {
-            void flushSaveQueueRef.current?.(currentAttempt);
-          }, baseDelayMs + jitterMs);
-
-          return false;
-        } finally {
-          inFlightSavePromiseRef.current = null;
-        }
-      };
-
-      const promise = executeSingleFlight();
-      inFlightSavePromiseRef.current = promise;
-      return promise;
-    },
-    [clearTimers, enterAuthoritativeExpiredState, enterConflictResolutionFlow]
-  );
-
-  useEffect(() => {
-    flushSaveQueueRef.current = flushSaveQueue;
-  }, [flushSaveQueue]);
-
-  /**
-   * At due_at: lock editing, then deliver unsaved edits before the server's
-   * cutoff (answers_accepted_until), so the last seconds of work are graded.
-   * Only network failures are retried; a conflict or lost session is final.
-   */
-  const finishAtDeadline = useCallback(
-    async (currentAttempt: Attempt, currentUserId: string) => {
-      if (deadlineAttemptRef.current === currentAttempt.id) return;
-      deadlineAttemptRef.current = currentAttempt.id;
-      setDeadlineAttemptId(currentAttempt.id);
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-        debounceTimerRef.current = null;
-      }
-      const cutoffMs = new Date(currentAttempt.answers_accepted_until ?? currentAttempt.due_at).getTime();
-      while (
-        clientEditSeqRef.current > lastConfirmedEditSeqRef.current &&
-        Date.now() + serverOffsetRef.current < cutoffMs
-      ) {
-        if (await flushSaveQueue(currentAttempt)) break;
-        if (!lastSaveFailedTransientlyRef.current) break;
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-      await enterAuthoritativeExpiredState(currentAttempt, currentUserId);
-    },
-    [enterAuthoritativeExpiredState, flushSaveQueue]
-  );
+  const onSessionLost = useCallback(() => setHydrationState("unauthenticated"), []);
+  // Saving, autosave, conflicts, the deadline and submission live in this hook.
+  const {
+    answers,
+    syncState,
+    lastConfirmedSaveTime,
+    submitErrorBanner,
+    isSubmitting: isSubmittingExam,
+    conflictData,
+    conflictBannerRef,
+    deadlineAttemptId,
+    remainingSeconds,
+    bindUser,
+    currentUserId,
+    noteServerNow,
+    clearTimers,
+    adoptServerAttempt,
+    changeQuizAnswer: handleQuizAnswerChange,
+    changeCodeAnswer: handleCodeAnswerChange,
+    resolveKeepLocal: handleResolveKeepLocal,
+    resolveKeepServer: handleResolveKeepServer,
+    submitExam: handleManualSubmitExam,
+  } = useExamAnswerSync({ attempt, ready: hydrationState === "ready", setAttempt, onSessionLost });
 
   /**
    * 1. Deterministic Barrier Synchronization & Single-Pass Reconciliation
@@ -433,13 +89,9 @@ export default function ExamPage() {
           return;
         }
 
-        authUserIdRef.current = resolvedUserId;
-        setAuthUserId(resolvedUserId);
+        bindUser(resolvedUserId);
         setInfo(serverInfo);
-
-        if (serverInfo.server_now) {
-          serverOffsetRef.current = new Date(serverInfo.server_now).getTime() - Date.now();
-        }
+        noteServerNow(serverInfo.server_now);
 
         // If no attempt has been created yet, show pre-start screen
         if (!serverInfo.latest_attempt_id) {
@@ -453,79 +105,14 @@ export default function ExamPage() {
         );
 
         if (cancelled) return;
+        if ((serverAttempt.user_id ?? serverAttempt.student_id ?? resolvedUserId) !== resolvedUserId) {
+          bindUser(null);
+          setHydrationState("unauthenticated");
+          return;
+        }
 
         setAttempt(serverAttempt);
-        serverRevisionRef.current = serverAttempt.revision;
-        if (serverAttempt.server_now) {
-          serverOffsetRef.current = new Date(serverAttempt.server_now).getTime() - Date.now();
-        }
-        if (serverAttempt.last_saved_at) {
-          setLastConfirmedSaveTime(formatClockTime(serverAttempt.last_saved_at));
-        }
-
-        // Guard: Ensure reconciliation executes strictly ONCE per (userId, attemptId)
-        const reconciliationKey = `${resolvedUserId}:${serverAttempt.id}`;
-        if (reconciledAttemptKeyRef.current === reconciliationKey) {
-          setHydrationState("ready");
-          return;
-        }
-        reconciledAttemptKeyRef.current = reconciliationKey;
-
-        // If attempt is already completed or expired, remove ONLY this attempt's snapshot
-        if (serverAttempt.status !== "active") {
-          clearUnsyncedExamSnapshot(resolvedUserId, serverAttempt.id);
-          setAnswers(serverAttempt.answers);
-          latestAnswersRef.current = serverAttempt.answers;
-          setSyncState("expired_submitted");
-          setHydrationState("ready");
-          return;
-        }
-
-        // Read attempt-scoped snapshot
-        const unsynced = readUnsyncedExamSnapshot(resolvedUserId, serverAttempt.id);
-
-        if (!unsynced) {
-          setAnswers(serverAttempt.answers);
-          latestAnswersRef.current = serverAttempt.answers;
-          setSyncState("saved");
-          setHydrationState("ready");
-          return;
-        }
-
-        // Seed monotonic edit sequence from stored snapshot
-        clientEditSeqRef.current = unsynced.editSeq;
-
-        // Case A: Identical answers -> clear only this attempt's snapshot
-        if (areExamAnswersCanonicallyEqual(unsynced.answers, serverAttempt.answers)) {
-          clearUnsyncedExamSnapshot(resolvedUserId, serverAttempt.id);
-          lastConfirmedEditSeqRef.current = unsynced.editSeq;
-          setAnswers(serverAttempt.answers);
-          latestAnswersRef.current = serverAttempt.answers;
-          setSyncState("saved");
-          setHydrationState("ready");
-          return;
-        }
-
-        // Case B: Same base revision -> Restore unsynced answers and queue save
-        if (unsynced.baseRevision === serverAttempt.revision) {
-          setAnswers(unsynced.answers);
-          latestAnswersRef.current = unsynced.answers;
-          setSyncState("unsaved_local");
-          setHydrationState("ready");
-          void flushSaveQueue(serverAttempt, serverAttempt.revision);
-          return;
-        }
-
-        // Case C: Divergent base revision -> Enter conflict resolution
-        setAnswers(unsynced.answers);
-        latestAnswersRef.current = unsynced.answers;
-        setSyncState("conflict");
-        setConflictData({
-          serverRevision: serverAttempt.revision,
-          serverSavedAt: formatClockTime(serverAttempt.last_saved_at),
-          serverAnswers: serverAttempt.answers,
-          localUnsavedAnswers: unsynced.answers,
-        });
+        adoptServerAttempt(serverAttempt, resolvedUserId);
         setHydrationState("ready");
       } catch {
         if (!cancelled) {
@@ -534,248 +121,75 @@ export default function ExamPage() {
       }
     }
 
+    const clearSession = () => {
+      cancelled = true;
+      bindUser(null);
+      setAttempt(null);
+      setInfo(null);
+      setHydrationState("unauthenticated");
+    };
+    window.addEventListener("bytequest:auth-cleared", clearSession);
     void hydrateAndReconcileOnce();
     return () => {
       cancelled = true;
       clearTimers();
+      window.removeEventListener("bytequest:auth-cleared", clearSession);
     };
-  }, [clearTimers, examId, flushSaveQueue]);
+  }, [adoptServerAttempt, bindUser, clearTimers, examId, noteServerNow]);
 
-  /**
-   * 2. Authoritative Server Countdown Timer (Active only when hydrationState === "ready")
-   */
+  const attemptId = attempt?.id;
+  const attemptStatus = attempt?.status;
+  const resultsReleased = attempt?.results_released;
   useEffect(() => {
-    if (
-      hydrationState !== "ready" ||
-      !attempt ||
-      !authUserId ||
-      attempt.status !== "active"
-    ) {
-      return;
+    const userId = currentUserId();
+    if (!attemptId || !userId || hydrationState !== "ready" || attemptStatus === "active" || resultsReleased) return;
+    const controller = new AbortController();
+    let checking = false;
+
+    async function refresh() {
+      if (checking || document.visibilityState === "hidden" || currentUserId() !== userId) return;
+      checking = true;
+      try {
+        const latest = await apiRequest<Attempt>(`/exams/attempts/${attemptId}`, { signal: controller.signal });
+        if (controller.signal.aborted || currentUserId() !== userId || latest.id !== attemptId || latest.exam_id !== examId ||
+            (latest.user_id ?? latest.student_id ?? userId) !== userId || latest.status === "active") return;
+        setAttempt(previous => previous?.id === attemptId ? latest : previous);
+      } catch {
+        // Keep the last known state and retry when the learner returns or grading is pending.
+      } finally {
+        checking = false;
+      }
     }
 
-    const tick = () => {
-      const nowSynced = Date.now() + serverOffsetRef.current;
-      const secsLeft = Math.max(
-        0,
-        Math.ceil((new Date(attempt.due_at).getTime() - nowSynced) / 1000)
-      );
-      setRemainingSeconds(secsLeft);
-      if (secsLeft <= 0) {
-        void finishAtDeadline(attempt, authUserId);
-      }
-    };
-
-    tick();
-    const interval = setInterval(tick, 1000);
-    return () => clearInterval(interval);
-  }, [attempt, authUserId, finishAtDeadline, hydrationState]);
-
-  /**
-   * 3. Network Reconnect & Visibilitychange Immediate Triggers
-   */
-  useEffect(() => {
-    if (
-      hydrationState !== "ready" ||
-      !attempt ||
-      attempt.status !== "active"
-    ) {
-      return;
-    }
-
-    const tryFlushIfDirty = () => {
-      if (syncState === "conflict" || syncState === "expired_submitted") return;
-      if (clientEditSeqRef.current > lastConfirmedEditSeqRef.current) {
-        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-        void flushSaveQueue(attempt);
-      }
-    };
-
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        tryFlushIfDirty();
-      }
-    };
-
-    window.addEventListener("online", tryFlushIfDirty);
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const timer = attemptStatus === "grading" || attemptStatus === "auto_submitted" ? setInterval(refresh, 6000) : undefined;
     return () => {
-      window.removeEventListener("online", tryFlushIfDirty);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
+      controller.abort();
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", refresh);
     };
-  }, [attempt, flushSaveQueue, hydrationState, syncState]);
+  }, [attemptId, attemptStatus, currentUserId, examId, hydrationState, resultsReleased]);
 
   /**
-   * 4. Answer Change Handlers (Locked until hydrationState === "ready")
-   */
-  const handleQuizAnswerChange = (itemId: string, questionId: string, optionKey: string) => {
-    const currentUserId = authUserIdRef.current;
-    if (
-      hydrationState !== "ready" ||
-      !currentUserId ||
-      !attempt ||
-      attempt.status !== "active" ||
-      syncState === "expired_submitted" ||
-      deadlineAttemptRef.current === attempt.id
-    ) {
-      return;
-    }
-
-    const currentItemAnswers =
-      (latestAnswersRef.current[itemId] as Record<string, string> | undefined) || {};
-    const nextItemAnswers = { ...currentItemAnswers, [questionId]: optionKey };
-    const nextAnswers = { ...latestAnswersRef.current, [itemId]: nextItemAnswers };
-
-    const nextSeq = clientEditSeqRef.current + 1;
-    clientEditSeqRef.current = nextSeq;
-    latestAnswersRef.current = nextAnswers;
-    setAnswers(nextAnswers);
-    setSubmitErrorBanner(null);
-
-    writeUnsyncedExamSnapshot({
-      userId: currentUserId,
-      attemptId: attempt.id,
-      baseRevision: serverRevisionRef.current,
-      editSeq: nextSeq,
-      updatedAtClientIso: new Date().toISOString(),
-      answers: nextAnswers,
-    });
-
-    if (syncState === "conflict" && conflictData) {
-      setConflictData({
-        ...conflictData,
-        localUnsavedAnswers: nextAnswers,
-      });
-      return;
-    }
-
-    setSyncState("unsaved_local");
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = setTimeout(() => {
-      void flushSaveQueue(attempt);
-    }, 2500);
-  };
-
-  const handleCodeAnswerChange = (itemId: string, code: string) => {
-    const currentUserId = authUserIdRef.current;
-    if (
-      hydrationState !== "ready" ||
-      !currentUserId ||
-      !attempt ||
-      attempt.status !== "active" ||
-      syncState === "expired_submitted" ||
-      deadlineAttemptRef.current === attempt.id
-    ) {
-      return;
-    }
-
-    const nextAnswers = { ...latestAnswersRef.current, [itemId]: code };
-    const nextSeq = clientEditSeqRef.current + 1;
-    clientEditSeqRef.current = nextSeq;
-    latestAnswersRef.current = nextAnswers;
-    setAnswers(nextAnswers);
-    setSubmitErrorBanner(null);
-
-    writeUnsyncedExamSnapshot({
-      userId: currentUserId,
-      attemptId: attempt.id,
-      baseRevision: serverRevisionRef.current,
-      editSeq: nextSeq,
-      updatedAtClientIso: new Date().toISOString(),
-      answers: nextAnswers,
-    });
-
-    if (syncState === "conflict" && conflictData) {
-      setConflictData({
-        ...conflictData,
-        localUnsavedAnswers: nextAnswers,
-      });
-      return;
-    }
-
-    setSyncState("unsaved_local");
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = setTimeout(() => {
-      void flushSaveQueue(attempt);
-    }, 2500);
-  };
-
-  /**
-   * 5. Conflict Resolution Handlers
-   */
-  const handleResolveKeepLocal = async () => {
-    const currentUserId = authUserIdRef.current;
-    if (!attempt || !currentUserId || !conflictData) return;
-
-    const chosenAnswers = { ...conflictData.localUnsavedAnswers };
-    const rebaseRevision = conflictData.serverRevision;
-
-    const nextSeq = clientEditSeqRef.current + 1;
-    clientEditSeqRef.current = nextSeq;
-    latestAnswersRef.current = chosenAnswers;
-    setAnswers(chosenAnswers);
-    serverRevisionRef.current = rebaseRevision;
-
-    writeUnsyncedExamSnapshot({
-      userId: currentUserId,
-      attemptId: attempt.id,
-      baseRevision: rebaseRevision,
-      editSeq: nextSeq,
-      updatedAtClientIso: new Date().toISOString(),
-      answers: chosenAnswers,
-    });
-
-    setConflictData(null);
-    await flushSaveQueue(attempt, rebaseRevision);
-  };
-
-  const handleResolveKeepServer = () => {
-    const currentUserId = authUserIdRef.current;
-    if (!attempt || !currentUserId || !conflictData) return;
-
-    const serverCopy = { ...conflictData.serverAnswers };
-    serverRevisionRef.current = conflictData.serverRevision;
-    lastConfirmedEditSeqRef.current = clientEditSeqRef.current;
-    latestAnswersRef.current = serverCopy;
-    setAnswers(serverCopy);
-
-    // Blast-radius isolation: removes ONLY this attempt's snapshot
-    clearUnsyncedExamSnapshot(currentUserId, attempt.id);
-    setConflictData(null);
-    setSyncState("saved");
-    setSubmitErrorBanner(null);
-  };
-
-  /**
-   * 6. Start / Retake Actions
+   * 3. Start / Retake Actions
    */
   async function handleStartExam() {
     setBusy(true);
     setTopError("");
     try {
+      const userId = currentUserId();
+      if (!userId) return;
       const res = await apiRequest<{ attempt_id: string }>(`/exams/${examId}/start`, {
         method: "POST",
       });
-      const currentUserId = authUserIdRef.current || (await resolveAuthenticatedUserId());
-      if (currentUserId) {
-        authUserIdRef.current = currentUserId;
-        setAuthUserId(currentUserId);
-      }
       const freshAttempt = await apiRequest<Attempt>(`/exams/attempts/${res.attempt_id}`);
+      if (currentUserId() !== userId || (freshAttempt.user_id ?? freshAttempt.student_id ?? userId) !== userId) return;
       setAttempt(freshAttempt);
-      serverRevisionRef.current = freshAttempt.revision;
-      if (freshAttempt.server_now) {
-        serverOffsetRef.current = new Date(freshAttempt.server_now).getTime() - Date.now();
-      }
-      if (freshAttempt.last_saved_at) {
-        setLastConfirmedSaveTime(formatClockTime(freshAttempt.last_saved_at));
-      }
-      setAnswers(freshAttempt.answers);
-      latestAnswersRef.current = freshAttempt.answers;
-      setSyncState("saved");
-      if (currentUserId) {
-        reconciledAttemptKeyRef.current = `${currentUserId}:${freshAttempt.id}`;
-      }
+      adoptServerAttempt(freshAttempt, userId);
       setHydrationState("ready");
     } catch (cause) {
       setTopError(getErrorMessage(cause));
@@ -785,7 +199,7 @@ export default function ExamPage() {
   }
 
   /**
-   * 7. Run Sample Action
+   * 4. Run Sample Action
    */
   async function handleRunSample(item: ExamItem) {
     if (!attempt) return;
@@ -814,88 +228,6 @@ export default function ExamPage() {
       setBusy(false);
     }
   }
-
-  /**
-   * 8. Manual Submission Gate
-   */
-  const handleManualSubmitExam = async () => {
-    const currentUserId = authUserIdRef.current;
-    if (
-      hydrationState !== "ready" ||
-      !currentUserId ||
-      !attempt ||
-      attempt.status !== "active"
-    ) {
-      return;
-    }
-
-    setSubmitErrorBanner(null);
-
-    if (syncState === "conflict") {
-      setSubmitErrorBanner(
-        "Submission has not been confirmed. Please resolve the answer conflict above before submitting."
-      );
-      conflictBannerRef.current?.focus();
-      return;
-    }
-
-    setIsSubmittingExam(true);
-    clearTimers();
-
-    try {
-      const hasUnsyncedEdits =
-        clientEditSeqRef.current > lastConfirmedEditSeqRef.current ||
-        syncState === "unsaved_local" ||
-        syncState === "saving";
-
-      if (hasUnsyncedEdits) {
-        const confirmed = await flushSaveQueue(attempt);
-        if (!confirmed) {
-          setSubmitErrorBanner(
-            "Submission has not been confirmed because your latest answers could not be saved to your account. Your draft remains on this tab—please check your connection and try again."
-          );
-          return;
-        }
-      }
-
-      await apiRequest(`/exams/attempts/${attempt.id}/submit`, {
-        method: "POST",
-      });
-
-      // Blast-radius isolation: removes ONLY this attempt's snapshot
-      clearUnsyncedExamSnapshot(currentUserId, attempt.id);
-      const updatedAttempt = await apiRequest<Attempt>(`/exams/attempts/${attempt.id}`);
-      setAttempt(updatedAttempt);
-      setSyncState("saved");
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        setHydrationState("unauthenticated");
-      } else if (err instanceof ApiError && err.status === 409) {
-        if (
-          err.message.includes("Exam time has ended") ||
-          err.message.includes("no longer active")
-        ) {
-          await enterAuthoritativeExpiredState(attempt, currentUserId);
-        } else {
-          await enterConflictResolutionFlow(attempt, currentUserId, latestAnswersRef.current);
-          setSubmitErrorBanner(
-            "Submission has not been confirmed because newer answers were saved in another tab. Please resolve the conflict first."
-          );
-        }
-      } else if (
-        err instanceof ApiError &&
-        (err.status === 403 || err.status === 410)
-      ) {
-        await enterAuthoritativeExpiredState(attempt, currentUserId);
-      } else {
-        setSubmitErrorBanner(
-          "Submission has not been confirmed because your latest answers could not be saved to your account."
-        );
-      }
-    } finally {
-      setIsSubmittingExam(false);
-    }
-  };
 
   // Explicit Unauthenticated / Expired Session View (Preserves sessionStorage intact)
   if (hydrationState === "unauthenticated") {
@@ -989,9 +321,13 @@ export default function ExamPage() {
 
   const mins = remainingSeconds !== null ? Math.floor(remainingSeconds / 60) : 0;
   const secs = remainingSeconds !== null ? remainingSeconds % 60 : 0;
+  const timeNotice = remainingSeconds === null || remainingSeconds <= 0 ? ""
+    : remainingSeconds <= 10 ? "Ten seconds or less remaining."
+    : remainingSeconds <= 30 ? "Thirty seconds or less remaining."
+    : remainingSeconds <= 120 ? "Two minutes or less remaining." : "";
 
   return (
-    <div className="page-shell pilot-dashboard">
+    <div className="page-shell pilot-dashboard exam-attempt-page">
       <p className="eyebrow-label">Timed assessment · Asia/Manila</p>
       {info?.exam_number && <p className="activity-number">Exam #{info.exam_number}</p>}
       <h1>{info?.title || attempt?.title || "Exam"}</h1>
@@ -1032,26 +368,20 @@ export default function ExamPage() {
       {attempt && attempt.status === "active" && (
         <>
           {/* Header Card: Timer + Submit Button + Truthful Status Bar */}
-          <div className="pilot-card" style={{ border: "2px solid #047857" }}>
+          <div className="pilot-card exam-attempt-header">
             <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: "14px",
-              }}
+              className="exam-attempt-actions"
             >
               <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                 <strong
                   role="timer"
-                  aria-label="Remaining exam time"
+                  className="exam-attempt-timer"
+                  aria-label={remainingSeconds === null ? "Remaining exam time"
+                    : `Remaining exam time: ${mins} minutes, ${secs} seconds`}
                   style={{
                     display: "inline-block",
-                    padding: "6px 14px",
                     borderRadius: "8px",
                     fontFamily: "var(--font-mono, monospace)",
-                    fontSize: "1.1rem",
                     fontWeight: 800,
                     backgroundColor:
                       remainingSeconds !== null && remainingSeconds <= 120
@@ -1069,6 +399,7 @@ export default function ExamPage() {
                 >
                   Time left: {mins}:{String(secs).padStart(2, "0")}
                 </strong>
+                <span className="sr-only" role="status" aria-atomic="true">{timeNotice}</span>
               </div>
 
               <button
@@ -1084,14 +415,8 @@ export default function ExamPage() {
 
             {/* Truthful Accessible Save Status Bar */}
             <div
-              role={
-                syncState === "conflict" || syncState === "unsaved_local"
-                  ? "alert"
-                  : "status"
-              }
-              aria-live="polite"
+              className="exam-save-panel"
               style={{
-                marginTop: "16px",
                 display: "flex",
                 flexDirection: "column",
                 gap: "8px",
@@ -1116,7 +441,6 @@ export default function ExamPage() {
                     : syncState === "conflict"
                     ? "#fff5f5"
                     : "#f5f7f2",
-                padding: "12px 16px",
                 fontSize: "14px",
               }}
             >
@@ -1156,7 +480,7 @@ export default function ExamPage() {
                           : "#63756f",
                     }}
                   />
-                  <span>
+                  <span role="status" aria-atomic="true">
                     {syncState === "saving" && "Saving"}
                     {syncState === "saved" &&
                       (lastConfirmedSaveTime
@@ -1164,18 +488,11 @@ export default function ExamPage() {
                         : "Saved to your account")}
                     {syncState === "unsaved_local" && "Unsaved on this device"}
                     {syncState === "conflict" && "Resolve answer conflict"}
-                    {syncState === "expired_submitted" &&
-                      "Time ended; latest server-saved answers submitted"}
+                    {syncState === "expired_submitted" && "Time ended; finalizing saved answers"}
                   </span>
                 </div>
 
-                <div
-                  style={{
-                    fontSize: "13px",
-                    color: "#4a5d58",
-                    fontWeight: 500,
-                  }}
-                >
+                {syncState !== "saved" && <div className="exam-last-save">
                   Last confirmed save:{" "}
                   <strong
                     style={{
@@ -1185,7 +502,7 @@ export default function ExamPage() {
                   >
                     {lastConfirmedSaveTime || "None yet"}
                   </strong>
-                </div>
+                </div>}
               </div>
 
               {syncState === "unsaved_local" && (
@@ -1252,9 +569,10 @@ export default function ExamPage() {
               </p>
 
               <div
+                className="exam-conflict-copies"
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
                   gap: "16px",
                 }}
               >
@@ -1479,6 +797,8 @@ export default function ExamPage() {
                         className="pilot-code"
                         disabled={isReadOnly}
                         spellCheck={false}
+                        autoCapitalize="off"
+                        autoCorrect="off"
                         value={
                           typeof answers[currentItem.id] === "string"
                             ? (answers[currentItem.id] as string)
@@ -1493,6 +813,12 @@ export default function ExamPage() {
                         }}
                       />
 
+                      {currentItem.pass_mark_percent != null && <p className="panel-subtitle">
+                        {currentItem.pass_mark_percent === 100
+                          ? "Pass every test to meet this task’s pass mark."
+                          : `Score at least ${currentItem.pass_mark_percent}% to meet this task’s pass mark.`}
+                        {" "}Your exam score includes partial credit. Sample runs only check the visible cases.
+                      </p>}
                       <h3 style={{ fontSize: "1rem", marginTop: "16px" }}>
                         Visible samples
                       </h3>
@@ -1563,7 +889,7 @@ export default function ExamPage() {
             {/* Sidebar: Tasks Stepper & Submit */}
             <aside className="pilot-card">
               <h2>Tasks</h2>
-              <div role="tablist" aria-label="Exam tasks">
+              <div role="group" aria-label="Exam tasks">
                 {attempt.items.map((task, index) => {
                   const isAnswered =
                     task.kind === "quiz"
@@ -1577,8 +903,6 @@ export default function ExamPage() {
                   return (
                     <button
                       type="button"
-                      role="tab"
-                      aria-selected={index === activeIndex}
                       aria-current={index === activeIndex ? "step" : undefined}
                       className="pilot-task"
                       key={task.id}
@@ -1622,7 +946,7 @@ export default function ExamPage() {
               ? "Exam submitted"
               : attempt.status === "grading"
               ? "Grading in progress"
-              : "Exam closed"}
+              : attempt.status === "failed" ? "Grading needs attention" : "Time expired"}
           </h2>
 
           {syncState === "expired_submitted" && (
@@ -1638,14 +962,17 @@ export default function ExamPage() {
                 color: "#162322",
               }}
             >
-              Time ended; latest server-saved answers submitted
+              {attempt.status === "auto_submitted"
+                ? "Time ended. Grading will use the latest answers saved to your account."
+                : "Time ended; latest server-saved answers submitted"}
             </div>
           )}
 
           {!attempt.results_released && (
             <p>
-              Your instructor will release scores and solutions after the exam
-              closes.
+              {attempt.status === "failed"
+                ? "Your answers are saved. Your instructor can retry grading."
+                : "Your instructor will release scores after the exam closes."}
             </p>
           )}
 
@@ -1665,22 +992,9 @@ export default function ExamPage() {
                   }}
                 >
                   <strong>
-                    {res.points_earned} / {res.points_possible} points
+                    {attempt.items.find((item) => item.id === res.item_id)?.title ?? "Exam item"}
                   </strong>
-                  <pre
-                    style={{
-                      background: "#162322",
-                      color: "#d1fae5",
-                      padding: "10px",
-                      borderRadius: "6px",
-                      overflow: "auto",
-                      marginTop: "6px",
-                    }}
-                  >
-                    {typeof res.solution === "string"
-                      ? res.solution
-                      : JSON.stringify(res.solution, null, 2)}
-                  </pre>
+                  <p>{res.points_earned} / {res.points_possible} points</p>
                 </div>
               ))}
             </>

@@ -12,7 +12,7 @@ POSTGRES_PASSWORD=REPLACE_WITH_A_DIFFERENT_LONG_RANDOM_POSTGRES_PASSWORD
 # Programs Judge0 runs at once. Keep it at vCPUs minus one so the API and
 # databases keep a core: 3 on a 4-vCPU VPS, 1 on a 2-vCPU VPS. Higher makes
 # the whole server stutter during a class-wide submit.
-COUNT=3
+COUNT=1
 MAX_QUEUE_SIZE=100
 CPU_TIME_LIMIT=5
 MAX_CPU_TIME_LIMIT=15
@@ -29,3 +29,7 @@ ENABLE_COMPILER_OPTIONS=true
 ENABLE_COMMAND_LINE_ARGUMENTS=false
 ENABLE_SUBMISSION_DELETE=false
 ENABLE_WAIT_RESULT=true
+# ByteQuest polls for results and course submissions run without network access.
+ENABLE_CALLBACKS=false
+ALLOW_ENABLE_NETWORK=false
+ENABLE_NETWORK=false

@@ -97,7 +97,11 @@ it("requires both policy panels and acknowledgments on each visit and submits on
   for (const [label, value] of [["Username", "AdaHandle"], ["Email address", "learner@example.test"], ["Password", "password"]]) {
     fireEvent.change(screen.getByLabelText(label), { target: { value } });
   }
-  fireEvent.change(screen.getByLabelText("School ID"), { target: { value: "00123" } });
+  const schoolId = screen.getByLabelText<HTMLInputElement>("School ID");
+  fireEvent.change(schoolId, { target: { value: "26abcde" } });
+  expect(schoolId.value).toBe("");
+  fireEvent.change(schoolId, { target: { value: "2600123" } });
+  expect(schoolId.value).toBe("26-00123");
   fireEvent.change(screen.getByLabelText("Year level"), { target: { value: "3" } });
   fireEvent.change(screen.getByLabelText("Block section"), { target: { value: "F" } });
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
@@ -121,7 +125,7 @@ it("requires both policy panels and acknowledgments on each visit and submits on
   expect(submit.disabled).toBe(false);
   fireEvent.click(submit);
   fireEvent.click(submit);
-  expect(auth.signUp).toHaveBeenCalledExactlyOnceWith("learner@example.test", "password", "AdaHandle", { schoolId: "00123", yearLevel: 3, blockSection: "F" });
+  expect(auth.signUp).toHaveBeenCalledExactlyOnceWith("learner@example.test", "password", "AdaHandle", { schoolId: "26-00123", yearLevel: 3, blockSection: "F" });
 });
 
 it("unlocks acknowledgment when the document already fits", async () => {
@@ -134,7 +138,7 @@ it("unlocks acknowledgment when the document already fits", async () => {
   fireEvent.change(screen.getByLabelText("Username"), { target: { value: "Learner" } });
   fireEvent.change(screen.getByLabelText("Email address"), { target: { value: "learner@example.test" } });
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "password" } });
-  fireEvent.change(screen.getByLabelText("School ID"), { target: { value: "00123" } });
+  fireEvent.change(screen.getByLabelText("School ID"), { target: { value: "26-00123" } });
   fireEvent.change(screen.getByLabelText("Year level"), { target: { value: "3" } });
   fireEvent.change(screen.getByLabelText("Block section"), { target: { value: "F" } });
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
@@ -148,7 +152,7 @@ it("shows a duplicate-email error beside the agreement actions and prefills sign
   for (const name of ["Sign up", "Student"]) fireEvent.click(screen.getByRole("button", { name }));
   for (const [label, value] of Object.entries({
     Username: "Learner", "Email address": "learner@example.test", Password: "password",
-    "School ID": "00123", "Year level": "3", "Block section": "F",
+    "School ID": "26-00123", "Year level": "3", "Block section": "F",
   })) {
     fireEvent.change(screen.getByLabelText(label), { target: { value } });
   }

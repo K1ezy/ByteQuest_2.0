@@ -7,7 +7,9 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.models.entities import ActivityAttempt, LearningActivity, Profile, ReviewState
-from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.attempt_visibility import (
+    activity_accepts_submissions_clause, learner_visible_attempt_clause, student_visible_activity_clause,
+)
 
 
 def next_course_activity(db: Session, student: Profile, course_id: uuid.UUID) -> LearningActivity | None:
@@ -21,7 +23,7 @@ def next_course_activity(db: Session, student: Profile, course_id: uuid.UUID) ->
         LearningActivity.course_id == course_id,
         LearningActivity.language == student.enrolled_language,
         LearningActivity.review_status == ReviewState.published,
-        LearningActivity.closed_at.is_(None),
-        LearningActivity.archived_at.is_(None),
+        student_visible_activity_clause(student.id),
+        activity_accepts_submissions_clause(),
         ~successful,
     ).order_by(LearningActivity.sequence_order, LearningActivity.id).first()

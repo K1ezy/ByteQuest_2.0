@@ -11,18 +11,29 @@ import { authReturnTo, roleLabels } from "@/lib/navigation";
 import { apiRequest, getAuthErrorMessage, getErrorMessage } from "@/lib/api";
 import { clearSharedComputerData, getSupabase } from "@/lib/supabase";
 import { signUpStudent } from "@/lib/student-signup";
+import { formatStudentSchoolId, STUDENT_SCHOOL_ID_ERROR, STUDENT_SCHOOL_ID_PATTERN } from "@/lib/school-id";
 import { usePasswordReset } from "@/hooks/use-password-reset";
 import type { Profile, ProgrammingLanguage } from "@/lib/types";
 import { SignupAgreement } from "@/components/signup-agreement";
 
 type AuthMode = "choices" | "signin" | "roles" | "signup" | "faculty-info" | "admin-info" | "agreement" | "reset-request" | "reset-update";
 
-function SchoolIdInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function SchoolIdInput({ value, onChange, student = false }: { value: string; onChange: (value: string) => void; student?: boolean }) {
   return (
     <div>
       <label htmlFor="auth-school-id" className="auth-label">School ID</label>
-      <input id="auth-school-id" className="auth-input" type="text" required maxLength={64} pattern={".*\\S.*"}
-        value={value} onChange={(event) => onChange(event.target.value)} />
+      <input id="auth-school-id" className="auth-input" type="text" required maxLength={student ? 8 : 64}
+        pattern={student ? STUDENT_SCHOOL_ID_PATTERN : ".*\\S.*"}
+        inputMode={student ? "numeric" : undefined}
+        aria-describedby={student ? "auth-school-id-help" : undefined}
+        title={student ? STUDENT_SCHOOL_ID_ERROR : undefined}
+        value={value} onChange={(event) => {
+          const next = student ? formatStudentSchoolId(event.target.value) : event.target.value;
+          if (next !== null) onChange(next);
+        }} />
+      {student && <p id="auth-school-id-help" className="auth-field-help">
+        Use your school-issued ID, for example 26-00001, and the email on your school roster.
+      </p>}
     </div>
   );
 }
@@ -588,7 +599,7 @@ function OnboardingContent() {
                   />
                   {authMode === "signup" && <p id="auth-password-help" className="auth-field-help">Use at least 8 characters.</p>}
                   {authMode === "signup" && <>
-                    <SchoolIdInput value={schoolId} onChange={setSchoolId} />
+                    <SchoolIdInput value={schoolId} onChange={setSchoolId} student={registrationRole === "student"} />
                     {registrationRole === "student" && <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label htmlFor="signup-year" className="auth-label">Year level</label>

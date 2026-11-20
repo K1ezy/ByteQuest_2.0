@@ -18,21 +18,43 @@ from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.quotas import reserve
+from app.core.request_size import MAX_PDF_BYTES, MIB
 from app.models.entities import DocumentChunk, InstructionalDocument, LearningActivity, ProcessingJob, Profile
 from app.services.ai_rag.embeddings import embed_chunks_bounded
 from app.services.ai_rag.gemini_client import GeminiConfigurationError
-from app.services.ai_rag.pdf_processor import extract_chunks_from_pdf
+from app.services.ai_rag.pdf_processor import extract_pdf_chunks
 from app.services.audit import record_audit
 from app.services.settings_service import get_setting_int
 from app.services.storage.supabase_storage import StorageError, pdf_storage
 from app.services.workspace_common import iso, material_state
 
 logger = logging.getLogger(__name__)
-DEFAULT_MAX_PDF_MB = 10
 
 
 def max_upload_bytes(db: Session) -> int:
-    return get_setting_int(db, "pdf_upload_max_mb", DEFAULT_MAX_PDF_MB) * 1024 * 1024
+    default_mib = MAX_PDF_BYTES // MIB
+    configured_mib = get_setting_int(db, "pdf_upload_max_mb", default_mib)
+    return max(1, min(configured_mib, default_mib)) * MIB
+
+
+async def read_pdf_upload(file: UploadFile, limit: int) -> bytes:
+    try:
+        if file.size is not None and file.size > limit:
+            raise _file_too_large(limit)
+        content = await file.read(limit + 1)
+        if len(content) > limit:
+            raise _file_too_large(limit)
+        return content
+    finally:
+        await file.close()
+
+
+def _file_too_large(limit: int) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        detail={"code": "file_too_large", "field": "file",
+                "message": f"The PDF must be {limit // MIB} MiB or smaller."},
+    )
 
 
 def _trace_id(prefix: str = "RAG") -> str:
@@ -119,7 +141,7 @@ async def _index_stored_pdf(
 ) -> tuple[bool, str | None, bool]:
     """Extract and embed a stored PDF. Returns (ready, cause, retryable)."""
     try:
-        chunks = extract_chunks_from_pdf(content)
+        chunks = await extract_pdf_chunks(content)
     except ValueError as exc:
         return False, str(exc), False
     if not chunks:
@@ -161,17 +183,7 @@ async def upload_material(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "invalid_file", "field": "file", "message": "Choose a PDF file."},
         )
-    limit = max_upload_bytes(db)
-    content = await file.read(limit + 1)
-    if len(content) > limit:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail={
-                "code": "file_too_large",
-                "field": "file",
-                "message": f"The PDF must be {limit // (1024 * 1024)} MiB or smaller.",
-            },
-        )
+    content = await read_pdf_upload(file, max_upload_bytes(db))
     if not content.startswith(b"%PDF-"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

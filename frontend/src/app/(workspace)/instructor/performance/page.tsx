@@ -22,6 +22,7 @@ import {
   Toolbar,
   useApi,
 } from "@/components/workspace/ui";
+import { Gradebook } from "@/components/instructor/gradebook";
 import {
   formatDateTime,
   getStudentPerformance,
@@ -35,6 +36,8 @@ function FacultyPerformance() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const activityId = searchParams.get("activity") || "";
+  const stuckOnly = Boolean(activityId) && searchParams.get("stuck") === "1";
+  const notStarted = searchParams.get("notStarted") === "1";
   const appliedSearch = searchParams.get("q") || "";
   const [search, setSearch] = useState(appliedSearch);
   const [studentId, setStudentId] = useState<string | null>(null);
@@ -53,12 +56,13 @@ function FacultyPerformance() {
         ? `/faculty/performance?${new URLSearchParams({
             course_id: courseId,
             ...(activityId ? { activity_id: activityId } : {}),
+            ...(stuckOnly ? { stuck_only: "true" } : {}),
             ...(appliedSearch ? { search: appliedSearch } : {}),
           }).toString()}`
         : null,
-    [activityId, appliedSearch, courseId],
+    [activityId, appliedSearch, courseId, stuckOnly],
   );
-  const { data, error, loading, reload } = useApi<PerformanceResponse>(path);
+  const { data, error, loading, reload } = useApi<PerformanceResponse>(path, true);
 
   function updateQuery(patch: Record<string, string | null>) {
     const next = new URLSearchParams(searchParams.toString());
@@ -84,8 +88,8 @@ function FacultyPerformance() {
     }
   }
 
-  const rows = data?.students || [];
-  const hasFilters = Boolean(activityId || appliedSearch);
+  const rows = (data?.students ?? []).filter((row) => !notStarted || row.attempt_count === 0);
+  const hasFilters = Boolean(activityId || appliedSearch || notStarted);
 
   return (
     <>
@@ -106,17 +110,19 @@ function FacultyPerformance() {
         <SelectField
           label="Activity"
           value={activityId}
-          onChange={(value) => updateQuery({ activity: value || null })}
+          onChange={(value) => updateQuery({ activity: value || null, stuck: null })}
           options={(data?.activities || []).map((activity) => ({ value: activity.activity_id, label: activity.title }))}
           includeAll
           allLabel="All published activities"
         />
+        {stuckOnly ? <Button variant="outline" onClick={() => updateQuery({ stuck: null })}>Show all learners</Button> : null}
         {hasFilters ? (
-          <Button variant="quiet" onClick={() => { setSearch(""); updateQuery({ activity: null, q: null }); }}>
+          <Button variant="quiet" onClick={() => { setSearch(""); updateQuery({ activity: null, q: null, stuck: null, notStarted: null }); }}>
             Clear filters
           </Button>
         ) : null}
       </Toolbar>
+      {stuckOnly ? <p className="ws-muted">Showing learners with repeated practice attempts and no pass on this activity.</p> : null}
 
       {error ? (
         <Notice tone="error">
@@ -154,10 +160,10 @@ function FacultyPerformance() {
 
       {!loading && data && rows.length === 0 ? (
         <EmptyState
-          title={hasFilters ? "No learners match these filters" : "No students enrolled yet"}
+          title={stuckOnly && !appliedSearch ? "No stuck learners" : notStarted ? "Everyone has started" : hasFilters ? "No learners match these filters" : "No students enrolled yet"}
           action={
             hasFilters ? (
-              <Button variant="outline" onClick={() => updateQuery({ activity: null, q: null })}>Clear filters</Button>
+              <Button variant="outline" onClick={() => updateQuery({ activity: null, q: null, stuck: null, notStarted: null })}>Clear filters</Button>
             ) : undefined
           }
         >
@@ -167,6 +173,7 @@ function FacultyPerformance() {
         </EmptyState>
       ) : null}
 
+      <div id="instructor-roster">
       {rows.length > 0 ? (
         <div className="ws-table-wrap">
           <table className="ws-table">
@@ -210,6 +217,9 @@ function FacultyPerformance() {
         </div>
       ) : null}
 
+      </div>
+      {!hasFilters ? <Gradebook courseId={courseId} onOpenStudent={(id) => void openStudent(id)} /> : null}
+
       <p className="ws-footnote">
         {activityId
           ? "Completion counts the selected activity only."
@@ -245,6 +255,12 @@ function FacultyPerformance() {
                       {attempt.activity_type === "quiz" ? "Quiz" : "Challenge"} · {attempt.score_percentage}% ·{" "}
                       {attempt.is_successful ? "Passed" : "Not passed"} · {formatDateTime(attempt.created_at)}
                     </span>
+                    {attempt.submitted_code ? (
+                      <details>
+                        <summary className="ws-inline-link">View submitted code (attempt {attempt.attempt_number})</summary>
+                        <pre className="ws-code"><code>{attempt.submitted_code}</code></pre>
+                      </details>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -256,10 +272,15 @@ function FacultyPerformance() {
   );
 }
 
+function CoursePerformance() {
+  const { courseId } = useWorkspace();
+  return <FacultyPerformance key={courseId} />;
+}
+
 export default function Page() {
   return (
     <WorkspaceSuspense label="performance">
-      <FacultyPerformance />
+      <CoursePerformance />
     </WorkspaceSuspense>
   );
 }

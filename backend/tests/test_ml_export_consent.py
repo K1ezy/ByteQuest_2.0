@@ -12,9 +12,11 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import StatementError
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.services.usernames import starter_username
+from scripts import destroy_research_link
 
 
 pytestmark = pytest.mark.integration
@@ -133,6 +135,15 @@ def test_documented_exports_require_latest_current_consent() -> None:
                 consent("renewed", "withdrawn", current_version)
                 consent("renewed", "accepted", current_version)
 
+                # Accepting consent issues a random research code; never declining-only students.
+                codes = dict(connection.execute(
+                    text("SELECT student_id, code FROM bytequest_private.research_codes "
+                         "WHERE student_id = ANY(:ids)"),
+                    {"ids": [student_id for student_id, _ in students.values()]},
+                ).all())
+                assert students["none"][0] not in codes
+                account_hexes = [student_id.hex for student_id, _ in students.values()]
+
                 for query in queries:
                     with pytest.raises(StatementError):
                         connection.execute(query).all()
@@ -140,15 +151,28 @@ def test_documented_exports_require_latest_current_consent() -> None:
                         query, {"current_consent_version": current_version}
                     ).mappings().all()
                     assert {row["student_id"] for row in current} == {
-                        students["accepted"][1], students["renewed"][1]
+                        codes[students["accepted"][0]], codes[students["renewed"][0]]
                     }
+                    # No account id, pseudonym or raw row id survives into the export.
+                    exported = " ".join(str(value) for row in current for value in row.values())
+                    assert all(hexed not in exported.replace("-", "") for hexed in account_hexes)
+                    assert all(pseudonym not in exported for _, pseudonym in students.values())
                     old = connection.execute(
                         query, {"current_consent_version": old_version}
                     ).mappings().all()
-                    assert {row["student_id"] for row in old} == {students["old"][1]}
+                    assert {row["student_id"] for row in old} == {codes[students["old"][0]]}
                     assert connection.execute(
                         query, {"current_consent_version": "no-approved-version"}
                     ).all() == []
+
+                def session_factory():
+                    return Session(bind=connection, join_transaction_mode="create_savepoint")
+
+                assert destroy_research_link.destroy(confirm=False, session_factory=session_factory) >= len(codes)
+                assert connection.execute(text("SELECT count(*) FROM bytequest_private.research_codes")).scalar_one() >= len(codes)
+                destroy_research_link.destroy(confirm=True, session_factory=session_factory)
+                assert connection.execute(text("SELECT count(*) FROM bytequest_private.research_codes")).scalar_one() == 0
+                assert connection.execute(queries[0], {"current_consent_version": current_version}).all() == []
             finally:
                 transaction.rollback()
     finally:

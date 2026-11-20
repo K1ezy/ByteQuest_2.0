@@ -4,19 +4,31 @@ import dynamic from "next/dynamic";
 import { loader } from "@monaco-editor/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useShellProfile } from "@/components/app-shell";
 import { ConfirmDialog, StatusChip } from "@/components/workspace/ui";
-import { apiRequest, getErrorMessage } from "@/lib/api";
+import { ApiError, apiRequest, getErrorMessage } from "@/lib/api";
 import { splitProblemStatement } from "@/lib/problem-statement";
-import { getSupabase } from "@/lib/supabase";
 import { newRequestId } from "@/lib/network";
-import type { Evaluation, EvaluationTestResult, Profile, Quest } from "@/lib/types";
+import type { Evaluation, EvaluationTestResult, Quest } from "@/lib/types";
 
 const Editor = dynamic(() => import("@monaco-editor/react"), {
   ssr: false,
   loading: () => <div className="editor-loading">Loading code editor…</div>,
 });
 loader.config({ paths: { vs: "/monaco/vs" } });
+
+const TOUCH_EDITOR_QUERY = "(max-width: 1023px) and (pointer: coarse)";
+
+function subscribeToTouchEditor(onChange: () => void) {
+  const query = window.matchMedia?.(TOUCH_EDITOR_QUERY);
+  query?.addEventListener("change", onChange);
+  return () => query?.removeEventListener("change", onChange);
+}
+
+function usesTouchEditor() {
+  return window.matchMedia?.(TOUCH_EDITOR_QUERY).matches ?? false;
+}
 
 function draftKey(userId: string, activityId: string): string {
   return `bytequest:draft:${userId}:${activityId}`;
@@ -48,9 +60,33 @@ interface SubmissionResponse {
 
 interface SubmissionJob {
   id: string;
+  activity_id: string;
+  dry_run_only: boolean;
   status: "queued" | "running" | "completed" | "failed";
+  attempts: number;
   result: SubmissionResponse | null;
   error: string | null;
+}
+
+type SampleRun = { key: string; id: string; sourceCode: string };
+
+function readSampleRun(key: string): SampleRun | null {
+  try {
+    const run = JSON.parse(window.sessionStorage.getItem(key) || "null");
+    if (typeof run?.id === "string" && run.id && typeof run.sourceCode === "string") {
+      return { key, id: run.id, sourceCode: run.sourceCode };
+    }
+  } catch { /* Continue when session storage is unavailable. */ }
+  return null;
+}
+
+function removeStoredRun(key: string) {
+  try { window.sessionStorage.removeItem(key); } catch { /* Continue without session storage. */ }
+}
+
+function sampleRunStatus(job: SubmissionJob) {
+  if (job.status === "running") return "Grading sample run";
+  return job.attempts > 0 ? "Sample grading will retry" : "Sample run queued";
 }
 
 interface HintStatus {
@@ -120,10 +156,11 @@ function OutputBlock({ label, text, empty, tone }: { label: string; text?: strin
 }
 
 export default function Arena({ activityId }: { activityId: string }) {
+  const touchEditor = useSyncExternalStore(subscribeToTouchEditor, usesTouchEditor, () => false);
   const router = useRouter();
   const [quest, setQuest] = useState<Quest | null>(null);
   const [trackActivities, setTrackActivities] = useState<Quest[]>([]);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const { id: userId, role, enrolled_language: language } = useShellProfile();
   const [code, setCode] = useState("");
   const [starter, setStarter] = useState("");
   type SyncState = "synced" | "saving" | "saved-local" | "error";
@@ -140,7 +177,10 @@ export default function Arena({ activityId }: { activityId: string }) {
   const [result, setResult] = useState<SubmissionResponse | null>(null);
   const [resultCode, setResultCode] = useState("");
   const [runError, setRunError] = useState("");
-  const [busy, setBusy] = useState<"run" | "submit" | "">("");
+  const [sending, setSending] = useState<"run" | "submit" | "">("");
+  const [sampleRun, setSampleRun] = useState<SampleRun | null>(null);
+  const [sampleStatus, setSampleStatus] = useState("");
+  const submissionRequest = useRef<AbortController | null>(null);
   const [loading, setLoading] = useState(true);
   const [needsSignIn, setNeedsSignIn] = useState(false);
   const [message, setMessage] = useState("");
@@ -148,6 +188,7 @@ export default function Arena({ activityId }: { activityId: string }) {
   const [aiBusy, setAiBusy] = useState(false);
   const [aiHint, setAiHint] = useState("");
   const [aiError, setAiError] = useState("");
+  const pendingHintRef = useRef<{ activityId: string; userId: string; key: string } | null>(null);
   const [hintStatus, setHintStatus] = useState<HintStatus | null>(null);
   const [hintBusy, setHintBusy] = useState(false);
   const [hintError, setHintError] = useState("");
@@ -158,7 +199,82 @@ export default function Arena({ activityId }: { activityId: string }) {
   const [confirmReset, setConfirmReset] = useState(false);
 
   const questId = quest?.id;
-  const userId = profile?.id;
+  const sampleKey = userId && `bytequest:sample-job:${userId}:${activityId}`;
+  const pendingSample = sampleRun?.key === sampleKey ? sampleRun : null;
+  const busy = sending || (pendingSample ? "run" : "");
+
+  const showSampleResult = useCallback((response: SubmissionResponse, source: string) => {
+    const visible = response.evaluation.test_results?.filter((test) => !test.is_hidden) ?? [];
+    setResult(response);
+    setResultCode(source);
+    setActiveCaseIndex(Math.max(0, visible.findIndex((test) => !test.passed)));
+    setAnnouncement(`Sample run finished: ${runHeadline(response.evaluation, visible)}. No attempt was recorded.`);
+  }, []);
+
+  useEffect(() => {
+    const cancel = () => submissionRequest.current?.abort();
+    const signedOut = () => {
+      cancel();
+      setSending("");
+      setSampleRun(null);
+      setResult(null);
+    };
+    window.addEventListener("bytequest:auth-cleared", signedOut);
+    return () => {
+      window.removeEventListener("bytequest:auth-cleared", signedOut);
+      cancel();
+    };
+  }, [activityId]);
+
+  useEffect(() => {
+    if (!pendingSample) return;
+    const run = pendingSample;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    let delay = 1500;
+
+    function stop() {
+      controller.abort();
+      clearTimeout(timer);
+    }
+
+    async function checkStatus() {
+      try {
+        const job = await apiRequest<SubmissionJob>(`/submission-jobs/${encodeURIComponent(run.id)}`, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        if (job.id !== run.id || job.activity_id !== activityId || !job.dry_run_only) {
+          throw new Error("This saved sample run does not match the current challenge.");
+        }
+        if (job.status === "queued" || job.status === "running") {
+          setSampleStatus(sampleRunStatus(job));
+          timer = setTimeout(checkStatus, delay);
+          delay = Math.min(8000, Math.round(delay * 1.4));
+          return;
+        }
+        if (job.status === "failed" || !job.result) throw new Error(job.error || "Sample grading failed. Try again.");
+        showSampleResult(job.result, run.sourceCode);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (error instanceof ApiError && (error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500)) {
+          setSampleStatus("Connection interrupted. Checking this sample run again soon.");
+          timer = setTimeout(checkStatus, Math.max(6000, (error.retryAfterSeconds ?? 0) * 1000));
+          return;
+        }
+        setRunError(getErrorMessage(error));
+        setAnnouncement(`Sample run failed: ${getErrorMessage(error)}`);
+      }
+      removeStoredRun(run.key);
+      setSampleRun(null);
+    }
+
+    // Give the accepted state time to render before the first status check.
+    timer = setTimeout(checkStatus, delay);
+    window.addEventListener("bytequest:auth-cleared", stop);
+    return () => {
+      stop();
+      window.removeEventListener("bytequest:auth-cleared", stop);
+    };
+  }, [activityId, pendingSample, showSampleResult]);
 
   const flushDraftToServer = useCallback(
     async (nextCode: string) => {
@@ -226,19 +342,18 @@ export default function Arena({ activityId }: { activityId: string }) {
     let active = true;
     async function load() {
       try {
-        const { data } = await getSupabase().auth.getSession();
-        if (!data.session) {
-          if (active) { setNeedsSignIn(true); setMessage("Sign in to open the coding arena."); }
-          return;
-        }
-        const [me, activities] = await Promise.all([apiRequest<Profile>("/profile/me"), apiRequest<Quest[]>("/quests")]);
+        if (role !== "student") throw new Error("Code submissions are available to student accounts.");
+        const activities = await apiRequest<Quest[]>(`/quests?details_for=${encodeURIComponent(activityId)}`);
         if (!active) return;
-        setProfile(me);
-        if (me.role !== "student") throw new Error("Code submissions are available to student accounts.");
         setTrackActivities(activities);
         const target = activities.find((item) => item.id === activityId && item.activity_type === "challenge");
         if (!target) throw new Error("This published challenge is not available on your selected language track.");
         setQuest(target);
+        const savedRun = readSampleRun(`bytequest:sample-job:${userId}:${target.id}`);
+        setSampleRun(savedRun);
+        setSampleStatus(savedRun ? "Checking saved sample run" : "");
+        setHintStatus(null);
+        setHintError("");
         if (target.is_completed || target.is_closed) {
           void apiRequest<{ source_code: string }>(`/pilot/activities/${target.id}/solution`)
             .then((value) => { if (active) setSolution(value.source_code || ""); })
@@ -248,25 +363,25 @@ export default function Arena({ activityId }: { activityId: string }) {
           if (!active) return;
           setHintStatus(value);
           if (value.reviewed.some((hint) => hint.body) || value.ai_hints.length) setHintsOpen(true);
-        }).catch(() => {});
+        }).catch((error) => { if (active) setHintError(getErrorMessage(error)); });
 
-        const defaultCode = target.starter_code || starterCode(me.enrolled_language);
+        const defaultCode = target.starter_code || starterCode(language);
         setStarter(defaultCode);
 
         // Restore any unsynced account-scoped backup before the server draft.
         let restoredCode = defaultCode;
         try {
-          const cachedLocal = readLocalDraft(me.id, target.id);
+          const cachedLocal = readLocalDraft(userId, target.id);
           const savedDraft = await apiRequest<{ source_code: string } | null>(`/pilot/drafts/${target.id}`);
           const serverCode = savedDraft?.source_code ?? defaultCode;
           lastSyncedCodeRef.current = serverCode;
           if (cachedLocal === serverCode) {
-            try { window.localStorage.removeItem(draftKey(me.id, target.id)); }
+            try { window.localStorage.removeItem(draftKey(userId, target.id)); }
             catch { /* Storage may be blocked. */ }
           }
           restoredCode = cachedLocal ?? serverCode;
         } catch {
-          const cachedLocal = readLocalDraft(me.id, target.id);
+          const cachedLocal = readLocalDraft(userId, target.id);
           restoredCode = cachedLocal ?? defaultCode;
           latestCodeRef.current = restoredCode;
           setCode(restoredCode);
@@ -277,7 +392,7 @@ export default function Arena({ activityId }: { activityId: string }) {
         }
         latestCodeRef.current = restoredCode;
         setCode(restoredCode);
-        if (readLocalDraft(me.id, target.id) !== null) {
+        if (readLocalDraft(userId, target.id) !== null) {
           setDraftStatus("Recovered from this device · syncing");
           setSyncState("saved-local");
         } else {
@@ -285,12 +400,17 @@ export default function Arena({ activityId }: { activityId: string }) {
           setSyncState("synced");
         }
         setDraftLoaded(true);
-      } catch (error) { if (active) setMessage(getErrorMessage(error)); }
+      } catch (error) {
+        if (active) {
+          setNeedsSignIn(error instanceof ApiError && error.status === 401);
+          setMessage(getErrorMessage(error));
+        }
+      }
       finally { if (active) setLoading(false); }
     }
     void load();
     return () => { active = false; };
-  }, [activityId]);
+  }, [activityId, language, role, userId]);
 
   useEffect(() => {
     if (!questId || !draftLoaded) return;
@@ -327,7 +447,7 @@ export default function Arena({ activityId }: { activityId: string }) {
   function handleCodeChange(newCode: string | undefined) {
     const updated = newCode ?? "";
     setCode(updated);
-    if (questId && profile?.id) writeLocalDraft(profile.id, questId, updated);
+    if (questId) writeLocalDraft(userId, questId, updated);
     if (!draftLoaded) {
       setSyncState("error");
       setDraftStatus("Saved on this device only");
@@ -344,16 +464,19 @@ export default function Arena({ activityId }: { activityId: string }) {
   }
 
   async function runCode(dryRun: boolean) {
-    if (!quest || busy) return;
-    setBusy(dryRun ? "run" : "submit");
+    if (!quest || !userId || !sampleKey || busy || submissionRequest.current) return;
+    const request = new AbortController();
+    submissionRequest.current = request;
+    setSending(dryRun ? "run" : "submit");
+    setSampleStatus(dryRun ? "Sending sample run" : "");
     setResult(null);
     setRunError("");
     setAiHint("");
     setAiError("");
     setCopyState("");
-    setAnnouncement(dryRun ? "Running your code on the sample cases." : "Submitting your code for official grading.");
+    setAnnouncement(dryRun ? "" : "Submitting your code for official grading.");
     try {
-      const pendingKey = `bytequest:pending-job:${quest.id}:${dryRun ? "sample" : "official"}`;
+      const pendingKey = `bytequest:pending-job:${userId}:${quest.id}:${dryRun ? "sample" : "official"}`;
       let idempotencyKey = newRequestId();
       try {
         const previous = JSON.parse(window.sessionStorage.getItem(pendingKey) || "null") as
@@ -363,6 +486,7 @@ export default function Arena({ activityId }: { activityId: string }) {
       } catch { /* Continue without session storage if the browser blocks it. */ }
       const accepted = await apiRequest<SubmissionJob>("/submission-jobs", {
         method: "POST",
+        signal: request.signal,
         headers: { "Idempotency-Key": idempotencyKey },
         body: JSON.stringify({
           activity_id: quest.id,
@@ -371,54 +495,85 @@ export default function Arena({ activityId }: { activityId: string }) {
           time_spent_seconds: workedSeconds(),
         }),
       });
-      try { window.sessionStorage.removeItem(pendingKey); } catch { /* Storage may be blocked. */ }
+      if (request.signal.aborted) return;
       if (!dryRun) {
+        removeStoredRun(pendingKey);
         router.push(`/submissions/${accepted.id}`);
         return;
       }
-      const ranCode = code;
-      let job = accepted;
-      for (let tries = 0; tries < 90 && job.status !== "completed" && job.status !== "failed"; tries++) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        job = await apiRequest<SubmissionJob>(`/submission-jobs/${accepted.id}`);
+      if (accepted.status === "queued" || accepted.status === "running") {
+        const run = { key: sampleKey, id: accepted.id, sourceCode: code };
+        try { window.sessionStorage.setItem(sampleKey, JSON.stringify(run)); } catch { /* Keep watching in this tab. */ }
+        setSampleRun(run);
+        setSampleStatus(sampleRunStatus(accepted));
+      } else if (accepted.status === "completed" && accepted.result) {
+        showSampleResult(accepted.result, code);
+      } else {
+        removeStoredRun(pendingKey);
+        throw new Error(accepted.error || "Sample grading failed. Try again.");
       }
-      if (job.status === "failed") throw new Error(job.error || "Sample run failed. Try again.");
-      if (!job.result) throw new Error("Sample run is still pending. Return to this challenge shortly.");
-      const response = job.result;
-      const visible = response.evaluation.test_results?.filter((test) => !test.is_hidden) ?? [];
-      const failedIdx = visible.findIndex((test) => !test.passed);
-      setResult(response);
-      setResultCode(ranCode);
-      setActiveCaseIndex(Math.max(0, failedIdx));
-      setAnnouncement(`Sample run finished: ${runHeadline(response.evaluation, visible)}. No attempt was recorded.`);
+      removeStoredRun(pendingKey);
     } catch (error) {
+      if (request.signal.aborted) return;
       const reason = getErrorMessage(error);
       setRunError(reason);
       setAnnouncement(`${dryRun ? "Sample run" : "Submission"} failed: ${reason}`);
     }
-    finally { setBusy(""); }
+    finally {
+      submissionRequest.current = null;
+      if (!request.signal.aborted) setSending("");
+    }
   }
 
   async function requestAiHint() {
-    if (!quest || !evaluation || evaluation.is_successful) return;
+    if (!quest || !userId || !evaluation || evaluation.is_successful) return;
     if (!navigator.onLine) {
-      setAiError("AI hints need an internet connection. Your code and sample runs still work offline.");
+      setAiError("AI hints need a connection. Your draft stays on this device.");
       return;
     }
+    const previous = pendingHintRef.current;
+    const pending = previous?.activityId === quest.id && previous.userId === userId
+      ? previous
+      : { activityId: quest.id, userId, key: newRequestId() };
+    pendingHintRef.current = pending;
     setAiBusy(true);
     setAiError("");
     try {
       const hint = await apiRequest<{ body: string; remaining: number }>(`/pilot/activities/${quest.id}/hints/reveal`, {
         method: "POST",
-        body: JSON.stringify({ source: "ai", request_key: newRequestId() }),
+        body: JSON.stringify({ source: "ai", request_key: pending.key }),
       });
+      if (pendingHintRef.current === pending) pendingHintRef.current = null;
       setAiHint(hint.body);
       setAnnouncement(`AI hint ready. ${hint.remaining} hint ${hint.remaining === 1 ? "use" : "uses"} left.`);
-      setHintStatus(await apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`));
+      try {
+        setHintStatus(await apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`));
+        setHintError("");
+      } catch (err) {
+        setHintStatus(null);
+        setHintError(getErrorMessage(err));
+      }
     } catch (err) {
       setAiError(getErrorMessage(err));
+      if (err instanceof ApiError && err.code === "exam_in_progress") {
+        setHintStatus(null);
+        setHintError(err.message);
+      }
     } finally {
       setAiBusy(false);
+    }
+  }
+
+  async function retryHintStatus() {
+    if (!quest) return;
+    setHintBusy(true);
+    setHintError("");
+    try {
+      setHintStatus(await apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`));
+    } catch (error) {
+      setHintError(getErrorMessage(error));
+    } finally {
+      setHintBusy(false);
     }
   }
 
@@ -426,7 +581,6 @@ export default function Arena({ activityId }: { activityId: string }) {
     if (!quest) return;
     setHintBusy(true);
     setHintError("");
-    setHintStatus((prev) => prev ? { ...prev, remaining: Math.max(0, prev.remaining - 1) } : prev);
     try {
       await apiRequest(`/pilot/activities/${quest.id}/hints/reveal`, {
         method: "POST",
@@ -437,13 +591,13 @@ export default function Arena({ activityId }: { activityId: string }) {
       setAnnouncement(`Hint revealed. ${next.remaining} hint ${next.remaining === 1 ? "use" : "uses"} left.`);
     } catch (cause) {
       setHintError(getErrorMessage(cause));
-      void apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`).then(setHintStatus).catch(() => {});
+      if (cause instanceof ApiError && cause.code === "exam_in_progress") setHintStatus(null);
+      else void apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`).then(setHintStatus).catch(() => {});
     } finally {
       setHintBusy(false);
     }
   }
 
-  const language = profile?.enrolled_language || "python";
   const languageName = LANGUAGE_NAMES[language] ?? language;
   const monacoLanguage = language === "cpp" ? "cpp" : language;
   const evaluation = result?.evaluation;
@@ -507,7 +661,7 @@ export default function Arena({ activityId }: { activityId: string }) {
 
   return (
     <div className="page-shell arena-page">
-      <p className="arena-sr-only" role="status" aria-live="polite">{announcement}</p>
+      <p className="arena-sr-only" role="status" aria-live="polite">{busy === "run" ? sampleStatus : announcement}</p>
       <p className="arena-sr-only" role="status" aria-live="polite">
         {syncState === "saved-local"
           ? "Your code is saved on this device and will sync to your account when the connection returns."
@@ -541,7 +695,7 @@ export default function Arena({ activityId }: { activityId: string }) {
           </nav>
 
           <header className="arena-head">
-            <p className="eyebrow-label">Quest #{quest.sequence_order} · Code challenge · {languageName}</p>
+            <p className="eyebrow-label">Quest #{quest.position ?? quest.sequence_order} · Code challenge · {languageName}</p>
             <h1 id="arena-title">{quest.title || "Untitled challenge"}</h1>
             <ul className="arena-facts" aria-label="Challenge details">
               <li className="tag">{quest.topic_concept}</li>
@@ -583,7 +737,7 @@ export default function Arena({ activityId }: { activityId: string }) {
             <summary>
               <span className="arena-disclosure-title">Stuck? Hints</span>
               <span className="arena-disclosure-meta">
-                {hintStatus ? `${hintStatus.remaining} of ${MAX_HINTS} uses left` : "Loading…"}
+                {hintStatus ? `${hintStatus.remaining} of ${MAX_HINTS} uses left` : hintError ? "Unavailable" : "Loading…"}
               </span>
             </summary>
             <div className="arena-disclosure-body">
@@ -623,7 +777,12 @@ export default function Arena({ activityId }: { activityId: string }) {
               {hintStatus?.remaining === 0 && (
                 <p className="arena-help">You&apos;ve used all {MAX_HINTS} hint uses for this challenge.</p>
               )}
-              {hintError && <p className="notice error">{hintError}</p>}
+              {hintError && <p className="notice error" role="status">{hintError}</p>}
+              {hintError && !hintStatus && (
+                <button type="button" className="button button-outline small" disabled={hintBusy} onClick={() => void retryHintStatus()}>
+                  Reload hints
+                </button>
+              )}
             </div>
           </details>
 
@@ -667,26 +826,44 @@ export default function Arena({ activityId }: { activityId: string }) {
           )}
 
           <div className="arena-editor">
-            <Editor
-              height="100%"
-              language={monacoLanguage}
-              theme="vs-dark"
-              value={code}
-              onChange={handleCodeChange}
-              options={{
-                ariaLabel: `${languageName} code editor for ${quest.title || "this challenge"}`,
-                minimap: { enabled: false },
-                fontSize: 14,
-                lineHeight: 22,
-                lineNumbers: "on",
-                scrollBeyondLastLine: false,
-                tabSize: 4,
-                automaticLayout: true,
-                wordWrap: "on",
-                padding: { top: 14, bottom: 14 },
-              }}
-            />
-            <p className="arena-editor-tip">Tab indents code. Press Ctrl+M (Ctrl+Shift+M on Mac), then Tab, to move out of the editor.</p>
+            {touchEditor ? (
+              <textarea
+                className="arena-touch-editor"
+                aria-label={`${languageName} code editor for ${quest.title || "this challenge"}`}
+                value={code}
+                onChange={(event) => handleCodeChange(event.currentTarget.value)}
+                readOnly={!draftLoaded}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                maxLength={50_000}
+                wrap="off"
+              />
+            ) : (
+              <>
+                <Editor
+                  height="100%"
+                  language={monacoLanguage}
+                  theme="vs-dark"
+                  value={code}
+                  onChange={handleCodeChange}
+                  options={{
+                    ariaLabel: `${languageName} code editor for ${quest.title || "this challenge"}`,
+                    minimap: { enabled: false },
+                    readOnly: !draftLoaded,
+                    fontSize: 14,
+                    lineHeight: 22,
+                    lineNumbers: "on",
+                    scrollBeyondLastLine: false,
+                    tabSize: 4,
+                    automaticLayout: true,
+                    wordWrap: "on",
+                    padding: { top: 14, bottom: 14 },
+                  }}
+                />
+                <p className="arena-editor-tip">Tab indents code. Press Ctrl+M (Ctrl+Shift+M on Mac), then Tab, to move out of the editor.</p>
+              </>
+            )}
           </div>
 
           <div className="arena-actions">
@@ -720,9 +897,9 @@ export default function Arena({ activityId }: { activityId: string }) {
                 <strong>Official.</strong>{" "}
                 {quest.is_closed
                   ? "Closed for new submissions."
-                  : quest.is_completed
-                    ? "Records an attempt. You already earned this XP."
-                    : "Grades all tests and records an attempt."}
+                  : `Grades all tests and records an attempt. ${quest.pass_mark_percent != null && quest.pass_mark_percent < 100
+                    ? `Score at least ${quest.pass_mark_percent}% to pass.`
+                    : "Pass every test to complete the quest."}`}
               </p>
             </div>
             {runBlockedReason && !busy && <p className="arena-action-note">{runBlockedReason}</p>}
@@ -739,7 +916,7 @@ export default function Arena({ activityId }: { activityId: string }) {
             </div>
 
             {busy === "run" ? (
-              <p className="arena-state running"><span className="arena-spinner" aria-hidden="true" />Running your code on the example cases. This usually takes a few seconds.</p>
+              <p className="arena-state running"><span className="arena-spinner" aria-hidden="true" />{sampleStatus}</p>
             ) : busy === "submit" ? (
               <p className="arena-state running"><span className="arena-spinner" aria-hidden="true" />Submitting for official grading. Your results page will open next.</p>
             ) : runError ? (
@@ -826,7 +1003,7 @@ export default function Arena({ activityId }: { activityId: string }) {
                           <strong>Still stuck?</strong>{" "}
                           {hintsLeft === 0
                             ? `You've used all ${MAX_HINTS} hint uses for this challenge.`
-                            : `An AI hint looks at this run and suggests where to look. It uses 1 hint${hintsLeft !== undefined ? ` (${hintsLeft} left)` : ""}.`}
+                            : `An AI hint sends your sample code, visible diagnostics, and relevant course excerpts to Gemini. It uses 1 hint${hintsLeft !== undefined ? ` (${hintsLeft} left)` : ""}.`}
                         </p>
                         {hintsLeft !== 0 && (
                           <button

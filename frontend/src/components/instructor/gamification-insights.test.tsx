@@ -1,6 +1,8 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { GamificationInsightsView, type GamificationInsightsData } from "./gamification-insights";
+
+vi.mock("next/dynamic", () => ({ default: () => () => <div role="group" aria-label="Share of learners active each week since their first activity" /> }));
 
 const categories = (pairs: Record<string, [number, number]>) =>
   [["syntax_error", "Syntax"], ["logic_error", "Logic"], ["runtime_error", "Runtime"], ["timeout", "Time limit"]].map(
@@ -27,30 +29,28 @@ const data: GamificationInsightsData = {
 
 afterEach(cleanup);
 
-it("leads with class totals and flags small samples", () => {
+it("uses one stat strip and suppresses rates and charts with small samples", () => {
   render(<GamificationInsightsView data={data} />);
-  expect(screen.getByText("9 of 12")).toBeTruthy();
+  expect(screen.getByText("of 12 enrolled")).toBeTruthy();
   expect(screen.getByText("80%")).toBeTruthy();
-  expect(screen.getByText("67%")).toBeTruthy();
-  expect(screen.getByText("3 hinted challenges · small sample")).toBeTruthy();
-  expect(screen.getByText("0 recalls")).toBeTruthy(); // recall tile: no rate yet, and no small-sample flag at zero
-  expect(screen.getByText(/No recalls submitted yet\. They begin once Mastery Memory unlocks \(day 35\)/)).toBeTruthy();
+  expect(screen.queryByText("67%")).toBeNull();
+  expect(screen.getByText("3 hinted challenges")).toBeTruthy();
+  expect(screen.getByText("0 recalls")).toBeTruthy();
+  expect(screen.getByText("Unlocks after day 35.")).toBeTruthy();
+  expect(screen.getByText("Not enough data yet")).toBeTruthy();
+  expect(screen.queryByText(/documented novelty effect/)).toBeNull();
 });
 
-it("reads every week from the keyboard and marks mechanics that unlocked in range", () => {
-  render(<GamificationInsightsView data={data} />);
-  const chart = screen.getByRole("group", { name: "Share of learners active each week since their first activity" });
-  expect(screen.getByText("Codex unlocks")).toBeTruthy();       // day 7 = week 2, inside the 3 weeks shown
-  expect(screen.queryByText("Memory unlocks")).toBeNull();      // day 35 = week 6, not reached yet
-  fireEvent.keyDown(chart, { key: "ArrowRight" });
-  expect(screen.getByText("Week 1: 100% active, 9 of 9 learners, 40 practice events")).toBeTruthy();
-  fireEvent.keyDown(chart, { key: "End" });
-  expect(screen.getByText("Week 3: 50% active, 2 of 4 learners, 5 practice events")).toBeTruthy();
-  expect(screen.getByText(/practice events · small sample/)).toBeTruthy(); // tooltip on a week with 4 learners
-
+it("shows the chart and table after five supported weeks and keeps sparse rows labeled", () => {
+  const weekly = [0, 1, 2, 3, 4, 5].map((week) => ({ week, eligible: week === 5 ? 4 : 9, active: 3, events: 7 }));
+  render(<GamificationInsightsView data={{ ...data, weekly }} />);
+  expect(screen.getByRole("group", { name: "Share of learners active each week since their first activity" })).toBeTruthy();
+  expect(screen.getByText(/documented novelty effect/)).toBeTruthy();
+  fireEvent.click(screen.getByText("View as table"));
   const table = screen.getByRole("table", { name: "Learners active each week since their first activity" });
-  expect(within(table).getAllByRole("row")).toHaveLength(4);
+  expect(within(table).getAllByRole("row")).toHaveLength(7);
   expect(within(table).getByRole("rowheader", { name: "Week 2" })).toBeTruthy();
+  expect(within(table).getByText("Not enough data yet")).toBeTruthy();
 });
 
 it("lists stuck topics first with failed and recovered counts per error type", () => {

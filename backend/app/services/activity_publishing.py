@@ -11,23 +11,47 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from app.models.entities import ActivityKind, LearningActivity, Profile, ReviewState
+from app.services.challenge_verification import challenge_is_verified
 from app.services.gamification.quiz_content import parse_quiz_questions
 from app.services.workspace_common import as_aware
 
 
-def apply_publish_rules(db: Session, activity: LearningActivity, actor: Profile) -> None:
+def lock_activity_for_publication(db: Session, activity: LearningActivity) -> None:
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key)::bigint)"),
+        {"lock_key": f"bytequest:activity-sequence:{getattr(activity.language, 'value', activity.language)}"},
+    )
+    # Refresh both the flag and the cases after acquiring the lock used by writers.
+    db.refresh(activity, with_for_update=True)
+    db.expire(activity, ["test_cases"])
+
+
+def apply_publish_rules(db: Session, activity: LearningActivity, actor: Profile, *, require_review: bool = False) -> None:
+    lock_activity_for_publication(db, activity)
+    if activity.review_status != ReviewState.draft:
+        raise HTTPException(409, "Only unpublished drafts can be published.")
+    if activity.exam_only:
+        raise HTTPException(409, detail={"code": "exam_only", "message": "Add this exam-only activity to a restricted exam."})
+    if require_review and activity.reviewed_by is None:
+        raise HTTPException(409, "Review the saved activity and confirm review before publishing.")
     if activity.activity_type == ActivityKind.challenge:
         if not activity.test_cases:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "missing_tests", "field": "test_cases", "message": "Add at least one grading case before publishing."},
             )
-        if not activity.judge0_verified:
+        if not any(not case.is_hidden for case in activity.test_cases):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "missing_sample", "field": "test_cases",
+                        "message": "Make at least one grading case visible so students can run a sample."},
+            )
+        if not challenge_is_verified(activity):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "code": "not_verified",
-                    "message": "The saved reference solution has not passed Judge0 validation yet.",
+                    "message": "Verify the saved reference solution and test cases with Judge0 before publishing.",
                 },
             )
     if activity.activity_type == ActivityKind.quiz:
@@ -47,10 +71,6 @@ def apply_publish_rules(db: Session, activity: LearningActivity, actor: Profile)
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "invalid_schedule", "field": "closes_at", "message": "The closing time must be after the opening time."},
         )
-    db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key)::bigint)"),
-        {"lock_key": f"bytequest:activity-sequence:{getattr(activity.language, 'value', activity.language)}"},
-    )
     highest = (
         db.query(func.max(LearningActivity.sequence_order))
         .filter(
