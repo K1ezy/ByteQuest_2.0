@@ -1,8 +1,9 @@
 "use client";
 
-import { getSupabase } from "@/lib/supabase";
+import { reachableServiceUrl } from "@/lib/network";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
+const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
+const apiBaseUrl = configuredApiUrl ? reachableServiceUrl(configuredApiUrl) : undefined;
 
 export class ApiError extends Error {
   public readonly status: number;
@@ -43,6 +44,8 @@ function formatApiErrorDetail(detail: unknown): string | null {
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!apiBaseUrl) throw new Error("Set NEXT_PUBLIC_API_URL in frontend/.env.local.");
 
+  // Imported on demand: a static import pulls @supabase/supabase-js into every route's shared bundle.
+  const { getSupabase } = await import("@/lib/supabase");
   const { data, error } = await getSupabase().auth.getSession();
   if (error) throw new Error(error.message);
   const token = data.session?.access_token;
@@ -107,6 +110,21 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     throw new ApiError(message, response.status, errorCode, body, retryAfterSeconds);
   }
   return body as T;
+}
+
+export async function checkUsernameAvailability(username: string): Promise<boolean> {
+  if (!apiBaseUrl) throw new Error("Set NEXT_PUBLIC_API_URL in frontend/.env.local.");
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}/profile/username-availability?username=${encodeURIComponent(username)}`, {
+      cache: "no-store",
+    });
+  } catch {
+    throw new Error("ByteQuest could not check the username. Please try again.");
+  }
+  if (!response.ok) throw new Error("ByteQuest could not check the username. Please try again.");
+  const body = await response.json() as { available: boolean };
+  return body.available;
 }
 
 export function getErrorMessage(error: unknown): string {

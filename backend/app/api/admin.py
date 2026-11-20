@@ -15,7 +15,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func
+from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -40,6 +41,7 @@ from app.services.account_provisioning import (
     invite_auth_user,
 )
 from app.services.audit import record_audit
+from app.services.attempt_visibility import guard_solution_reopen
 from app.services.course_access import (
     courses_for_user,
     membership_map,
@@ -48,6 +50,7 @@ from app.services.course_access import (
 )
 from app.services.materials import (
     material_draft_count,
+    max_upload_bytes,
     retry_material,
     serialize_material,
     upload_material,
@@ -90,6 +93,10 @@ def admin_user(user: Profile = Depends(get_current_user)) -> Profile:
     return require_administrator(user)
 
 
+async def sandbox_health(request: Request, _user: Profile = Depends(admin_user)) -> dict:
+    return await request.app.state.sandbox_health.check()
+
+
 def _role_value(profile: Profile | None) -> str | None:
     if profile is None:
         return None
@@ -100,7 +107,12 @@ def _role_value(profile: Profile | None) -> str | None:
 # Dashboard
 # ---------------------------------------------------------------------------
 @router.get("/dashboard")
-def admin_dashboard(request: Request, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
+def admin_dashboard(
+    request: Request,
+    user: Profile = Depends(admin_user),
+    db: Session = Depends(get_db),
+    sandbox: dict = Depends(sandbox_health),
+):
     accounts = _all_accounts(db)
     attention_accounts = [account for account in accounts if account["needs_action"]]
     courses = courses_for_user(db, user, include_archived=True)
@@ -118,7 +130,7 @@ def admin_dashboard(request: Request, user: Profile = Depends(admin_user), db: S
         .limit(100)
         .all()
     )
-    services = service_health(db, request.app.state)
+    services = service_health(db, request.app.state, sandbox)
     overall = overall_health(services)
     recent = audit_query(db, limit=6).all()
     actors = {
@@ -134,7 +146,7 @@ def admin_dashboard(request: Request, user: Profile = Depends(admin_user), db: S
             {
                 "kind": "account",
                 "id": account["account_id"],
-                "title": account["email"] or account["display_name"] or account["pseudonym"],
+                "title": account["email"] or account["display_name"] or account["username"],
                 "detail": account["action_reason"] or "Review this account.",
                 "status": "Needs action",
                 "severity": "wait",
@@ -190,7 +202,7 @@ def admin_dashboard(request: Request, user: Profile = Depends(admin_user), db: S
             "availability_changes": len(availability),
             "service_status": overall,
             "healthy_services": len([service for service in services if service["status"] == "healthy"]),
-            "total_services": len(services),
+            "total_services": len([service for service in services if service["status"] != "off"]),
         },
         "action_queue": queue[:6],
         "recent_changes": [
@@ -198,7 +210,7 @@ def admin_dashboard(request: Request, user: Profile = Depends(admin_user), db: S
                 "id": str(event.id),
                 "action": event.action,
                 "summary": event.summary,
-                "actor": (actors.get(event.actor_id).display_name or actors.get(event.actor_id).pseudonym_id)
+                "actor": (actors.get(event.actor_id).display_name or actors.get(event.actor_id).username)
                 if event.actor_id in actors
                 else "System",
                 "created_at": iso(event.created_at),
@@ -256,6 +268,7 @@ def _serialize_account(
         "email": profile.email or email,
         "display_name": profile.display_name,
         "pseudonym": profile.pseudonym_id,
+        "username": profile.username,
         "role": _role_value(profile),
         "account_status": profile.account_status,
         "created_at": iso(profile.created_at),
@@ -288,7 +301,7 @@ def _all_accounts(db: Session, *, search: str | None = None, role: str | None = 
         elif status_filter != "all" and serialized["account_status"] != status_filter:
             continue
         if needle:
-            haystack = f"{serialized['email'] or ''} {serialized['display_name'] or ''} {serialized['pseudonym'] or ''} {serialized['role']}".casefold()
+            haystack = f"{serialized['email'] or ''} {serialized['display_name'] or ''} {serialized['username'] or ''} {serialized['role']}".casefold()
             if needle not in haystack:
                 continue
         rows.append(serialized)
@@ -338,7 +351,7 @@ def account_impact(account_id: uuid.UUID, user: Profile = Depends(admin_user), d
         "account": _serialize_account(profile, email=profile.email, memberships=memberships, course_lookup=courses),
         "already_deactivated": False,
         "effect": (
-            f"{profile.display_name or profile.pseudonym_id} will immediately lose access to "
+            f"{profile.display_name or profile.username} will immediately lose access to "
             f"{len([m for m in memberships if m.status == 'active'])} course assignment(s). "
             "Existing materials, activity versions, attempts and audit records are preserved."
         ),
@@ -381,7 +394,7 @@ def deactivate_account(
         action="account.deactivated",
         entity_type="account",
         entity_id=profile.id,
-        summary=f"Deactivated account {profile.email or profile.pseudonym_id}",
+        summary=f"Deactivated account {profile.email or profile.username}",
     )
     db.commit()
     return {"account_id": str(profile.id), "account_status": "deactivated", "message": "Account deactivated. Access is blocked immediately."}
@@ -402,7 +415,7 @@ def reactivate_account(account_id: uuid.UUID, user: Profile = Depends(admin_user
         action="account.reactivated",
         entity_type="account",
         entity_id=profile.id,
-        summary=f"Reactivated account {profile.email or profile.pseudonym_id}",
+        summary=f"Reactivated account {profile.email or profile.username}",
     )
     db.commit()
     return {"account_id": str(profile.id), "account_status": "active", "message": "Account reactivated with its prior course assignments."}
@@ -422,6 +435,56 @@ class AccountCreate(BaseModel):
         if not EMAIL_PATTERN.match(value):
             raise ValueError("Enter a valid email address, for example name@example.edu.")
         return value
+
+
+class StudentRegistrationApproval(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    school_id: str = Field(pattern=r"^[0-9]{2}-[0-9]{5}$", min_length=8, max_length=8)
+    email: str = Field(min_length=5, max_length=320)
+
+    @field_validator("school_id")
+    @classmethod
+    def validate_school_id(cls, value: str) -> str:
+        if value.endswith("-00000"):
+            raise ValueError("The sequence in the School ID must start at 00001.")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        if not EMAIL_PATTERN.fullmatch(value):
+            raise ValueError("Enter the email address listed in the school roster.")
+        return value.lower()
+
+
+@router.put("/student-registration-roster")
+def approve_student_registration(
+    payload: StudentRegistrationApproval,
+    user: Profile = Depends(admin_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        approved = db.scalar(text("""
+            INSERT INTO bytequest_private.student_registration_roster AS roster (school_id, email)
+            SELECT :school_id, :email
+            WHERE NOT EXISTS (
+                SELECT 1 FROM public.profiles
+                WHERE role = 'student' AND school_id = :school_id
+            )
+            ON CONFLICT (school_id) DO UPDATE SET email = excluded.email
+            WHERE roster.claimed_by IS NULL
+            RETURNING school_id
+        """), payload.model_dump())
+    except IntegrityError as exc:
+        if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) != "student_registration_roster_email_key":
+            raise
+        raise HTTPException(status_code=409, detail="This email is already approved for another School ID.") from exc
+    if approved is None:
+        raise HTTPException(status_code=409, detail="This School ID is already attached to a student account.")
+    record_audit(db, actor=user, action="student_registration.approved", entity_type="student_registration",
+                 summary="Approved a school roster entry for student registration.")
+    db.commit()
+    return {"message": "Student sign-up approved for this School ID and email."}
 
 
 @router.post("/accounts", status_code=status.HTTP_201_CREATED)
@@ -615,7 +678,7 @@ def _assignment_rows(db: Session, *, course_id: uuid.UUID | None, role: str | No
     result = []
     for membership, profile, course in rows:
         if needle:
-            haystack = f"{profile.email or emails.get(profile.id) or ''} {profile.display_name or ''} {profile.pseudonym_id or ''} {course.code} {course.title}".casefold()
+            haystack = f"{profile.email or emails.get(profile.id) or ''} {profile.display_name or ''} {profile.username or ''} {course.code} {course.title}".casefold()
             if needle not in haystack:
                 continue
         result.append(
@@ -625,6 +688,7 @@ def _assignment_rows(db: Session, *, course_id: uuid.UUID | None, role: str | No
                 "email": profile.email or emails.get(profile.id),
                 "display_name": profile.display_name,
                 "pseudonym": profile.pseudonym_id,
+                "username": profile.username,
                 "account_role": _role_value(profile),
                 "account_status": profile.account_status,
                 "member_role": membership.member_role,
@@ -712,7 +776,7 @@ def create_assignment(payload: AssignmentCreate, user: Profile = Depends(admin_u
             detail={
                 "code": "duplicate_assignment",
                 "field": "profile_id",
-                "message": f"{profile.display_name or profile.pseudonym_id} already has active {payload.member_role} access to {course.title}.",
+                "message": f"{profile.display_name or profile.username} already has active {payload.member_role} access to {course.title}.",
             },
         )
     if existing is not None and existing.status == "pending":
@@ -746,7 +810,7 @@ def create_assignment(payload: AssignmentCreate, user: Profile = Depends(admin_u
         entity_type="course_member",
         entity_id=membership.id if membership.id else None,
         course_id=course.id,
-        summary=f"Assigned {profile.display_name or profile.pseudonym_id} as {payload.member_role} in {course.title}",
+        summary=f"Assigned {profile.display_name or profile.username} as {payload.member_role} in {course.title}",
     )
     db.commit()
     db.refresh(membership)
@@ -758,7 +822,7 @@ def create_assignment(payload: AssignmentCreate, user: Profile = Depends(admin_u
             "member_role": membership.member_role,
             "status": membership.status,
         },
-        "message": f"{profile.display_name or profile.pseudonym_id} now has {payload.member_role} access to {course.title}.",
+        "message": f"{profile.display_name or profile.username} now has {payload.member_role} access to {course.title}.",
     }
 
 
@@ -827,7 +891,7 @@ def _admin_material_items(db: Session) -> list[dict]:
         serialized.update(
             {
                 "course": {"id": str(course.id), "code": course.code, "title": course.title} if course else None,
-                "uploaded_by": (uploader.display_name or uploader.pseudonym_id) if uploader else "Deleted account",
+                "uploaded_by": (uploader.display_name or uploader.username) if uploader else "Deleted account",
                 "draft_count": material_draft_count(db, document.id),
                 "downloadable": bool(document.storage_path),
             }
@@ -856,6 +920,7 @@ def admin_materials(
         "items": visible,
         "total": len(visible),
         "counts": material_status_counts(current),
+        "max_upload_bytes": max_upload_bytes(db),
         "courses": [
             {"id": str(course.id), "code": course.code, "title": course.title}
             for course in db.query(Course).filter(Course.status == "active").order_by(Course.title).all()
@@ -1120,6 +1185,10 @@ def update_availability(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "invalid_schedule", "field": "closes_at", "message": "The closing time must be after the opening time."},
         )
+    closed_at = activity.closed_at
+    if payload.closed is not None:
+        closed_at = (activity.closed_at or datetime.now(timezone.utc)) if payload.closed else None
+    guard_solution_reopen(activity, closed_at=closed_at, closes_at=closes_at)
     activity.opens_at = opens_at
     activity.closes_at = closes_at
     if payload.closed is not None:
@@ -1213,8 +1282,9 @@ def monitoring(
     audit_search: Optional[str] = None,
     user: Profile = Depends(admin_user),
     db: Session = Depends(get_db),
+    sandbox: dict = Depends(sandbox_health),
 ):
-    services = service_health(db, request.app.state)
+    services = service_health(db, request.app.state, sandbox)
     jobs = job_query(db, service=service, status=job_status, search=search).all()
     documents = {
         document.id: document
@@ -1254,7 +1324,7 @@ def monitoring(
                 "entity_type": event.entity_type,
                 "entity_id": event.entity_id,
                 "summary": event.summary,
-                "actor": (actors.get(event.actor_id).display_name or actors.get(event.actor_id).pseudonym_id)
+                "actor": (actors.get(event.actor_id).display_name or actors.get(event.actor_id).username)
                 if event.actor_id in actors
                 else "System",
                 "created_at": iso(event.created_at),

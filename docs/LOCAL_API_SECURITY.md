@@ -6,6 +6,17 @@ browser sends a bearer token to FastAPI. Role decisions use the database
 session uses `sessionStorage` so closing the browser ends the local sign-in;
 shared-computer sign-out also clears local draft backups.
 
+## School-issued IDs for student sign-up
+
+In **Admin → Accounts → Approve student sign-up**, enter the School ID and
+email from the official enrollment roster. For example, `26-00005` is a valid
+ID format. An unclaimed approval can be corrected by saving it again with the
+same ID and the updated roster email. The roster is private. A successful
+student registration claims the matched ID and email in the same database
+transaction as profile creation. The student confirms their email before
+signing in. For local testing, open the confirmation email in Mailpit at
+`http://127.0.0.1:15434`.
+
 ## Access matrix
 
 | API family | Anonymous | Student | Instructor | Admin |
@@ -24,6 +35,14 @@ Foreign instructor resources return 404. A role mismatch on a non-resource
 endpoint returns 403. Student responses never include hidden test inputs or
 unreleased exam results. Research collection, shadow scoring, exports, and
 outbound mail remain disabled until their separate approval gates.
+
+Student chat and practice hint endpoints return `403` with `detail.code=exam_in_progress`
+while a timed exam or retake can still accept answers. This includes the final
+autosave grace period. Practice help resumes at submission or the answer cutoff.
+A blocked request preserves the student's per-challenge hint allowance. AI replies
+already being generated are checked again before delivery.
+
+Set `GEMINI_ENABLED=false` in `backend/.env.local` and restart the API to disable outbound Gemini calls, even if a provider key is present. This also pauses Gemini-powered authoring and embeddings. Reviewed hints, saved drafts, and Judge0 grading remain available. When enabled, chat sends conversation text and relevant course excerpts. An AI hint can send the student's sample code, visible diagnostics, and relevant course excerpts. New disabled AI hint requests return before consuming a reveal.
 
 ## Quotas and validation
 
@@ -49,8 +68,10 @@ from AI cost quotas: a failed AI hint spends provider quota, but not a hint.
 
 Idempotent job replays, duplicate-click recovery, worker retries, drafts,
 exam autosaves, and reads do not consume these quotas. All mutation JSON
-models reject unknown fields. Requests are limited to 12 MiB. PDFs are limited
-to 10 MiB, 100 pages, and 200,000 extracted characters before indexing.
+models reject unknown fields. Requests are limited to 12 MiB, with a 52 MiB
+multipart limit on PDF upload and replacement routes. Each PDF can be up to
+50 MiB, 100 pages, and 200,000 extracted characters. Admins can set a lower
+file-size limit for new uploads.
 
 ## Local verification and future deployment
 

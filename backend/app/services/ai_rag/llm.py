@@ -1,5 +1,6 @@
 import logging
-from typing import Type, TypeVar, Optional, List
+from time import perf_counter
+from typing import Type, TypeVar
 from google.genai import types
 from pydantic import BaseModel
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
@@ -8,6 +9,7 @@ from app.core.config import get_settings
 from app.services.ai_rag.gemini_client import GeminiConfigurationError, get_gemini_client
 
 logger = logging.getLogger(__name__)
+usage_logger = logging.getLogger("uvicorn.error.bytequest.gemini")
 settings = get_settings()
 T = TypeVar("T", bound=BaseModel)
 
@@ -46,7 +48,7 @@ class GeminiLLMService:
                     system_instruction=system_instruction,
                     temperature=temperature,
                     response_mime_type="application/json",
-                    response_schema=response_schema,
+                    response_json_schema=response_schema.model_json_schema(),
                 ),
             )
 
@@ -56,8 +58,12 @@ class GeminiLLMService:
             return response_schema.model_validate_json(response.text)
 
         except Exception as exc:
-            logger.error(f"Gemini generation failed with model {model_id}: {exc}")
-            raise GeminiAPIError(f"Gemini generation error: {exc}") from exc
+            logger.warning(
+                "Gemini structured generation failed with model %s (%s).",
+                model_id,
+                type(exc).__name__,
+            )
+            raise GeminiAPIError("Gemini structured generation failed.") from None
 
     @staticmethod
     def generate_chat(
@@ -65,10 +71,16 @@ class GeminiLLMService:
         system_instruction: str,
         max_output_tokens: int,
         temperature: float = 0.4,
+        *,
+        thinking_level: str | None = None,
+        mode: str = "chat",
     ) -> str:
-        """Generate a short plain-text tutoring reply from bounded conversation turns."""
+        """Generate a plain-text tutoring reply and record provider usage."""
         model_id = settings.GEMINI_MODEL_ID
         client = get_gemini_client()
+        thinking_config = None
+        if thinking_level and model_id.removeprefix("models/") == "gemini-3.5-flash-lite":
+            thinking_config = types.ThinkingConfig(thinking_level=types.ThinkingLevel(thinking_level.upper()))
 
         contents = [
             types.Content(
@@ -79,6 +91,7 @@ class GeminiLLMService:
         ]
 
         try:
+            started = perf_counter()
             response = client.models.generate_content(
                 model=model_id,
                 contents=contents,
@@ -86,8 +99,24 @@ class GeminiLLMService:
                     system_instruction=system_instruction,
                     temperature=temperature,
                     max_output_tokens=max_output_tokens,
+                    thinking_config=thinking_config,
                 ),
             )
+            usage = response.usage_metadata
+            finish = response.candidates[0].finish_reason if response.candidates else None
+            metrics = {
+                "model": model_id,
+                "mode": mode,
+                "input_tokens": usage.prompt_token_count if usage else None,
+                "output_tokens": usage.candidates_token_count if usage else None,
+                "thinking_tokens": (usage.thoughts_token_count or 0) if usage else None,
+                "cached_input_tokens": (usage.cached_content_token_count or 0) if usage else None,
+                "latency_ms": round((perf_counter() - started) * 1_000),
+                "finish_reason": finish.value if finish else None,
+                "max_output_tokens": max_output_tokens,
+                "hit_token_limit": finish == types.FinishReason.MAX_TOKENS,
+            }
+            usage_logger.info("Gemini tutor usage %s", metrics, extra={"gemini_usage": metrics})
             text = (response.text or "").strip()
             if not text:
                 raise GeminiAPIError("Gemini returned an empty chat response.")

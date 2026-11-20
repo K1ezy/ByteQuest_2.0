@@ -2,7 +2,6 @@
 
 import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { signOutSharedComputer } from "@/lib/supabase";
 
 /**
  * One sign-out path for every entry point (account menus and Journey view).
@@ -22,6 +21,8 @@ export function useSignOut() {
     setError("");
 
     try {
+      // Imported on demand: a static import pulls @supabase/supabase-js into every route's shared bundle.
+      const { signOutSharedComputer } = await import("@/lib/supabase");
       await signOutSharedComputer(router);
     } catch {
       setError("Could not sign out cleanly. Please try again.");

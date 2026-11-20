@@ -1,19 +1,42 @@
 "use client";
 
-import React, { useState, useId, useEffect, FormEvent, Suspense } from "react";
+import React, { useState, useId, useEffect, useRef, FormEvent, Suspense } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { Session } from "@supabase/supabase-js";
-import { SiteHeader } from "@/components/site-header";
+import type { Session } from "@supabase/auth-js";
+import { AppShell } from "@/components/app-shell";
+import { destinationFor } from "@/components/home-redirect";
+import { authReturnTo, roleLabels } from "@/lib/navigation";
 import { apiRequest, getAuthErrorMessage, getErrorMessage } from "@/lib/api";
 import { clearSharedComputerData, getSupabase } from "@/lib/supabase";
+import { signUpStudent } from "@/lib/student-signup";
+import { formatStudentSchoolId, STUDENT_SCHOOL_ID_ERROR, STUDENT_SCHOOL_ID_PATTERN } from "@/lib/school-id";
 import { usePasswordReset } from "@/hooks/use-password-reset";
 import type { Profile, ProgrammingLanguage } from "@/lib/types";
-import { LegalModal } from "@/components/legal-modal";
-import type { LegalKind } from "@/components/legal-document";
+import { SignupAgreement } from "@/components/signup-agreement";
 
-type AuthMode = "signin" | "signup" | "reset-request" | "reset-update";
+type AuthMode = "choices" | "signin" | "roles" | "signup" | "faculty-info" | "admin-info" | "agreement" | "reset-request" | "reset-update";
+
+function SchoolIdInput({ value, onChange, student = false }: { value: string; onChange: (value: string) => void; student?: boolean }) {
+  return (
+    <div>
+      <label htmlFor="auth-school-id" className="auth-label">School ID</label>
+      <input id="auth-school-id" className="auth-input" type="text" required maxLength={student ? 8 : 64}
+        pattern={student ? STUDENT_SCHOOL_ID_PATTERN : ".*\\S.*"}
+        inputMode={student ? "numeric" : undefined}
+        aria-describedby={student ? "auth-school-id-help" : undefined}
+        title={student ? STUDENT_SCHOOL_ID_ERROR : undefined}
+        value={value} onChange={(event) => {
+          const next = student ? formatStudentSchoolId(event.target.value) : event.target.value;
+          if (next !== null) onChange(next);
+        }} />
+      {student && <p id="auth-school-id-help" className="auth-field-help">
+        Use your school-issued ID, for example 26-00001, and the email on your school roster.
+      </p>}
+    </div>
+  );
+}
 
 interface PasswordInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label: string;
@@ -31,7 +54,7 @@ function PasswordInput({ label, id, ...props }: PasswordInputProps) {
     <div>
       <label
         htmlFor={inputId}
-        className="block text-xs font-bold text-slate-800 mb-1.5"
+        className="auth-label"
       >
         {label}
       </label>
@@ -40,7 +63,7 @@ function PasswordInput({ label, id, ...props }: PasswordInputProps) {
           {...props}
           id={inputId}
           type={showPassword ? "text" : "password"}
-          className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 pr-12 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#156046] focus:outline-none"
+          className="auth-input auth-input-password"
         />
         <button
           type="button"
@@ -91,28 +114,41 @@ function OnboardingContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const returnTo = searchParams.get("redirect");
   const isChangeTrackMode = searchParams.get("mode") === "change_track";
   const isInstructorMode = searchParams.get("mode") === "instructor";
+  const isSignInMode = searchParams.get("mode") === "signin";
   const isRecoveryMode = searchParams.get("mode") === "reset";
+  const isInviteMode = searchParams.get("mode") === "invite";
   const isResetSuccess = searchParams.get("reset") === "success";
   const emailEnabled = process.env.NEXT_PUBLIC_EMAIL_ENABLED === "true";
 
   // Toggle between unauthenticated Auth view and post-login Learning Track view
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [authMode, setAuthMode] = useState<AuthMode>(isRecoveryMode ? "reset-update" : isInstructorMode || isResetSuccess ? "signin" : "signup");
-  const [legalKind, setLegalKind] = useState<LegalKind | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode>(isRecoveryMode || isInviteMode ? "reset-update" : isInstructorMode || isSignInMode || isResetSuccess ? "signin" : "choices");
+  const authHeading = useRef<HTMLHeadingElement>(null);
+  const focusNextScreen = useRef(false);
+  const authPending = useRef(false);
 
   // Authentication & session states
   const [session, setSession] = useState<Session | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
-  const [, setProfile] = useState<Profile | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
 
   // Form states
   const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [schoolId, setSchoolId] = useState("");
+  const [signupYear, setSignupYear] = useState("");
+  const [blockSection, setBlockSection] = useState("");
+  const [registrationRole, setRegistrationRole] = useState<"student" | "instructor">("student");
+  const staffSelfSignup = process.env.NEXT_PUBLIC_LOCAL_STAFF_REGISTRATION === "true";
+  const [inviteRole, setInviteRole] = useState<Profile["role"] | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
+  const [signupEmailExists, setSignupEmailExists] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // Supabase Auth recovery link flow
@@ -142,8 +178,16 @@ function OnboardingContent() {
         if (error) throw error;
         if (data.session && active) {
           setSession(data.session);
-          if (isRecoveryMode) {
+          if (isRecoveryMode || isInviteMode) {
             setAuthMode("reset-update");
+            if (isInviteMode) {
+              try {
+                const invitedProfile = await apiRequest<Profile>("/profile/me");
+                if (active) setInviteRole(invitedProfile.role);
+              } catch (error) {
+                if (active) setResetError(getErrorMessage(error));
+              }
+            }
             return;
           }
           if (data.session.user.email) {
@@ -164,26 +208,19 @@ function OnboardingContent() {
                 setSemester(String(userProfile.semester));
               }
 
-              // Directive #8: Returning students with saved tracks bypass onboarding unless explicitly changing track
-              if (userProfile.enrolled_language && !isChangeTrackMode) {
-                if (userProfile.role === "instructor" || userProfile.role === "admin") {
-                  router.replace(userProfile.role === "admin" ? "/admin" : "/faculty");
-                  return;
-                }
-                router.replace("/dashboard");
-                return;
-              }
-
-              if ((userProfile.role === "instructor" || userProfile.role === "admin") && !isChangeTrackMode) {
-                router.replace(userProfile.role === "admin" ? "/admin" : "/faculty");
+              if (isChangeTrackMode && userProfile.role !== "student") return;
+              if (userProfile.role !== "student" || (!userProfile.needs_track_setup && !isChangeTrackMode)) {
+                router.replace(authReturnTo(userProfile, returnTo) ?? destinationFor(userProfile));
                 return;
               }
 
               setIsAuthenticated(true);
             }
-          } catch {
+          } catch (error) {
             if (active) {
-              setIsAuthenticated(true);
+              setIsError(true);
+              setStatusMessage(getErrorMessage(error));
+              setAuthMode("signin");
             }
           }
         }
@@ -212,27 +249,55 @@ function OnboardingContent() {
       active = false;
       listener.subscription.unsubscribe();
     };
-  }, [router, isChangeTrackMode, isRecoveryMode]);
+  }, [router, isChangeTrackMode, isRecoveryMode, isInviteMode, setResetError, returnTo]);
 
-  const handleAuthSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  function changeAuthMode(mode: AuthMode) {
     setStatusMessage(null);
     setIsError(false);
+    setResetError(null);
+    setResetStatusMessage(null);
+    if (mode !== "agreement" && !(authMode === "agreement" && mode === "signup")) setPassword("");
+    focusNextScreen.current = true;
+    setAuthMode(mode);
+  }
+
+  useEffect(() => {
+    if (focusNextScreen.current) {
+      authHeading.current?.focus();
+      focusNextScreen.current = false;
+    }
+  }, [authMode]);
+
+  const handleAuthSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    if (authMode === "signup") changeAuthMode("agreement");
+    if (authMode === "signin") void authenticate(false);
+  };
+
+  async function authenticate(createAccount: boolean) {
+    if (authPending.current) return;
+    authPending.current = true;
+    setStatusMessage(null);
+    setIsError(false);
+    setSignupEmailExists(false);
     setBusy(true);
 
     try {
       const supabase = getSupabase();
       const trimmedEmail = email.trim();
       const result =
-        authMode === "signup"
-          ? await supabase.auth.signUp({ email: trimmedEmail, password })
+        createAccount
+          ? await signUpStudent(trimmedEmail, password, username, {
+            schoolId, yearLevel: Number(signupYear), blockSection,
+            ...(registrationRole === "student" ? {} : { role: registrationRole }),
+          })
           : await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
 
       if (result.error) throw result.error;
 
-      if (authMode === "signup" && !result.data.session) {
+      if (createAccount && !result.data.session) {
+        changeAuthMode("signin");
         setStatusMessage("Check your email to confirm the account, then sign in. Local emails appear in Supabase Inbucket.");
-        setAuthMode("signin");
         return;
       }
 
@@ -253,28 +318,31 @@ function OnboardingContent() {
             setSemester(String(userProfile.semester));
           }
 
-          if (userProfile.role === "instructor" || userProfile.role === "admin") {
-            router.push(userProfile.role === "admin" ? "/admin" : "/faculty");
+          if (isChangeTrackMode && userProfile.role !== "student") return;
+          if (userProfile.role !== "student" || (!userProfile.needs_track_setup && !isChangeTrackMode)) {
+            router.push(authReturnTo(userProfile, returnTo) ?? destinationFor(userProfile));
             return;
           }
-
-          if (userProfile.enrolled_language && !isChangeTrackMode) {
-            router.push("/dashboard");
-            return;
-          }
-        } catch {
-          // If profile fetch fails or first-time student, proceed to track selection
+        } catch (error) {
+          changeAuthMode("signin");
+          setIsError(true);
+          setStatusMessage(getErrorMessage(error));
+          return;
         }
 
         setIsAuthenticated(true);
       }
     } catch (err) {
+      const existingEmail = createAccount && typeof err === "object" && err !== null && "code" in err
+        && (err.code === "user_already_exists" || err.code === "email_exists");
+      setSignupEmailExists(existingEmail);
       setIsError(true);
-      setStatusMessage(getAuthErrorMessage(err));
+      setStatusMessage(existingEmail ? "An account already uses this email. Sign in or reset your password to continue." : getAuthErrorMessage(err));
     } finally {
+      authPending.current = false;
       setBusy(false);
     }
-  };
+  }
 
   const handleSendResetCode = async (e: FormEvent) => {
     e.preventDefault();
@@ -283,6 +351,26 @@ function OnboardingContent() {
 
   const handleVerifyReset = async (e: FormEvent) => {
     e.preventDefault();
+    if (!session || (isInviteMode && !inviteRole) || authPending.current) return;
+    authPending.current = true;
+    setBusy(true);
+    try {
+      if (isInviteMode && inviteRole !== "student") {
+        setResetError(null);
+        await apiRequest<void>("/profile/staff-setup", {
+          method: "PUT", body: JSON.stringify({ school_id: schoolId.trim() }),
+        });
+      }
+      await finishPasswordSetup();
+    } catch (error) {
+      setResetError(getErrorMessage(error));
+    } finally {
+      authPending.current = false;
+      setBusy(false);
+    }
+  };
+
+  async function finishPasswordSetup() {
     const success = await updatePassword(newPassword);
     if (success) {
       setPassword("");
@@ -290,7 +378,7 @@ function OnboardingContent() {
       router.replace("/onboarding?mode=signin&reset=success");
       setAuthMode("signin");
     }
-  };
+  }
 
   const handleSaveTrack = async (e: FormEvent) => {
     e.preventDefault();
@@ -308,11 +396,7 @@ function OnboardingContent() {
         }),
       });
       setProfile(value);
-      if (value.role === "instructor" || value.role === "admin") {
-        router.push(value.role === "admin" ? "/admin" : "/faculty");
-      } else {
-        router.push("/dashboard");
-      }
+      router.push(authReturnTo(value, returnTo) ?? destinationFor(value));
     } catch (err) {
       setIsError(true);
       setStatusMessage(getErrorMessage(err));
@@ -354,29 +438,36 @@ function OnboardingContent() {
     );
   }
 
+  if (isChangeTrackMode && profile && profile.role !== "student") {
+    return (
+      <AppShell profile={profile}>
+        <section className="panel">
+          <h1>Learning tracks are for students</h1>
+          <p>You are signed in as an {roleLabels[profile.role]}.</p>
+          <Link className="button button-primary" href={destinationFor(profile)}>Back to your workspace</Link>
+        </section>
+      </AppShell>
+    );
+  }
+
   // Active feedback messages
   const isResetFlow = authMode === "reset-request" || authMode === "reset-update";
-  const displayStatus = isResetSuccess
-    ? "Password updated successfully. Please sign in with your new password."
+  const isStaffInfo = authMode === "faculty-info" || authMode === "admin-info";
+  const displayStatus = isResetSuccess && authMode === "signin" && !statusMessage
+    ? "Password saved. Sign in with your new password."
     : isResetFlow
     ? resetStatusMessage
     : (!isError ? statusMessage : null);
   const displayError = isResetFlow ? resetError : (isError ? statusMessage : null);
 
-  return (
-    <div className="min-h-screen bg-[#f7f9f7] flex flex-col">
-      {/* Directive #1: Top navigation bar is ONLY shown after logging in */}
-      {isAuthenticated && <SiteHeader isAuthenticated={true} />}
+  const content = (
+    <div className={isAuthenticated ? "" : "auth-page"}>
 
-      <main
-        id="main-content"
-        className="flex flex-1 flex-col items-center justify-center px-4 py-10"
-      >
+      <div className="auth-stage" id={isAuthenticated ? undefined : "main-content"}>
         {!isAuthenticated ? (
           /* ================= AUTHENTICATION VIEW (No Top Navbar) ================= */
-          <div className="w-full max-w-md">
-            {/* Minimal centered brand identity (Hick's Law) */}
-            <div className="auth-brand-header mb-6 flex flex-col items-center text-center">
+          <section className={`auth-form-card${authMode === "agreement" ? " auth-form-card-wide" : ""}`} aria-labelledby="auth-heading">
+            <div className="auth-brand-header">
               <Link href="/" className="auth-brand-link" aria-label="ByteQuest home" data-tooltip="Go to the ByteQuest home page.">
                 <Image
                   src="/branding/ByteQuest_title.svg"
@@ -388,23 +479,29 @@ function OnboardingContent() {
                 />
               </Link>
 
-              <h1 className={`text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900${authMode === "signup" ? " auth-signup-title" : ""}`}>
-                {authMode === "signup" && "Create your account"}
+              <h1 id="auth-heading" ref={authHeading} tabIndex={-1}>
+                {authMode === "choices" && "Welcome to ByteQuest"}
+                {authMode === "agreement" && "Review the terms and privacy policy"}
+                {(authMode === "roles" || authMode === "signup") && "Create your ByteQuest account"}
+                {isStaffInfo && (authMode === "faculty-info" ? "Instructor account" : "Administrator account")}
                 {authMode === "signin" && "Welcome back"}
-                {(authMode === "reset-request" || authMode === "reset-update") && "Reset your password"}
+                {isResetFlow && (isInviteMode && authMode === "reset-update" ? "Set your account password" : "Reset your password")}
               </h1>
-              {authMode !== "signup" && (
+              {authMode !== "agreement" && (
                 <p className="mt-1.5 text-sm text-slate-600">
-                  {authMode === "signin" && "Sign in to continue your programming quest map."}
+                  {authMode === "choices" && "Sign in or choose your role to get started."}
+                  {authMode === "roles" && "Choose your role."}
+                  {authMode === "signin" && "Use the email address associated with your account."}
+                  {authMode === "signup" && "You’ll review the terms and privacy policy before creating your account."}
                   {authMode === "reset-request" && "Enter your email to receive a secure recovery link."}
-                  {authMode === "reset-update" && "Choose a new password for your account."}
+                  {authMode === "reset-update" && (isInviteMode ? "Choose a password for your invited account." : "Choose a new password for your account.")}
                 </p>
               )}
             </div>
 
-            <div className="auth-form-card rounded-2xl border border-slate-200/90 bg-white p-6 sm:p-7 shadow-sm">
+            <div className="auth-card-body">
               {/* Dynamic accessible feedback banner */}
-              {(displayStatus || displayError) && (
+              {authMode !== "agreement" && (displayStatus || displayError) && (
                 <div
                   role="status"
                   aria-live="polite"
@@ -418,13 +515,64 @@ function OnboardingContent() {
                 </div>
               )}
 
-              {/* Sign Up / Sign In Form */}
+              {authMode === "choices" && (
+                <div className="auth-choice-actions">
+                  <button type="button" onClick={() => changeAuthMode("signin")}
+                    className="auth-action auth-primary-button">Sign in</button>
+                  <button type="button" onClick={() => changeAuthMode("roles")}
+                    className="auth-action auth-secondary-button">Sign up</button>
+                  {!staffSelfSignup && <p className="auth-role-note">Instructor and administrators join by invitation and use the same sign-in.</p>}
+                </div>
+              )}
+
+              {authMode === "roles" && (
+                <div className="auth-choice-actions">
+                  <button type="button" className="auth-action auth-secondary-button" onClick={() => { setRegistrationRole("student"); changeAuthMode("signup"); }}>Student</button>
+                  <button type="button" className="auth-action auth-secondary-button" onClick={() => { setRegistrationRole("instructor"); changeAuthMode(staffSelfSignup ? "signup" : "faculty-info"); }}>Instructor</button>
+                  <button type="button" className="auth-action auth-secondary-button" onClick={() => changeAuthMode("admin-info")}>Administrator</button>
+                  <button type="button" className="auth-text-action auth-purple-action auth-back-action" onClick={() => changeAuthMode("choices")}>Back to menu</button>
+                </div>
+              )}
+
+              {isStaffInfo && (
+                <div className="auth-choice-actions">
+                  <p>{authMode === "faculty-info"
+                    ? "Give your institutional email and the course you’ll manage to your school’s ByteQuest administrator."
+                    : "Give your work email to an existing ByteQuest administrator."}</p>
+                  <p>Once your administrator sends the invitation, open the email and enter your School ID and a new password.</p>
+                  {authMode === "admin-info" && staffSelfSignup && (
+                    <p>For local setup, register as a student and run <code>infra/grant-local-instructor.ps1 -Role admin</code> with your signup email.</p>
+                  )}
+                  <button type="button" className="auth-action auth-primary-button" onClick={() => changeAuthMode("signin")}>Sign in</button>
+                  <button type="button" className="auth-text-action auth-purple-action auth-back-action" onClick={() => changeAuthMode("roles")}>Back to roles</button>
+                </div>
+              )}
+
+              {authMode === "agreement" && (
+                <SignupAgreement busy={busy} error={displayError} onAgree={() => void authenticate(true)}
+                  onDisagree={() => changeAuthMode("signup")}
+                  recoveryActions={signupEmailExists && displayError ? <>
+                    <button type="button" className="auth-text-action auth-purple-action" onClick={() => changeAuthMode("signin")}>Sign in</button>
+                    <button type="button" className="auth-text-action auth-purple-action" onClick={() => changeAuthMode("reset-request")}>Reset password</button>
+                  </> : null} />
+              )}
+
               {(authMode === "signup" || authMode === "signin") && (
-                <form onSubmit={handleAuthSubmit} className="space-y-4">
+                <form key={authMode} onSubmit={handleAuthSubmit} className="space-y-4">
+                  {authMode === "signup" && <div>
+                    <label htmlFor="auth-username" className="auth-label">Username</label>
+                    <input id="auth-username" type="text" required minLength={3} maxLength={44}
+                      pattern="[A-Za-z]{3,44}" autoComplete="username" value={username}
+                      onChange={(event) => setUsername(event.target.value)}
+                      aria-describedby="auth-username-help"
+                      placeholder="Your public username"
+                      className="auth-input" />
+                    <p id="auth-username-help" className="auth-field-help">3–44 letters only. Your username is public and can be changed later.</p>
+                  </div>}
                   <div>
                     <label
                       htmlFor="auth-email"
-                      className="block text-xs font-bold text-slate-800 mb-1.5"
+                      className="auth-label"
                     >
                       Email address
                     </label>
@@ -436,99 +584,56 @@ function OnboardingContent() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="you@example.edu"
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#156046] focus:outline-none"
+                      className="auth-input"
                     />
                   </div>
 
                   <PasswordInput
                     label="Password"
                     required
-                    minLength={6}
+                    minLength={authMode === "signup" ? 8 : undefined}
+                    aria-describedby={authMode === "signup" ? "auth-password-help" : undefined}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     autoComplete={authMode === "signup" ? "new-password" : "current-password"}
-                    placeholder="At least 6 characters"
                   />
+                  {authMode === "signup" && <p id="auth-password-help" className="auth-field-help">Use at least 8 characters.</p>}
+                  {authMode === "signup" && <>
+                    <SchoolIdInput value={schoolId} onChange={setSchoolId} student={registrationRole === "student"} />
+                    {registrationRole === "student" && <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label htmlFor="signup-year" className="auth-label">Year level</label>
+                        <select id="signup-year" required className="auth-input" value={signupYear} onChange={(event) => setSignupYear(event.target.value)}>
+                          <option value="" disabled>Select year</option>
+                          {[1, 2, 3, 4].map((year) => <option key={year} value={year}>Year {year}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label htmlFor="signup-block" className="auth-label">Block section</label>
+                        <select id="signup-block" required className="auth-input" value={blockSection} onChange={(event) => setBlockSection(event.target.value)}>
+                          <option value="" disabled>Select block</option>
+                          {["A", "B", "C", "D", "E", "F"].map((block) => <option key={block} value={block}>{block}</option>)}
+                        </select>
+                      </div>
+                    </div>}
+                  </>}
 
                   <button
                     type="submit"
                     disabled={busy}
-                    className="auth-primary-button w-full rounded-xl py-3 text-sm font-bold text-white shadow-xs transition disabled:opacity-60"
+                    className="auth-action auth-primary-button"
                   >
-                    {busy ? "Please wait…" : authMode === "signup" ? "Create account" : "Sign in"}
+                    {busy ? (authMode === "signup" ? "Please wait…" : "Signing in…") : authMode === "signup" ? "Continue" : "Sign in"}
                   </button>
 
-                  {/* Mode Switcher */}
                   <div className="space-y-2 pt-1 text-center text-xs text-slate-600">
-                    {authMode === "signup" ? (
-                      <p>
-                        Already have an account?{" "}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setStatusMessage(null);
-                            setIsError(false);
-                            setResetError(null);
-                            setResetStatusMessage(null);
-                            setAuthMode("signin");
-                          }}
-                          className="auth-text-action auth-purple-action"
-                        >
-                          Sign in here
-                        </button>
-                      </p>
-                    ) : (
-                      <p>
-                        Need a student account?{" "}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setStatusMessage(null);
-                            setIsError(false);
-                            setResetError(null);
-                            setResetStatusMessage(null);
-                            setAuthMode("signup");
-                          }}
-                          className="auth-text-action auth-purple-action"
-                        >
-                          Create account
-                        </button>
-                      </p>
-                    )}
-                    {authMode === "signup" && (
-                      <p>
-                        Forgot password?{" "}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setStatusMessage(null);
-                            setIsError(false);
-                            setResetError(null);
-                            setResetStatusMessage(null);
-                            setAuthMode("reset-request");
-                          }}
-                          className="auth-text-action auth-purple-action"
-                        >
-                          Reset it here
-                        </button>
-                      </p>
-                    )}
+                    {authMode !== "signup" && <p>Forgot password?{" "}<button type="button" disabled={busy}
+                      onClick={() => changeAuthMode("reset-request")} className="auth-text-action auth-purple-action">
+                      Reset it here
+                    </button></p>}
+                    <button type="button" disabled={busy} onClick={() => changeAuthMode(authMode === "signup" ? "roles" : "choices")}
+                      className="auth-text-action auth-purple-action auth-back-action">{authMode === "signup" ? "Back to roles" : "Back to menu"}</button>
                   </div>
-
-                  {/* Directives #2 & #3: Terms of Service & Privacy Policy Notice */}
-                  <p className="auth-legal-copy border-t border-slate-100 pt-3.5 text-center text-[11px] leading-relaxed text-slate-500">
-                    By creating an account, I accept the{" "}
-                    <button type="button" onClick={() => setLegalKind("terms")}
-                      className="auth-text-action auth-purple-action">
-                      Terms of Service
-                    </button>{" "}
-                    and{" "}
-                    <button type="button" onClick={() => setLegalKind("privacy")}
-                      className="auth-text-action auth-purple-action">
-                      Privacy Policy
-                    </button>{" "}
-                    of ByteQuest.
-                  </p>
                 </form>
               )}
 
@@ -549,7 +654,7 @@ function OnboardingContent() {
                   <div>
                     <label
                       htmlFor="reset-email"
-                      className="block text-xs font-bold text-slate-800 mb-1.5"
+                      className="auth-label"
                     >
                       Registered email address
                     </label>
@@ -561,14 +666,14 @@ function OnboardingContent() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="you@example.edu"
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#156046] focus:outline-none"
+                      className="auth-input"
                     />
                   </div>
 
                   <button
                     type="submit"
                     disabled={isResetLoading}
-                    className="w-full rounded-xl bg-[#156046] py-3 text-sm font-bold text-white shadow-xs transition hover:bg-[#114f39] disabled:opacity-60"
+                    className="auth-action auth-primary-button"
                   >
                     {isResetLoading ? "Sending link…" : "Send recovery link"}
                   </button>
@@ -580,7 +685,7 @@ function OnboardingContent() {
                       setResetStatusMessage(null);
                       setAuthMode("signin");
                     }}
-                    className="auth-text-action auth-purple-action auth-back-action text-xs"
+                    className="auth-text-action auth-purple-action auth-back-action"
                   >
                     ← Back to sign in
                   </button>
@@ -590,33 +695,36 @@ function OnboardingContent() {
               {/* Password recovery link returns here with a Supabase recovery session. */}
               {authMode === "reset-update" && (
                 <form onSubmit={handleVerifyReset} className="space-y-4">
+                  {isInviteMode && session?.user.email && <p className="auth-field-help">Invited email: {session.user.email}</p>}
+                  {isInviteMode && inviteRole && inviteRole !== "student" && <SchoolIdInput value={schoolId} onChange={setSchoolId} />}
                   <PasswordInput
                     label="New password"
                     required
-                    minLength={6}
+                    minLength={8}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     autoComplete="new-password"
-                    placeholder="At least 6 characters"
+                    placeholder="At least 8 characters"
                   />
 
+                  {!session && <p role="status" className="auth-field-help">Open a valid {isInviteMode ? "invitation" : "password reset"} link from your email to continue.</p>}
                   <button
                     type="submit"
-                    disabled={isResetLoading}
-                    className="w-full rounded-xl bg-[#156046] py-3 text-sm font-bold text-white shadow-xs transition hover:bg-[#114f39] disabled:opacity-60"
+                    disabled={busy || isResetLoading || !session || (isInviteMode && !inviteRole)}
+                    className="auth-action auth-primary-button"
                   >
-                    {isResetLoading ? "Updating password…" : "Update password"}
+                    {busy || isResetLoading ? "Saving…" : isInviteMode ? "Set password" : "Update password"}
                   </button>
+                  {!session && <button type="button" onClick={() => changeAuthMode("signin")} className="auth-text-action auth-purple-action auth-back-action">Back to sign in</button>}
                 </form>
               )}
             </div>
-          </div>
+          </section>
         ) : (
           /* ================= LEARNING TRACK VIEW (Post-Login) ================= */
-          <div className="w-full max-w-md">
-            {/* Directive #6: Removed "YOUR BYTEQUEST ACCOUNT" eyebrow text */}
-            <div className="mb-6 text-center">
-              <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
+          <section className="auth-form-card" aria-labelledby="auth-track-heading">
+            <div className="auth-brand-header">
+              <h1 id="auth-track-heading">
                 Choose your learning track
               </h1>
               <p className="mt-1.5 text-sm text-slate-600">
@@ -630,16 +738,8 @@ function OnboardingContent() {
 
             <form
               onSubmit={handleSaveTrack}
-              className="rounded-2xl border border-slate-200/90 bg-white p-6 sm:p-7 shadow-sm space-y-5"
+              className="space-y-5"
             >
-              <div className="flex items-center gap-2">
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#156046] text-[11px] font-bold text-white">
-                  2
-                </span>
-                <span className="font-mono text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Learning Track
-                </span>
-              </div>
 
               {statusMessage && (
                 <div
@@ -659,7 +759,7 @@ function OnboardingContent() {
               <div>
                 <label
                   htmlFor="language-track"
-                  className="block text-xs font-bold text-slate-800 mb-1.5"
+                  className="auth-label"
                 >
                   Programming language track
                 </label>
@@ -667,7 +767,7 @@ function OnboardingContent() {
                   id="language-track"
                   value={languageTrack}
                   onChange={(e) => setLanguageTrack(e.target.value as ProgrammingLanguage)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 focus:border-[#156046] focus:outline-none"
+                  className="auth-input"
                 >
                   <option value="python">Python — General &amp; Data Science</option>
                   <option value="cpp">C++ — Systems &amp; Algorithms</option>
@@ -679,7 +779,7 @@ function OnboardingContent() {
                 <div>
                   <label
                     htmlFor="year-level"
-                    className="block text-xs font-bold text-slate-800 mb-1.5"
+                    className="auth-label"
                   >
                     Year level
                   </label>
@@ -687,7 +787,7 @@ function OnboardingContent() {
                     id="year-level"
                     value={yearLevel}
                     onChange={(e) => setYearLevel(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 focus:border-[#156046] focus:outline-none"
+                    className="auth-input"
                   >
                     <option value="1">Year 1</option>
                     <option value="2">Year 2</option>
@@ -699,7 +799,7 @@ function OnboardingContent() {
                 <div>
                   <label
                     htmlFor="semester"
-                    className="block text-xs font-bold text-slate-800 mb-1.5"
+                    className="auth-label"
                   >
                     Semester
                   </label>
@@ -707,7 +807,7 @@ function OnboardingContent() {
                     id="semester"
                     value={semester}
                     onChange={(e) => setSemester(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 focus:border-[#156046] focus:outline-none"
+                    className="auth-input"
                   >
                     <option value="1">Semester 1</option>
                     <option value="2">Semester 2</option>
@@ -715,24 +815,15 @@ function OnboardingContent() {
                 </div>
               </div>
 
-              <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5 text-xs">
-                <p className="font-bold text-slate-800">
-                  <span className="text-[#156046]">✦</span> Private &amp; course-aligned
-                </p>
-                <p className="mt-1 leading-relaxed text-slate-600">
-                  Quests are matched to your curriculum. Your leaderboard identity
-                  uses a pseudonym so your progress remains private.
-                </p>
-              </div>
-
               <button
                 type="submit"
                 disabled={busy}
-                className="w-full rounded-xl bg-[#156046] py-3 text-sm font-bold text-white shadow-xs transition hover:bg-[#114f39] disabled:opacity-60"
+                className="auth-action auth-primary-button"
               >
                 {busy ? "Saving track…" : "Save and open quests →"}
               </button>
 
+              {isChangeTrackMode && <Link href="/dashboard" className="button button-outline">Cancel</Link>}
               <div className="text-center">
                 <button
                   type="button"
@@ -746,10 +837,10 @@ function OnboardingContent() {
 
               {/* Directive #7: Removed "Account ready. Choose your learning track to continue." banner */}
             </form>
-          </div>
+          </section>
         )}
-      </main>
-      {legalKind && <LegalModal kind={legalKind} onClose={() => setLegalKind(null)} />}
+      </div>
     </div>
   );
+  return isAuthenticated && profile ? <AppShell profile={profile}>{content}</AppShell> : content;
 }

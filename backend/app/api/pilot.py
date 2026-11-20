@@ -1,12 +1,12 @@
 """Student pilot dashboard, synced drafts, limited hints, and research choices."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -16,14 +16,24 @@ from app.core.security import get_current_user, require_instructor
 from app.models.entities import (
     ActivityAttempt, ActivityDraft, ActivityKind, ChallengeHint, HintUse,
     LearningActivity, Profile, ResearchConsent, ReviewState, SubmissionJob, UserRole,
-    Exam, ExamAssignment, ExamAttempt, QuestGroupMember,
+    QuestGroupMember,
     NotificationOutbox,
     QuestGroup, QuestGroupActivity,
+    Course, CourseAnnouncement, _utcnow,
 )
 from app.services.ai_rag.error_explainer import explain_code_error
-from app.services.ai_rag.gemini_client import GeminiConfigurationError
+from app.services.ai_rag.retrieval import passages_block, tutoring_document_ids, tutoring_passages, validate_tutor_citations
+from app.services.ai_rag.solution_guard import WITHHELD_HINT, reveals_solution
+from app.services.ai_rag.gemini_client import GEMINI_DISABLED
 from app.services.gamification.sequencer import determine_track_recommendation
-from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.course_access import active_membership_course_ids
+from app.services.attempt_visibility import (
+    activity_is_closed,
+    learner_visible_attempt_clause,
+    student_visible_activity_clause,
+    workshop_shareable_activity_clause,
+)
+from app.api.exams import next_due_exam, require_practice_help_available
 
 router = APIRouter(prefix="/api/v1/pilot", tags=["Classroom Pilot"])
 
@@ -39,6 +49,7 @@ def challenge(db: Session, activity_id: uuid.UUID, user: Profile) -> LearningAct
         LearningActivity.activity_type == ActivityKind.challenge,
         LearningActivity.review_status == ReviewState.published,
         LearningActivity.language == user.enrolled_language,
+        student_visible_activity_clause(user.id),
     ).first()
     if activity is None:
         raise HTTPException(404, "Published challenge not found on your track.")
@@ -48,6 +59,35 @@ def challenge(db: Session, activity_id: uuid.UUID, user: Profile) -> LearningAct
 class DraftPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_code: str = Field(max_length=50_000)
+
+
+@router.get("/announcements")
+def student_announcements(user: Profile = Depends(get_current_user), db: Session = Depends(get_db)):
+    student_only(user)
+    course_ids = active_membership_course_ids(db, user.id, "student")
+    if not course_ids:
+        return {"items": []}
+    rows = (
+        db.query(CourseAnnouncement, Course.title, Profile.display_name)
+        .join(Course, Course.id == CourseAnnouncement.course_id)
+        .outerjoin(Profile, Profile.id == CourseAnnouncement.author_id)
+        .filter(
+            CourseAnnouncement.course_id.in_(course_ids),
+            or_(CourseAnnouncement.expires_at.is_(None), CourseAnnouncement.expires_at > _utcnow()),
+        )
+        .order_by(CourseAnnouncement.pinned.desc(), CourseAnnouncement.created_at.desc(), CourseAnnouncement.id.desc())
+        .limit(10)
+        .all()
+    )
+    return {"items": [
+        {
+            "id": item.id, "course_title": course_title,
+            "title": item.title, "body": item.body, "pinned": item.pinned,
+            "author_name": (author_name or "").strip() or "Your instructor",
+            "created_at": item.created_at, "expires_at": item.expires_at,
+        }
+        for item, course_title, author_name in rows
+    ]}
 
 
 @router.get("/dashboard")
@@ -62,24 +102,17 @@ def dashboard(user: Profile = Depends(get_current_user), db: Session = Depends(g
         learner_visible_attempt_clause(),
         LearningActivity.language == user.enrolled_language,
         LearningActivity.review_status == ReviewState.published,
+        student_visible_activity_clause(user.id),
     ).scalar() or 0
     total = db.query(func.count(LearningActivity.id)).filter(
         LearningActivity.language == user.enrolled_language,
         LearningActivity.review_status == ReviewState.published,
+        student_visible_activity_clause(user.id),
     ).scalar() or 0
     pending = db.query(SubmissionJob).filter(
         SubmissionJob.student_id == user.id, SubmissionJob.status.in_(["queued", "running"])
     ).order_by(SubmissionJob.created_at.desc()).first()
-    due_exam = db.query(Exam).join(ExamAssignment, ExamAssignment.exam_id == Exam.id).join(
-        QuestGroupMember, QuestGroupMember.group_id == ExamAssignment.group_id
-    ).filter(QuestGroupMember.profile_id == user.id, Exam.published_at.is_not(None),
-             Exam.closes_at > datetime.now(timezone.utc)).order_by(Exam.closes_at).first()
-    if due_exam is not None:
-        completed_exam = db.query(ExamAttempt.id).filter(
-            ExamAttempt.exam_id == due_exam.id, ExamAttempt.student_id == user.id,
-            ExamAttempt.status.in_(["grading", "submitted"])).first()
-        if completed_exam:
-            due_exam = None
+    due_exam = next_due_exam(db, user.id, _utcnow())
     notices = db.query(NotificationOutbox).filter(
         NotificationOutbox.recipient_id == user.id,
         NotificationOutbox.next_attempt_at <= datetime.now(timezone.utc),
@@ -90,8 +123,7 @@ def dashboard(user: Profile = Depends(get_current_user), db: Session = Depends(g
                           "kind": target.activity_type.value} if target else None,
         "completed": completed, "total": total, "xp": user.xp_points, "level": user.current_level,
         "pending_job_id": str(pending.id) if pending else None,
-        "due_exam": {"id": str(due_exam.id), "title": due_exam.title,
-                     "closes_at": due_exam.closes_at} if due_exam else None,
+        "due_exam": due_exam,
         "notices": [{"id": str(n.id), "subject": n.subject, "body": n.body} for n in notices],
     }
 
@@ -103,8 +135,9 @@ def group_students(group_id: uuid.UUID, user: Profile = Depends(require_instruct
         raise HTTPException(404, "Quest group not found.")
     if group.created_by != user.id and user.role != UserRole.admin:
         raise HTTPException(404, "Quest group not found.")
-    activity_ids = [row[0] for row in db.query(QuestGroupActivity.activity_id).filter(
-        QuestGroupActivity.group_id == group_id).all()]
+    activity_ids = [row[0] for row in db.query(QuestGroupActivity.activity_id).join(
+        LearningActivity, LearningActivity.id == QuestGroupActivity.activity_id
+    ).filter(QuestGroupActivity.group_id == group_id, workshop_shareable_activity_clause(group.created_by)).all()]
     members = db.query(Profile).join(QuestGroupMember, QuestGroupMember.profile_id == Profile.id).filter(
         QuestGroupMember.group_id == group_id, Profile.role == UserRole.student).order_by(Profile.pseudonym_id).all()
     counts = dict(db.query(ActivityAttempt.student_id, func.count(func.distinct(ActivityAttempt.activity_id))).filter(
@@ -112,7 +145,7 @@ def group_students(group_id: uuid.UUID, user: Profile = Depends(require_instruct
         ActivityAttempt.activity_id.in_(activity_ids), ActivityAttempt.is_successful.is_(True)
     ).group_by(ActivityAttempt.student_id).all()) if members and activity_ids else {}
     return {"group_id": group_id, "total_activities": len(activity_ids),
-            "students": [{"alias": m.pseudonym_id, "completed": counts.get(m.id, 0),
+            "students": [{"alias": m.username, "completed": counts.get(m.id, 0),
                           "level": m.current_level} for m in members]}
 
 
@@ -180,16 +213,30 @@ def put_hint(activity_id: uuid.UUID, body: InstructorHint, user: Profile = Depen
     return {"id": hint.id, "slot": hint.slot, "body": hint.body}
 
 
+HINT_LIMIT = 5
+HINT_PENDING_BODY = "Generating…"
+HINT_RESERVATION_TIME = timedelta(minutes=2)
+
+
+def _hint_uses(db: Session, student_id: uuid.UUID, activity_id: uuid.UUID):
+    return db.query(HintUse).filter(HintUse.student_id == student_id, HintUse.activity_id == activity_id)
+
+
+def _expired_hint_reservation(now: datetime):
+    return (HintUse.body == HINT_PENDING_BODY) & (HintUse.created_at <= now - HINT_RESERVATION_TIME)
+
+
 @router.get("/activities/{activity_id}/hints")
 def hint_status(activity_id: uuid.UUID, user: Profile = Depends(get_current_user), db: Session = Depends(get_db)):
     student_only(user)
+    require_practice_help_available(db, user.id)
     challenge(db, activity_id, user)
     reviewed = db.query(ChallengeHint).filter(ChallengeHint.activity_id == activity_id).order_by(ChallengeHint.slot).all()
-    uses = db.query(HintUse).filter(HintUse.student_id == user.id, HintUse.activity_id == activity_id).order_by(HintUse.created_at).all()
+    uses = _hint_uses(db, user.id, activity_id).filter(~_expired_hint_reservation(_utcnow())).order_by(HintUse.created_at).all()
     revealed = {u.hint_id for u in uses if u.hint_id}
-    return {"remaining": max(0, 5 - len(uses)),
+    return {"remaining": max(0, HINT_LIMIT - len(uses)),
             "reviewed": [{"id": h.id, "slot": h.slot, "body": h.body if h.id in revealed else None} for h in reviewed],
-            "ai_hints": [{"id": u.id, "body": u.body} for u in uses if u.source == "ai" and u.body != "Generating…"]}
+            "ai_hints": [{"id": u.id, "body": u.body} for u in uses if u.source == "ai" and u.body != HINT_PENDING_BODY]}
 
 
 class RevealHint(BaseModel):
@@ -199,17 +246,41 @@ class RevealHint(BaseModel):
     hint_id: uuid.UUID | None = None
 
 
+def _visible_failure_diagnostics(evaluation: dict) -> dict[str, str]:
+    cases = evaluation.get("test_results")
+    if not isinstance(cases, list):
+        return {}
+    failure = next((case for case in cases if isinstance(case, dict)
+                    and case.get("is_hidden") is False and case.get("passed") is False), None)
+    if failure is None:
+        return {}
+    return {
+        argument: failure[field][:500] for argument, field in {
+            "failed_input": "stdin",
+            "expected_output": "expected_stdout",
+            "actual_output": "stdout",
+            "compiler_output": "compile_output",
+            "stderr": "stderr",
+            "status_description": "status_description",
+        }.items() if isinstance(failure.get(field), str)
+    }
+
+
 @router.post("/activities/{activity_id}/hints/reveal")
 def reveal_hint(activity_id: uuid.UUID, body: RevealHint, user: Profile = Depends(get_current_user), db: Session = Depends(get_db)):
     student_only(user)
     activity = challenge(db, activity_id, user)
-    db.query(Profile).filter(Profile.id == user.id).with_for_update().one()
-    uses = db.query(HintUse).filter(HintUse.student_id == user.id, HintUse.activity_id == activity_id).all()
+    student_id = user.id
+    db.query(Profile).filter(Profile.id == student_id).with_for_update().one()
+    require_practice_help_available(db, student_id)
+    query = _hint_uses(db, student_id, activity_id)
+    query.filter(_expired_hint_reservation(_utcnow())).delete()
+    uses = query.all()
     repeated = next((u for u in uses if u.request_key == body.request_key), None)
     if repeated:
-        if repeated.body == "Generating…":
+        if repeated.body == HINT_PENDING_BODY:
             raise HTTPException(409, "Hint generation is still running.")
-        return {"body": repeated.body, "remaining": max(0, 5-len(uses))}
+        return {"body": repeated.body, "remaining": max(0, HINT_LIMIT - len(uses))}
     hint = None
     if body.source == "reviewed":
         hint = db.query(ChallengeHint).filter(
@@ -219,41 +290,73 @@ def reveal_hint(activity_id: uuid.UUID, body: RevealHint, user: Profile = Depend
             raise HTTPException(404, "Reviewed hint not found.")
         already = next((u for u in uses if u.hint_id == hint.id), None)
         if already:
-            return {"body": already.body, "remaining": max(0, 5-len(uses))}
+            return {"body": already.body, "remaining": max(0, HINT_LIMIT - len(uses))}
     else:
+        if not settings.GEMINI_ENABLED:
+            raise HTTPException(503, GEMINI_DISABLED)
         failed_run = db.query(SubmissionJob).filter(
             SubmissionJob.student_id == user.id, SubmissionJob.activity_id == activity_id,
             SubmissionJob.status == "completed", SubmissionJob.dry_run_only.is_(True),
         ).order_by(SubmissionJob.created_at.desc()).first()
-        if failed_run is None or (failed_run.result_json or {}).get("evaluation", {}).get("is_successful"):
+        evaluation = (failed_run.result_json or {}).get("evaluation") if failed_run else None
+        if not isinstance(evaluation, dict) or evaluation.get("is_successful") is not False:
             raise HTTPException(409, "Run a sample and review its failure before requesting AI guidance.")
-    if len(uses) >= 5:
+    if len(uses) >= HINT_LIMIT:
         raise HTTPException(429, "All five hints have been used for this challenge.")
-    record = HintUse(student_id=user.id, activity_id=activity_id, request_key=body.request_key,
+    record = HintUse(id=uuid.uuid4(), student_id=student_id, activity_id=activity_id, request_key=body.request_key,
                      hint_id=hint.id if hint else None, source=body.source,
-                     body=hint.body if hint else "Generating…")
+                     body=hint.body if hint else HINT_PENDING_BODY)
+    record_id = record.id
     db.add(record)
     db.commit()
     if hint:
-        return {"body": hint.body, "remaining": 4-len(uses)}
+        return {"body": hint.body, "remaining": HINT_LIMIT - 1 - len(uses)}
     try:
         if settings.GEMINI_API_KEY:
-            reserve("student_ai", user.id)
+            reserve("student_ai", student_id)
+        error_category = evaluation.get("dominant_error_category", "")
+        documents = tutoring_document_ids(db, student_id, "student", activity)
+        question = f"{activity.title or ''} {activity.topic_concept} {error_category}".strip()
+        language = activity.language.value
+        title = activity.title or activity.topic_concept
+        statement = activity.problem_statement or ""
+        source = failed_run.source_code
+        db.rollback()
+        passages = tutoring_passages(db, documents, question)
+        db.rollback()
         explanation = explain_code_error(
-            language=activity.language.value, problem_title=activity.title or activity.topic_concept,
-            problem_statement=activity.problem_statement or "", student_code=failed_run.source_code,
-            error_category=(failed_run.result_json or {}).get("evaluation", {}).get("dominant_error_category", ""),
+            language=language, problem_title=title, problem_statement=statement, student_code=source,
+            error_category=error_category, course_passages=passages_block(passages),
+            **_visible_failure_diagnostics(evaluation),
         )
-        record.body = explanation.hints[0][:2000]
+        student = db.query(Profile).filter(Profile.id == student_id).with_for_update().populate_existing().one()
+        student_only(student)
+        if student.account_status != "active":
+            raise HTTPException(403, "Student access required.")
+        require_practice_help_available(db, student_id)
+        activity = challenge(db, activity_id, student)
+        if passages and not set(documents).issubset(tutoring_document_ids(db, student_id, "student", activity)):
+            raise HTTPException(409, "Available course material changed. Retry this hint.")
+        current = db.get(HintUse, record_id)
+        now = _utcnow()
+        if current is None or current.body != HINT_PENDING_BODY or current.created_at <= now - HINT_RESERVATION_TIME:
+            raise HTTPException(409, "Hint generation expired. Retry this hint.")
+        hint_text, _ = validate_tutor_citations(explanation.hints[0], passages)
+        if reveals_solution(hint_text, activity.reference_solution_code, activity.starter_code, failed_sample=source):
+            hint_text = WITHHELD_HINT
+        result = hint_text[:2000]
+        if not result or result == HINT_PENDING_BODY:
+            raise HTTPException(503, "AI hints are unavailable. Your hint was not spent.")
+        current.body = result
+        remaining = HINT_LIMIT - query.filter(~_expired_hint_reservation(now)).count()
         db.commit()
-        return {"body": record.body, "remaining": 4-len(uses)}
-    except HTTPException:
-        db.delete(record)
+        return {"body": result, "remaining": max(0, remaining)}
+    except Exception as exc:
+        db.rollback()
+        query.filter(HintUse.id == record_id, HintUse.body == HINT_PENDING_BODY).delete()
         db.commit()
-        raise
-    except Exception:
-        db.delete(record)
-        db.commit()
+        if isinstance(exc, HTTPException):
+            raise
         raise HTTPException(503, "AI hints are unavailable. Your hint was not spent.") from None
 
 
@@ -266,7 +369,7 @@ def solution(activity_id: uuid.UUID, user: Profile = Depends(get_current_user), 
         ActivityAttempt.is_successful.is_(True), learner_visible_attempt_clause(),
     ).first()
     if not passed:
-        if activity.closed_at is None:
+        if not activity_is_closed(activity):
             raise HTTPException(403, "The solution unlocks after you pass or the instructor closes the challenge.")
     return {"source_code": activity.reference_solution_code}
 

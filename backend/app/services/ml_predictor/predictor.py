@@ -8,6 +8,7 @@ import logging
 import math
 import threading
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +20,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.entities import ActivityAttempt, LearningActivity, Profile
+from app.services.ml_predictor.exam_history import released_exam_history
 from app.services.ml_predictor.feature_engineering import (
     FEATURE_NAMES,
     extract_features_from_dataframe,
 )
+from app.services.ml_predictor.thresholds import classify_success, recommended_action
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,53 @@ class ModelBundle:
     logistic_regression: Any
     random_forest: Any
     model_version: str
+    selected_model: str
+    report: dict[str, Any]
+
+
+# Reported partitions and per-partition keys the faculty evaluation view may
+# show. Anything outside these lists — artifact paths, feature schemas, fitted
+# hyperparameters, training rows — never leaves the backend.
+_REPORT_PARTITIONS = ("validation", "test")
+_PARTITION_KEYS = (
+    "partition", "n_samples", "n_students", "positive_rate", "decision_threshold",
+    "accuracy", "precision", "recall", "f1_score", "roc_auc", "average_precision",
+    "brier_score", "confusion_matrix", "roc_curve", "pr_curve",
+)
+
+
+def _partition_report(scores: dict[str, Any]) -> dict[str, Any]:
+    return {
+        partition: {key: scores[partition][key] for key in _PARTITION_KEYS if key in scores[partition]}
+        for partition in _REPORT_PARTITIONS
+        if isinstance(scores.get(partition), dict)
+    }
+
+
+def _sanitized_report(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Allowlist the validated metrics summary for the faculty evaluation view."""
+    return {
+        "model_version": metrics.get("model_version"),
+        "dataset_source": metrics.get("dataset_source"),
+        "research_approved": metrics.get("research_approved"),
+        "generated_at": metrics.get("generated_at"),
+        "n_samples": metrics.get("n_samples"),
+        "n_students": metrics.get("n_students"),
+        "outcome_counts": metrics.get("outcome_counts") or {},
+        "protocol": metrics.get("protocol") or {},
+        "partitions": metrics.get("partitions") or {},
+        "selection": metrics.get("selection") or {},
+        "models": {
+            name: _partition_report(scores)
+            for name, scores in (metrics.get("models") or {}).items()
+            if isinstance(scores, dict)
+        },
+        "baselines": {
+            name: _partition_report(scores)
+            for name, scores in (metrics.get("baselines") or {}).items()
+            if isinstance(scores, dict)
+        },
+    }
 
 
 @dataclass(frozen=True)
@@ -51,6 +101,7 @@ class PredictionResult:
     rf_prediction: bool
     recommended_action: str
     model_version: str
+    selected_model: str
 
 
 _model_bundle: ModelBundle | None = None
@@ -142,7 +193,7 @@ def load_ml_models() -> ModelBundle:
                 raise ModelArtifactError(
                     "Active model directory name does not match its recorded model version."
                 )
-            if metadata.get("schema_version") != 1:
+            if metadata.get("schema_version") != 2:
                 raise ModelArtifactError("Model artifact metadata schema is unsupported.")
             if metadata.get("features") != list(FEATURE_NAMES):
                 raise ModelArtifactError("Model metadata feature schema does not match this backend version.")
@@ -158,6 +209,9 @@ def load_ml_models() -> ModelBundle:
                 metrics = json.load(metrics_file)
             if not isinstance(metrics, dict):
                 raise ModelArtifactError("Metrics summary must be a JSON object.")
+            selected_model = (metrics.get("selection") or {}).get("winner")
+            if selected_model not in {"logreg", "random_forest"}:
+                raise ModelArtifactError("Model run has no valid selected winner.")
             if (
                 metrics.get("model_version") != model_version
                 or metrics.get("dataset_source") != metadata.get("dataset_source")
@@ -203,6 +257,8 @@ def load_ml_models() -> ModelBundle:
                 logistic_regression=logreg_model,
                 random_forest=rf_model,
                 model_version=model_version,
+                selected_model=selected_model,
+                report=_sanitized_report(metrics),
             )
         except ModelArtifactsUnavailable:
             raise
@@ -229,8 +285,10 @@ def _positive_probability(model: Any, model_input: pd.DataFrame) -> tuple[float,
     probability = float(probabilities[0][positive_index])
     if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
         raise ModelArtifactError("Model returned an invalid probability.")
-    predicted = bool(model.predict(model_input)[0] == 1)
-    return probability, predicted
+    # Classify from the shared threshold rather than the estimator's own
+    # argmax, so a served prediction uses the same boundary the reported
+    # offline metrics were computed at.
+    return probability, classify_success(probability)
 
 
 def predict_student_success(
@@ -238,6 +296,8 @@ def predict_student_success(
     student: Profile,
     target_activity: LearningActivity,
     source_attempt: ActivityAttempt | None = None,
+    *,
+    as_of: datetime | None = None,
 ) -> PredictionResult:
     """Predict success using only the student's prior attempts in the target track."""
     models = load_ml_models()
@@ -251,6 +311,8 @@ def predict_student_success(
         .join(LearningActivity, ActivityAttempt.activity_id == LearningActivity.id)
         .filter(
             ActivityAttempt.student_id == student.id,
+            ActivityAttempt.exam_attempt_id.is_(None),
+            LearningActivity.course_id == target_activity.course_id,
             LearningActivity.language == target_activity.language,
             func.lower(func.trim(LearningActivity.topic_concept))
             == str(target_activity.topic_concept).strip().casefold(),
@@ -271,6 +333,8 @@ def predict_student_success(
                 ),
             )
         )
+    elif as_of is not None:
+        history_query = history_query.filter(ActivityAttempt.created_at <= as_of)
 
     history_rows = (
         history_query.order_by(
@@ -303,6 +367,11 @@ def predict_student_success(
         target_difficulty=target_activity.difficulty_level,
         target_language=target_activity.language,
         target_topic=target_activity.topic_concept,
+        exam_history=released_exam_history(
+            db, student.id, target_activity.course_id,
+            as_of=source_attempt.created_at if source_attempt else as_of,
+            include_at_cutoff=source_attempt is None,
+        ) if target_activity.course_id else [],
     )
     model_input = pd.DataFrame([features], columns=FEATURE_NAMES, dtype=float)
 
@@ -310,12 +379,6 @@ def predict_student_success(
         models.logistic_regression, model_input
     )
     rf_probability, rf_prediction = _positive_probability(models.random_forest, model_input)
-    if rf_probability >= 0.60:
-        recommended_action = "advance_next_level"
-    elif rf_probability >= 0.40:
-        recommended_action = "standard_next"
-    else:
-        recommended_action = "remedial_practice"
 
     return PredictionResult(
         features=features,
@@ -323,6 +386,9 @@ def predict_student_success(
         logreg_prediction=logreg_prediction,
         rf_probability=rf_probability,
         rf_prediction=rf_prediction,
-        recommended_action=recommended_action,
+        recommended_action=recommended_action(
+            logreg_probability if models.selected_model == "logreg" else rf_probability
+        ),
         model_version=models.model_version,
+        selected_model=models.selected_model,
     )

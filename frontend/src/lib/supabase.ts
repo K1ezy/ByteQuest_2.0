@@ -1,13 +1,46 @@
 "use client";
 
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { AuthClient, type GoTrueClient } from "@supabase/auth-js";
 
-let client: SupabaseClient | undefined;
+// The browser only uses Supabase Auth. The full supabase-js client also bundled
+// Realtime, PostgREST, Storage and Functions (about 60 KB gzip) into every page.
+export interface SupabaseBrowser {
+  auth: GoTrueClient;
+}
 
-export function getSupabase(): SupabaseClient {
+let client: SupabaseBrowser | undefined;
+
+// Same rule as reachableServiceUrl in lib/network.ts: on a phone opened through the
+// ZeroTier relay, 127.0.0.1 means the phone itself, so use the page's host instead.
+// It is repeated here because scripts/test-recovery.mjs runs this file directly in
+// Node, which cannot resolve "@/" imports; keep the two in step.
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+function supabaseUrlForThisPage(url: string): string {
+  if (typeof window === "undefined") return url;
+  try {
+    const target = new URL(url);
+    const pageHost = window.location.hostname;
+    if (LOOPBACK_HOSTS.has(target.hostname) && !LOOPBACK_HOSTS.has(pageHost)) target.hostname = pageHost;
+    return target.toString().replace(/\/$/, "");
+  } catch {
+    return url;
+  }
+}
+
+let pendingInviteCallback = false;
+
+export function consumeInviteCallback(): boolean {
+  const pending = pendingInviteCallback;
+  pendingInviteCallback = false;
+  return pending;
+}
+
+export function getSupabase(): SupabaseBrowser {
   if (client) return client;
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const configuredUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const url = configuredUrl ? supabaseUrlForThisPage(configuredUrl) : undefined;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anonKey) {
     throw new Error(
@@ -18,6 +51,7 @@ export function getSupabase(): SupabaseClient {
   // Remove legacy drafts without a user ID and old persistent auth tokens.
   // Account-scoped offline drafts must survive a browser restart until synced.
   if (typeof window !== "undefined") {
+    pendingInviteCallback = new URLSearchParams(window.location.hash.slice(1)).get("type") === "invite";
     try {
       for (const key of Object.keys(window.localStorage)) {
         if (
@@ -32,15 +66,22 @@ export function getSupabase(): SupabaseClient {
     }
   }
 
-  client = createClient(url, anonKey, {
-    auth: {
+  // Same settings supabase-js applied, including the session key it derived from
+  // the URL, so people who are signed in stay signed in across this change.
+  const base = new URL(url.endsWith("/") ? url : `${url}/`);
+  client = {
+    auth: new AuthClient({
+      url: new URL("auth/v1", base).href,
+      headers: { Authorization: `Bearer ${anonKey}`, apikey: anonKey },
+      storageKey: `sb-${base.hostname.split(".")[0]}-auth-token`,
       autoRefreshToken: true,
       persistSession: true,
       detectSessionInUrl: true,
+      flowType: "implicit",
       storage:
         typeof window !== "undefined" ? window.sessionStorage : undefined,
-    },
-  });
+    }),
+  };
   return client;
 }
 

@@ -105,8 +105,8 @@ def smoke_demo_quest(
             "app": SimpleNamespace(state=SimpleNamespace(ml_shadow_status="disabled")),
         })
 
-        joined = join_quest_group(request, JoinQuestGroup(code=group.join_code), student, db)
-        joined_again = join_quest_group(request, JoinQuestGroup(code=group.join_code), student, db)
+        joined = join_quest_group(JoinQuestGroup(code=group.join_code), student, db)
+        joined_again = join_quest_group(JoinQuestGroup(code=group.join_code), student, db)
         assert joined.id == group_id and joined_again.member_count == joined.member_count
         assert any(item.id == group_id for item in list_quest_groups(student, db))
 

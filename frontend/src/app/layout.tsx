@@ -1,11 +1,8 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
-import { Suspense } from "react";
-import { SiteHeader } from "@/components/site-header";
 import { AppTooltips } from "@/components/app-tooltips";
 import { AccessibilityProvider } from "@/components/accessibility-provider";
 import { ChatProvider } from "@/components/chat/chat-provider";
-import { ChatShell } from "@/components/chat/chat-shell";
 import { ToastProvider } from "@/components/toast";
 import "./globals.css";
 
@@ -21,6 +18,16 @@ export const metadata: Metadata = {
   description: "A guided programming quest platform for students and instructors.",
 };
 
+// viewport-fit=cover lets the phone tab bar and sheets pad themselves with
+// env(safe-area-inset-*) so they clear the home indicator and rounded corners.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  interactiveWidget: "resizes-content",
+  themeColor: "#ffffff",
+};
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className={byteBounce.variable}>
@@ -31,12 +38,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
               <a href="#main-content" className="skip-to-content">
                 Skip to main workspace
               </a>
-              <SiteHeader />
-              <main id="main-content" tabIndex={-1}>{children}</main>
+              {children}
               <AppTooltips />
-              <Suspense fallback={null}>
-                <ChatShell />
-              </Suspense>
             </ChatProvider>
           </ToastProvider>
         </AccessibilityProvider>

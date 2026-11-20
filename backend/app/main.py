@@ -7,7 +7,8 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.api.quests_gamification import router as quests_router
+from app.api.quests_gamification import gamification_router, router as quests_router
+from app.api.reviews import router as reviews_router
 from app.api.quest_groups import router as quest_groups_router
 from app.api.ml_analytics import router as ml_analytics_router
 from app.api.profiles import router as profiles_router
@@ -16,8 +17,10 @@ from app.api.submission_jobs import router as submission_jobs_router
 from app.api.exams import router as exams_router
 from app.api.rag_instructor import router as rag_instructor_router
 from app.api.faculty import router as faculty_router
+from app.api.faculty_ml import router as faculty_ml_router
 from app.api.admin import router as admin_router
 from app.api.chat import router as chat_router
+from app.api.chat_history import router as chat_history_router
 from app.core.config import settings
 from app.core.database import engine
 from app.core.request_size import RequestSizeLimitMiddleware
@@ -27,6 +30,7 @@ from app.services.ml_predictor.predictor import (
     load_ml_models,
 )
 from app.services.judge0.client import judge0_client
+from app.services.monitoring import SandboxHealth
 from app.services.storage.supabase_storage import avatar_storage, pdf_storage
 
 logger = logging.getLogger(__name__)
@@ -36,6 +40,8 @@ async def lifespan(app: FastAPI):
     logger.info("Starting %s v%s [%s]", settings.PROJECT_NAME, settings.VERSION, settings.ENVIRONMENT)
     app.state.sequencer_mode = "rule_based"
     app.state.model_version = None
+    app.state.ml_model_report = None
+    app.state.sandbox_health = SandboxHealth()
 
     limits = httpx.Limits(
         max_connections=40,
@@ -62,6 +68,8 @@ async def lifespan(app: FastAPI):
                     model_bundle = load_ml_models()
                     app.state.ml_shadow_status = "ready"
                     app.state.model_version = model_bundle.model_version
+                    # Retained so faculty evaluation requests never reload artifacts.
+                    app.state.ml_model_report = model_bundle.report
                 except ModelArtifactsUnavailable as exc:
                     app.state.ml_shadow_status = "artifacts_unavailable"
                     logger.warning(
@@ -102,6 +110,7 @@ app = FastAPI(
 app.state.sequencer_mode = "rule_based"
 app.state.model_version = None
 app.state.ml_shadow_status = "disabled"
+app.state.ml_model_report = None
 
 app.add_middleware(RequestSizeLimitMiddleware)
 
@@ -110,16 +119,19 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     expose_headers=["Retry-After"],
 )
 
 # Register API Routers
 app.include_router(quests_router)
+app.include_router(gamification_router)
+app.include_router(reviews_router)
 app.include_router(quest_groups_router)
 app.include_router(rag_instructor_router)
 app.include_router(faculty_router)
+app.include_router(faculty_ml_router)
 app.include_router(admin_router)
 app.include_router(ml_analytics_router)
 app.include_router(profiles_router)
@@ -127,6 +139,7 @@ app.include_router(pilot_router)
 app.include_router(submission_jobs_router)
 app.include_router(exams_router)
 app.include_router(chat_router)
+app.include_router(chat_history_router)
 
 
 @app.get("/health", tags=["Health"])

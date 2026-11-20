@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reference: Instructor Dashboard (fewer boxes)</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.52.0/dist/tabler-icons.min.css">
+<style>
+/* REFERENCE ONLY. Layout, spacing, sizes, and copy are the spec.
+   Colors are placeholders: map each one to the matching ByteQuest token in globals.css. */
+:root {
+  --page: #ffffff;
+  --tint: #f6f5fa;
+  --border: #e6e4ec;
+  --text-primary: #1d1b26;
+  --text-secondary: #5c5869;
+  --text-muted: #8b8798;
+  --accent: #5b2bb5;
+  --accent-tint: #efeafc;
+  --on-accent: #ffffff;
+  --danger: #b42318;
+  --danger-tint: #fdecea;
+  --warning: #8a5a00;
+  --warning-tint: #fdf3dc;
+  --success: #17804a;
+  --radius: 8px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text-primary);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font: inherit; font-size: 13px; color: var(--text-primary); background: var(--page);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 12px;
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+button:hover { background: var(--tint); }
+.btn-primary { background: var(--accent); color: var(--on-accent); border-color: transparent; font-size: 14px; padding: 7px 14px; }
+.btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
+.btn-ghost { border-color: transparent; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.topbar { display: flex; align-items: center; gap: 10px; padding: 12px 24px; border-bottom: 1px solid var(--border); }
+.brand { font-weight: 600; color: var(--accent); margin-right: 6px; flex-shrink: 0; }
+.switcher { min-width: 0; max-width: 260px; }
+.switcher span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spacer { flex: 1; }
+.icon-btn { border-color: transparent; padding: 6px; font-size: 18px; color: var(--text-secondary); }
+.avatar { flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-tint); color: var(--accent);
+  display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+
+.shell { max-width: 1280px; margin: 0 auto; padding: 20px 24px 48px;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
+.side { display: none; }
+.nav-group { font-size: 12px; color: var(--text-muted); margin: 14px 0 4px 10px; }
+.nav-group:first-child { margin-top: 0; }
+.nav-link { display: flex; align-items: center; gap: 10px; padding: 7px 10px; font-size: 14px;
+  color: var(--text-secondary); border-left: 3px solid transparent; border-radius: 0; }
+.nav-link:hover { background: var(--tint); text-decoration: none; }
+.nav-link[aria-current="page"] { color: var(--text-primary); background: var(--accent-tint); border-left-color: var(--accent); font-weight: 500; }
+.nav-link i { font-size: 18px; }
+
+.page-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; justify-content: space-between; margin-bottom: 18px; }
+.page-head h1 { margin: 0; font-size: 22px; font-weight: 600; }
+.page-head p { margin: 2px 0 0; color: var(--text-secondary); }
+.page-actions { display: flex; gap: 8px; }
+
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); background: var(--tint);
+  border-radius: var(--radius); margin-bottom: 28px; }
+.stat { padding: 14px 16px; }
+.stat:nth-child(even) { border-left: 1px solid var(--border); }
+.stat:nth-child(n+3) { border-top: 1px solid var(--border); }
+.stat-label { font-size: 13px; color: var(--text-secondary); }
+.stat-value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.3; }
+.stat-sub { font-size: 12px; color: var(--text-muted); }
+.stat-sub.up { color: var(--success); }
+.stat-sub.down { color: var(--danger); }
+
+.cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px;
+  grid-template-areas: "attention" "rail" "recent"; }
+.area-attention { grid-area: attention; }
+.area-rail { grid-area: rail; }
+.area-recent { grid-area: recent; }
+.section + .section { margin-top: 28px; }
+.sec-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.sec-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.sec-head a { font-size: 13px; }
+
+.row { position: relative; display: flex; gap: 12px; align-items: flex-start; padding: 12px 6px; border-top: 1px solid var(--border); }
+.row:hover { background: var(--tint); }
+.row-main { flex: 1; min-width: 0; }
+.row-title { font-weight: 500; color: var(--text-primary); }
+.row-title::after { content: ""; position: absolute; inset: 0; }
+.row-title:hover { text-decoration: none; }
+.row-desc { font-size: 13px; color: var(--text-secondary); }
+.row button { position: relative; z-index: 1; }
+.row .lead-icon { font-size: 18px; margin-top: 1px; }
+.chev { color: var(--text-muted); font-size: 18px; margin-top: 1px; }
+
+.status { width: 64px; flex-shrink: 0; }
+.pill { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: var(--radius); white-space: nowrap; margin-top: 1px; }
+.pill-danger { background: var(--danger-tint); color: var(--danger); }
+.pill-warning { background: var(--warning-tint); color: var(--warning); }
+.dot-status { display: inline-block; font-size: 12px; color: var(--text-secondary); white-space: nowrap; padding-top: 2px; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 5px; vertical-align: 1px; }
+
+.feed { font-size: 13px; color: var(--text-secondary); border-top: 1px solid var(--border); padding: 10px 6px; }
+.feed b { font-weight: 400; color: var(--text-primary); }
+.note { margin: 0; padding: 10px 6px; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-secondary); }
+
+@media (min-width: 900px) {
+  .shell { grid-template-columns: 190px minmax(0, 1fr); }
+  .side { display: block; }
+  .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .stat:nth-child(n) { border-top: 0; border-left: 1px solid var(--border); }
+  .stat:first-child { border-left: 0; }
+  .cols { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); grid-template-rows: auto 1fr; gap: 28px 40px;
+    grid-template-areas: "attention rail" "recent rail"; }
+}
+@media (max-width: 899px) {
+  .topbar .chat-label { display: none; }
+  .topbar { padding: 12px 16px; }
+  .shell { padding: 20px 16px 48px; }
+  .switcher { max-width: 170px; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <span class="brand">ByteQuest</span>
+  <button class="switcher" aria-haspopup="listbox"><span>Python Programming Track</span> <i class="ti ti-chevron-down" aria-hidden="true"></i></button>
+  <span class="spacer"></span>
+  <button class="btn-ghost"><i class="ti ti-message-circle" aria-hidden="true"></i><span class="chat-label">Chat assistant</span></button>
+  <button class="icon-btn" aria-label="Notifications"><i class="ti ti-bell" aria-hidden="true"></i></button>
+  <span class="avatar" aria-label="Account menu">IN</span>
+</header>
+
+<div class="shell">
+  <nav class="side" aria-label="Instructor">
+    <div class="nav-group">Teach</div>
+    <a class="nav-link" href="#" aria-current="page"><i class="ti ti-home" aria-hidden="true"></i>Dashboard</a>
+    <a class="nav-link" href="#"><i class="ti ti-code" aria-hidden="true"></i>Activities</a>
+    <a class="nav-link" href="#"><i class="ti ti-file-text" aria-hidden="true"></i>Materials</a>
+    <a class="nav-link" href="#"><i class="ti ti-clipboard-check" aria-hidden="true"></i>Exams</a>
+    <div class="nav-group">Students</div>
+    <a class="nav-link" href="#"><i class="ti ti-users" aria-hidden="true"></i>Roster</a>
+    <a class="nav-link" href="#"><i class="ti ti-inbox" aria-hidden="true"></i>Submissions</a>
+    <a class="nav-link" href="#"><i class="ti ti-table" aria-hidden="true"></i>Gradebook</a>
+    <div class="nav-group">Insights</div>
+    <a class="nav-link" href="#"><i class="ti ti-chart-bar" aria-hidden="true"></i>Analytics</a>
+    <a class="nav-link" href="#"><i class="ti ti-trophy" aria-hidden="true"></i>Gamification</a>
+  </nav>
+
+  <main>
+    <div class="page-head">
+      <div>
+        <h1>Good morning</h1>
+        <p>3 things need you today · Mon, Nov 16</p>
+      </div>
+      <div class="page-actions">
+        <button>Announce</button>
+        <button class="btn-primary"><i class="ti ti-plus" aria-hidden="true"></i>New activity</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="stat-label">Enrolled</div><div class="stat-value">11</div><div class="stat-sub">Python track</div></div>
+      <div class="stat"><div class="stat-label">Active this week</div><div class="stat-value">2</div><div class="stat-sub down"><i class="ti ti-arrow-down" aria-hidden="true"></i> 1 vs last week</div></div>
+      <div class="stat"><div class="stat-label">Average mastery</div><div class="stat-value">7%</div><div class="stat-sub">9 published activities</div></div>
+      <div class="stat"><div class="stat-label">Submissions, 7 days</div><div class="stat-value">4</div><div class="stat-sub up"><i class="ti ti-arrow-up" aria-hidden="true"></i> 2 vs last week</div></div>
+    </div>
+
+    <div class="cols">
+      <section class="area-attention">
+        <div class="sec-head"><h2>Needs your attention</h2><a href="#">View all</a></div>
+        <div class="row">
+          <span class="status"><span class="pill pill-danger">Failed</span></span>
+          <div class="row-main"><a class="row-title" href="#">Py4E Lesson: Strings</a><div class="row-desc">Search index couldn't be built. Your PDF is safe.</div></div>
+          <button>Retry</button>
+        </div>
+        <div class="row">
+          <span class="status"><span class="pill pill-warning">Fix file</span></span>
+          <div class="row-main"><a class="row-title" href="#">Week 6 scanned handout</a><div class="row-desc">No searchable text. Upload a text-based PDF.</div></div>
+          <button>Replace</button>
+        </div>
+        <div class="row">
+          <span class="status"><span class="dot-status"><span class="dot"></span>Draft</span></span>
+          <div class="row-main"><a class="row-title" href="#">Verification loops quiz</a><div class="row-desc">AI draft. Students can't see it until you approve.</div></div>
+          <button>Review</button>
+        </div>
+      </section>
+
+      <aside class="area-rail">
+        <section class="section">
+          <div class="sec-head"><h2>Students to check</h2></div>
+          <div class="row">
+            <i class="ti ti-alert-triangle lead-icon" style="color: var(--warning)" aria-hidden="true"></i>
+            <div class="row-main"><a class="row-title" href="#">2 stuck on conditionals</a><div class="row-desc">11 runtime errors, none recovered</div></div>
+            <i class="ti ti-chevron-right chev" aria-hidden="true"></i>
+          </div>
+          <div class="row">
+            <i class="ti ti-user-pause lead-icon" style="color: var(--text-secondary)" aria-hidden="true"></i>
+            <div class="row-main"><a class="row-title" href="#">9 haven't started</a><div class="row-desc">No attempts on any activity</div></div>
+            <i class="ti ti-chevron-right chev" aria-hidden="true"></i>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="sec-head"><h2>Coming up</h2></div>
+          <p class="note">Nothing opens in the next 14 days. <a href="#">Schedule an activity</a></p>
+        </section>
+      </aside>
+
+      <section class="area-recent">
+        <div class="sec-head"><h2>Recent activity</h2></div>
+        <div class="feed">Admin Verify closed <b>Count Vowels</b> · Oct 29</div>
+        <div class="feed">Faculty Verify drafted <b>Verification loops quiz</b> · Oct 29</div>
+      </section>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

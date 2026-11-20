@@ -23,11 +23,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.models.entities import ActivityKind, LearningActivity, Profile, ReviewState, UserRole
+from app.models.entities import ActivityAttempt, ActivityKind, CourseMember, LearningActivity, Profile, ReviewState, UserRole
+from app.services.attempt_visibility import activity_has_opened, activity_is_closed
 
 
-BASE_URL = os.getenv("BYTEQUEST_BASE_URL", "http://127.0.0.1:8010").rstrip("/")
+BASE_URL = os.getenv("BYTEQUEST_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 STUDENTS = 30
+MIXED = os.getenv("BYTEQUEST_LOAD_MIXED") == "1"
 
 
 def require_local() -> None:
@@ -44,12 +46,14 @@ def require_local() -> None:
 
 def make_students() -> tuple[uuid.UUID, str, list[tuple[uuid.UUID, str]]]:
     with SessionLocal() as db:
-        activity = db.query(LearningActivity).filter(
+        candidates = db.query(LearningActivity).filter(
             LearningActivity.activity_type == ActivityKind.challenge,
             LearningActivity.review_status == ReviewState.published,
             LearningActivity.judge0_verified.is_(True),
             LearningActivity.reference_solution_code.is_not(None),
-        ).order_by(LearningActivity.created_at.desc()).first()
+            LearningActivity.archived_at.is_(None),
+        ).order_by(LearningActivity.created_at.desc())
+        activity = next((item for item in candidates if activity_has_opened(item) and not activity_is_closed(item)), None)
         if activity is None:
             raise SystemExit("Publish and verify a local challenge before this load check.")
         created = []
@@ -63,6 +67,9 @@ def make_students() -> tuple[uuid.UUID, str, list[tuple[uuid.UUID, str]]]:
             db.add(Profile(id=user_id, pseudonym_id=f"load_{user_id.hex}",
                 role=UserRole.student, year_level=1, semester=1,
                 enrolled_language=activity.language, xp_points=0, current_level=1))
+            if activity.course_id is not None:
+                db.flush()
+                db.add(CourseMember(course_id=activity.course_id, profile_id=user_id, member_role="student"))
             token = jwt.encode({"sub": str(user_id), "aud": "authenticated",
                 "role": "authenticated", "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
                 settings.SUPABASE_JWT_SECRET, algorithm="HS256")
@@ -85,15 +92,22 @@ async def one_student(client: httpx.AsyncClient, token: str, activity_id: uuid.U
         draft = await client.put(f"{BASE_URL}/api/v1/pilot/drafts/{activity_id}",
                                  headers=headers, json={"source_code": code})
         draft.raise_for_status()
+        if MIXED:
+            phase = "sample"
+            sample = await client.post(f"{BASE_URL}/api/v1/submission-jobs",
+                headers={**headers, "Idempotency-Key": f"load-{uuid.uuid4()}"},
+                json={"activity_id": str(activity_id), "source_code": code, "dry_run_only": True})
+            sample.raise_for_status()
         phase = "submit"
         submitted_at = time.monotonic()
         accepted = await client.post(f"{BASE_URL}/api/v1/submission-jobs",
             headers={**headers, "Idempotency-Key": f"load-{uuid.uuid4()}"},
             json={"activity_id": str(activity_id), "source_code": code, "dry_run_only": False})
         accepted.raise_for_status()
+        acceptance_seconds = time.monotonic() - submitted_at
         job_id = accepted.json()["id"]
         phase = "status"
-        while time.monotonic() - submitted_at < 120:
+        while time.monotonic() - submitted_at < 90:
             try:
                 response = await client.get(f"{BASE_URL}/api/v1/submission-jobs/{job_id}", headers=headers)
                 response.raise_for_status()
@@ -102,9 +116,11 @@ async def one_student(client: httpx.AsyncClient, token: str, activity_id: uuid.U
             job = response.json()
             if job["status"] in ("completed", "failed"):
                 return {"student": index, "status": job["status"],
-                        "seconds": round(time.monotonic() - submitted_at, 2), "error": job.get("error")}
+                        "seconds": round(time.monotonic() - submitted_at, 2),
+                        **(job.get("result") or {}).get("timing", {}),
+                        "acceptance_seconds": round(acceptance_seconds, 3), "error": job.get("error")}
             await asyncio.sleep(2)
-        return {"student": index, "status": "pending", "seconds": 120, "error": None}
+        return {"student": index, "status": "pending", "seconds": 90, "error": None}
     except Exception as exc:
         return {"student": index, "status": "request_error", "phase": phase,
                 "seconds": round(time.monotonic() - started, 2), "error": type(exc).__name__}
@@ -148,6 +164,23 @@ def main() -> None:
         print(f"Completed: {len(completed)}/{STUDENTS}; within 30s: {within_30}/{STUDENTS}")
         if completed:
             print(f"Median wait: {statistics.median(completed):.2f}s; maximum: {max(completed):.2f}s")
+        acceptances = sorted(item["acceptance_seconds"] for item in results if "acceptance_seconds" in item)
+        if acceptances:
+            print(f"Acceptance p50: {statistics.median(acceptances):.3f}s; "
+                  f"p95: {acceptances[(95 * len(acceptances) + 99) // 100 - 1]:.3f}s")
+        for label, metric in (("Ready queue", "ready_queue_seconds"), ("Final grading run", "final_run_seconds")):
+            timings = sorted(item[metric] for item in results if metric in item)
+            if timings:
+                print(f"{label} p50: {statistics.median(timings):.3f}s; "
+                      f"p95: {timings[(95 * len(timings) + 99) // 100 - 1]:.3f}s")
+        with SessionLocal() as db:
+            user_ids = [user_id for user_id, _ in users]
+            attempts = db.query(ActivityAttempt.student_id).filter(
+                ActivityAttempt.student_id.in_(user_ids), ActivityAttempt.activity_id == activity_id,
+            ).all()
+        print(f"Official attempts: {len(attempts)}; distinct students: {len(set(attempts))}")
+        if len(attempts) != STUDENTS or len(set(attempts)) != STUDENTS:
+            raise SystemExit(1)
         if len(completed) != STUDENTS or within_30 < 27:
             raise SystemExit(1)
     finally:

@@ -1,13 +1,13 @@
 """Small, shared PostgreSQL quotas for the classroom pilot.
 
-Reservations use short independent transactions so a failed provider request
-still consumes its provider budget. Application writes never hold a quota lock
-while waiting for Gemini or Judge0.
+Provider reservations use short independent transactions. A database-only
+write can reserve quota in its own transaction.
 """
 
 import math
 import secrets
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 
@@ -32,25 +33,28 @@ class Rule:
 
 POLICIES: dict[str, tuple[Rule, ...]] = {
     "practice_code": (Rule("practice_code", "account", "minute", 5),),
+    "official_submit": (Rule("official_submit", "account", "minute", 5),),
     "exam_sample": (Rule("exam_sample", "account", "minute", 5),),
     "quiz_submit": (Rule("quiz_submit", "account", "minute", 10),),
     "group_join": (Rule("group_join", "account", "hour", 12),),
     "group_create": (Rule("group_create", "account", "hour", 5),),
     "instructor_verify": (Rule("instructor_verify", "account", "minute", 5),),
+    # Student global caps = class size (30) × the per-student daily cap, so one user can't starve the class.
     "student_ai": (
         Rule("student_ai", "account", "hour", 3),
         Rule("student_ai", "account", "day", 10),
-        Rule("gemini_generation", "global", "day", 100),
+        Rule("student_generation", "global", "day", 300),
     ),
     "chat_message": (
         Rule("chat_message", "account", "minute", 10),
-        Rule("chat_message", "account", "day", 100),
-        Rule("chat_generation", "global", "day", 300),
+        Rule("chat_message", "account", "day", 40),
+        Rule("chat_generation", "global", "day", 1200),
     ),
+    "chat_conversation": (Rule("chat_conversation", "account", "day", 45),),
     "instructor_ai": (
         Rule("instructor_ai", "account", "hour", 2),
         Rule("instructor_ai", "account", "day", 8),
-        Rule("gemini_generation", "global", "day", 100),
+        Rule("instructor_generation", "global", "day", 100),
     ),
     "pdf_index": (
         Rule("pdf_index", "account", "hour", 5),
@@ -85,14 +89,17 @@ _RESERVE = text("""
 _CLEANUP = text("delete from public.api_rate_counters where expires_at < :cutoff")
 
 
-def reserve(action: str, account_id: uuid.UUID | None = None, *, now: datetime | None = None) -> None:
+def reserve(
+    action: str, account_id: uuid.UUID | None = None, *,
+    now: datetime | None = None, session: Session | None = None, commit: bool = False,
+) -> None:
     """Consume all buckets or none; raise a retryable HTTP error on failure."""
     rules = POLICIES[action]
     if any(rule.scope == "account" for rule in rules) and account_id is None:
         raise ValueError("An account identity is required for this quota.")
     instant = now or datetime.now(timezone.utc)
     try:
-        with SessionLocal() as db:
+        with (SessionLocal() if session is None else nullcontext(session)) as db:
             for rule in rules:
                 start, end = window_bounds(rule.window, instant)
                 result = db.execute(_RESERVE, {
@@ -115,7 +122,8 @@ def reserve(action: str, account_id: uuid.UUID | None = None, *, now: datetime |
                     )
             if now is None and secrets.randbelow(256) == 0:
                 db.execute(_CLEANUP, {"cutoff": instant - timedelta(days=7)})
-            db.commit()
+            if session is None or commit:
+                db.commit()
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=503,

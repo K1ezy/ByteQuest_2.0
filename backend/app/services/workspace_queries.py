@@ -7,7 +7,7 @@ destination list rows. If the two ever disagree, this module is the bug.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Sequence
 
 from sqlalchemy import bindparam, func, or_, text
@@ -22,6 +22,7 @@ from app.models.entities import (
     Profile,
     ReviewState,
 )
+from app.services.attempt_visibility import practice_attempt_clause
 from app.services.workspace_common import (
     MATERIAL_ATTENTION_STATES,
     activity_state,
@@ -273,18 +274,26 @@ def class_snapshot(db: Session, course_id: uuid.UUID) -> dict:
             "average_completion_percent": 0,
             "average_score": None,
             "need_follow_up": len(students),
+            "active_7d": 0,
+            "attempts_7d": 0,
         }
+    # Same definitions as the Performance page: "mastered" needs a passing attempt;
+    # "started" (used for follow-up) needs any attempt.
     rows = (
         db.query(
             ActivityAttempt.student_id,
-            func.count(func.distinct(ActivityAttempt.activity_id)).label("completed"),
+            func.count(func.distinct(ActivityAttempt.activity_id)).label("started"),
+            func.count(func.distinct(ActivityAttempt.activity_id))
+            .filter(ActivityAttempt.is_successful.is_(True))
+            .label("mastered"),
         )
-        .filter(ActivityAttempt.activity_id.in_(activity_ids))
+        .filter(ActivityAttempt.activity_id.in_(activity_ids), practice_attempt_clause())
         .group_by(ActivityAttempt.student_id)
         .all()
     )
-    completed_by_student = {row[0]: int(row[1]) for row in rows}
-    completions = [min(completed_by_student.get(student.id, 0), len(activity_ids)) for student in students]
+    started_by_student = {row[0]: int(row[1]) for row in rows}
+    mastered_by_student = {row[0]: int(row[2]) for row in rows}
+    completions = [min(mastered_by_student.get(student.id, 0), len(activity_ids)) for student in students]
     average_completion = round(
         (sum(completions) / max(len(completions), 1)) / len(activity_ids) * 100
     )
@@ -297,21 +306,38 @@ def class_snapshot(db: Session, course_id: uuid.UUID) -> dict:
     )
     average_score = None
     if latest_activity is not None:
-        average_score = (
-            db.query(func.avg(ActivityAttempt.score_percentage))
-            .filter(
-                ActivityAttempt.activity_id == latest_activity.id,
-                ActivityAttempt.is_successful.is_(True),
-            )
-            .scalar()
+        # Each student's latest score, passing or not: averaging only passes hid
+        # struggling students and left the number empty until someone passed.
+        latest_by_student: dict[uuid.UUID, float] = {}
+        for student_id, score in (
+            db.query(ActivityAttempt.student_id, ActivityAttempt.score_percentage)
+            .filter(ActivityAttempt.activity_id == latest_activity.id,
+                    ActivityAttempt.student_id.in_([student.id for student in students]), practice_attempt_clause())
+            .order_by(ActivityAttempt.created_at.desc())
+        ):
+            latest_by_student.setdefault(student_id, score)
+        latest_scores = list(latest_by_student.values())
+        if latest_scores:
+            average_score = sum(latest_scores) / len(latest_scores)
+    need_follow_up = sum(1 for student in students if started_by_student.get(student.id, 0) == 0)
+    active_7d, attempts_7d = (
+        db.query(func.count(func.distinct(ActivityAttempt.student_id)), func.count(ActivityAttempt.id))
+        .filter(
+            ActivityAttempt.activity_id.in_(activity_ids),
+            ActivityAttempt.student_id.in_([student.id for student in students]),
+            ActivityAttempt.created_at >= datetime.now(timezone.utc) - timedelta(days=7),
+            practice_attempt_clause(),
         )
-    need_follow_up = sum(1 for student in students if completed_by_student.get(student.id, 0) == 0)
+        .one()
+    )
     return {
         "active_learners": len(students),
         "published_activities": len(activity_ids),
         "average_completion_percent": average_completion,
         "average_score": round(float(average_score), 1) if average_score is not None else None,
         "need_follow_up": need_follow_up,
+        "active_7d": int(active_7d),
+        "attempts_7d": int(attempts_7d),
     }
 
 
@@ -350,22 +376,21 @@ def account_course_access(db: Session, profile_ids: Iterable[uuid.UUID]) -> dict
     return result
 
 
-def passing_attempts_by_student(
+def practice_attempts_by_student(
     db: Session,
     activity_ids: Sequence[uuid.UUID],
     student_ids: Sequence[uuid.UUID],
 ) -> dict[uuid.UUID, dict]:
     if not activity_ids or not student_ids:
         return {}
-    rows = (
-        db.query(ActivityAttempt)
-        .filter(
-            ActivityAttempt.activity_id.in_(list(activity_ids)),
-            ActivityAttempt.student_id.in_(list(student_ids)),
-        )
-        .order_by(ActivityAttempt.created_at.desc())
-        .all()
-    )
+    rows = db.query(
+        ActivityAttempt.student_id, ActivityAttempt.activity_id, ActivityAttempt.is_successful,
+        ActivityAttempt.created_at, ActivityAttempt.score_percentage,
+    ).filter(
+        ActivityAttempt.activity_id.in_(list(activity_ids)),
+        ActivityAttempt.student_id.in_(list(student_ids)),
+        practice_attempt_clause(),
+    ).order_by(ActivityAttempt.created_at.desc(), ActivityAttempt.id.desc()).all()
     result: dict[uuid.UUID, dict] = {}
     for attempt in rows:
         entry = result.setdefault(
@@ -430,7 +455,7 @@ __all__ = [
     "class_snapshot",
     "account_emails",
     "account_course_access",
-    "passing_attempts_by_student",
+    "practice_attempts_by_student",
     "latest_predictions",
     "search_matches",
 ]

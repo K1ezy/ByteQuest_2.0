@@ -93,6 +93,15 @@ def may_manage_course(db: Session, user: Profile, course_id: uuid.UUID | None) -
     return has_course_role(db, user, course_id, "instructor")
 
 
+def may_manage_instructional_content(db: Session, user: Profile, course_id: uuid.UUID | None,
+                                     owner_id: uuid.UUID | None) -> bool:
+    if not is_instructor(user) or (user.account_status or "active") != "active":
+        return False
+    if course_id is None:
+        return is_admin(user) or owner_id == user.id
+    return may_manage_course(db, user, course_id)
+
+
 def require_course_instructor(user: Profile) -> Profile:
     """Strict faculty role: administrator accounts use the administrative routes."""
     role = getattr(user.role, "value", user.role)

@@ -21,7 +21,10 @@ from app.services.profile_attention import (
 )
 from app.services.gamification.progression import XP_PER_LEVEL
 from app.services.gamification.sequencer import determine_track_recommendation
+from app.services.gamification.solve_quality import help_pattern
 from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.usernames import normalize_username
+from sqlalchemy.exc import IntegrityError
 from app.models.entities import (
     ActivityAttempt,
     AuditEvent,
@@ -54,6 +57,7 @@ class ProfileResponse(BaseModel):
 
     id: uuid.UUID
     pseudonym_id: str
+    username: str
     role: UserRole
     enrolled_language: ProgrammingLang
     year_level: int
@@ -65,6 +69,8 @@ class ProfileResponse(BaseModel):
     avatar_url: str | None = None
     email: str | None = None
     created_at: datetime | None = None
+    needs_track_setup: bool = False
+    handle_chosen: bool = True
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -74,6 +80,28 @@ class ProfileUpdateRequest(BaseModel):
 
     display_name: str | None = Field(default=None, max_length=120)
     bio: str | None = Field(default=None, max_length=500)
+    username: str | None = None
+
+
+class StaffSetupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    school_id: str = Field(min_length=1, max_length=64)
+
+
+@router.put("/staff-setup", status_code=204)
+def complete_staff_setup(
+    payload: StaffSetupRequest,
+    current_user: Profile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    profile = db.query(Profile).filter(Profile.id == current_user.id).with_for_update().populate_existing().one()
+    if profile.role not in (UserRole.instructor, UserRole.admin) or profile.account_status != "active":
+        raise HTTPException(status_code=403, detail="Staff setup requires an active Faculty or Admin account.")
+    if profile.school_id is not None and profile.school_id != payload.school_id:
+        raise HTTPException(status_code=409, detail="A School ID is already saved for this account. Enter the same ID or contact your ByteQuest administrator.")
+    profile.school_id = payload.school_id
+    db.commit()
 
 
 def _require_student(profile: Profile) -> None:
@@ -90,6 +118,17 @@ def get_my_profile(
 ) -> ProfileResponse:
     """Return the authenticated user's application profile."""
     return current_user
+
+
+@router.get("/username-availability")
+def username_availability(username: str, db: Session = Depends(get_db)) -> dict[str, bool]:
+    """Public signup hint; the unique database index remains authoritative."""
+    try:
+        normalized = normalize_username(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    taken = db.query(Profile.id).filter(func.lower(Profile.username) == normalized).first()
+    return {"available": taken is None}
 
 
 @router.patch("/me", response_model=ProfileResponse)
@@ -111,7 +150,22 @@ def update_my_profile(
         bio = (fields["bio"] or "").strip()
         current_user.bio = bio or None
 
-    db.commit()
+    if "username" in fields:
+        if not fields["username"]:
+            raise HTTPException(status_code=422, detail="Username is required.")
+        try:
+            current_user.username = normalize_username(fields["username"])
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        if constraint == "profiles_username_lower_unique":
+            raise HTTPException(status_code=409, detail="That username is already taken.") from exc
+        raise
     db.refresh(current_user)
     return current_user
 
@@ -127,6 +181,7 @@ def complete_student_onboarding(
     current_user.enrolled_language = payload.enrolled_language
     current_user.year_level = payload.year_level
     current_user.semester = payload.semester
+    current_user.track_selected_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(current_user)
@@ -277,6 +332,16 @@ class NextAction(BaseModel):
     kind: str | None = None
 
 
+class HelpPattern(BaseModel):
+    """How the student solves challenges and seeks help; descriptive, never scored."""
+
+    challenges_solved: int
+    self_solved: int
+    three_star: int
+    hinted_challenges: int
+    tried_before_hint: int
+
+
 class StudentAnalytics(BaseModel):
     total_attempts: int
     successful_attempts: int
@@ -301,6 +366,7 @@ class StudentAnalytics(BaseModel):
     score_trend: list[TrendPoint]
     exam_history: list[ExamHistoryEntry]
     badges: list[BadgeEntry]
+    help_pattern: HelpPattern
 
 
 class AuditEntry(BaseModel):
@@ -447,7 +513,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
     ]
 
     exam_rows = (
-        db.query(ExamAttempt, Exam.title, Exam.results_released_at)
+        db.query(ExamAttempt, Exam.title)
         .join(Exam, Exam.id == ExamAttempt.exam_id)
         .filter(ExamAttempt.student_id == user.id)
         .order_by(ExamAttempt.started_at.desc())
@@ -464,8 +530,8 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
             submitted_at=attempt.submitted_at,
             results_released=released,
         )
-        for attempt, title, released_at in exam_rows
-        for released in [bool(released_at and attempt.submitted_at and attempt.submitted_at <= released_at)]
+        for attempt, title in exam_rows
+        for released in [bool(attempt.result_released_at)]
     ]
 
     badge_rows = (
@@ -541,6 +607,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
             kind=_enum_value(target.activity_type) if target else None,
         ),
         badge_count=len(badges),
+        help_pattern=HelpPattern(**help_pattern(db, user.id)),
         by_type=by_type,
         by_topic=by_topic,
         score_trend=score_trend,
