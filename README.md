@@ -1,121 +1,151 @@
 # ByteQuest 2.0
 
-> A gamified programming-learning platform for undergraduate computer science students, with sandboxed code assessment and a research path toward adaptive task sequencing.
+ByteQuest is a gamified programming-learning platform for undergraduate computer science students. Students practice **Python, C++, and Java**, instructors publish and grade coursework, and administrators manage course access and monitor the services. ByteQuest is a thesis system for North Eastern Mindanao State University (NEMSU).
 
-**Thesis system — North Eastern Mindanao State University (NEMSU).**
+**Current development.** The architecture and setup below describe the latest weekly update on `fix/ml-pr-auc-student-disjoint-split`. Use that branch for the runnable version documented here. [Browse the current source](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split)
 
-## Overview
+**Release status.** The core learning workflows have local verification. Hosted classroom acceptance is pending, including capacity, security, and recovery checks on the intended deployment. [System status and verification](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md)
 
-ByteQuest lets students practice coding challenges and quizzes in **C++, Python, and Java**, grades their code in an isolated sandbox, and rewards progress with XP, levels, and badges. Instructors generate and review challenges with an AI-assisted workflow; a research pipeline supports adaptive task sequencing.
+## What each role can do
 
-- **Sandboxed grading** — the FastAPI backend sends code to a private Judge0 instance and returns only safe results. The browser never calls Judge0 directly.
-- **Gamification** — attempts, XP, levels, badges, and deterministic rule-based next-task recommendations.
-- **Instructor tools** — lesson documents are turned into challenges (RAG + Gemini), auto-checked by Judge0, and published only after instructor review.
-- **Student tutor** — course-aware Gemini chat, temporary conversations, and hints after a failed coding sample. Saved chat history uses the release configuration.
-- **Research pipeline** — shared feature engineering and offline model comparison. ML recommendations stay shadow-only until consented classroom data is available; deterministic sequencing is the live default.
-- **Public usernames** — every student, instructor, and administrator has a unique, editable `@username` made of 3–44 letters. Display names remain primary; research pseudonyms stay internal.
-- **Faculty Machine Learning dashboard** — `/faculty/ml` shows course-scoped quiz, coding, and released exam history, student trends, forecast readiness, saved next-activity forecasts, and observed model quality. Forecasts are advisory and never change grades or progression.
+| Role | Workflows |
+| --- | --- |
+| Student | Open the Quest Map, join Workshops, answer quizzes, and solve coding challenges in the Monaco editor. Run visible samples before submitting for grading. Take timed exams, read released results, and track progress, XP, and badges. |
+| Instructor | Upload and version lesson PDFs, create or generate activities, review the student preview, and schedule or publish coursework. Verify coding challenges with Judge0 and provide a visible sample. Manage exams, announcements, gradebooks, exports, and course analytics. |
+| Administrator | Manage accounts, course assignments, and platform settings. Investigate application, database, grading-worker, and sandbox health from the monitoring workspace. |
 
-## Tech stack
-
-| Layer | Technology |
-|---|---|
-| Frontend | Next.js · React · TypeScript · hand-written CSS design tokens · Monaco editor · Supabase auth |
-| Backend | FastAPI (Python 3.11) · SQLAlchemy |
-| Data | Supabase — PostgreSQL, Auth, Storage, pgvector |
-| Code execution | Judge0 Extra CE 1.13.1 (private Ubuntu VM) |
-| AI | Gemini 3.5 Flash-Lite for tutoring and authoring, Gemini Embedding 2 for document search |
-| ML | Offline scikit-learn comparison of Logistic Regression and Random Forest on a student-disjoint 60/20/20 split |
-| Infra | Docker Compose · Caddy · PowerShell launch scripts |
+The optional Gemini tutor supports course-aware chat, Temporary Chat, saved history where enabled, and hints after failed coding samples. ByteQuest pauses tutor access during active exams. [Tutor evaluation](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/verification/gemini-tutor-evaluation-2026-11-20.md)
 
 ## Architecture
 
-```text
-Next.js frontend (localhost:3000)
-        │  API requests authenticated with Supabase
-        ▼
-FastAPI backend (localhost:8000–8010)
-        ├── Supabase (PostgreSQL, Auth, Storage, pgvector)
-        ├── Judge0 Extra CE  — private VM, backend-only
-        └── Gemini           — AI generation / hints (optional)
+```mermaid
+flowchart LR
+    UI["Next.js app in the browser"]
+    Auth["Supabase Auth"]
+    API["FastAPI application"]
+    DB["Supabase PostgreSQL and pgvector"]
+    Files["Supabase private PDF storage"]
+    Worker["ByteQuest grading worker"]
+    Judge["Private Judge0 sandbox"]
+    AI["Gemini API"]
+
+    UI -->|Sign in and refresh session| Auth
+    UI -->|Bearer-authenticated requests| API
+    API -->|Course data, grading jobs, and results| DB
+    API -->|Upload and read permitted PDFs| Files
+    API -->|Embed passages, draft activities, and tutor| AI
+    Worker -->|Claim jobs and save grades| DB
+    Worker -->|Run code and compare output| Judge
+    API -->|Verify instructor reference solutions| Judge
 ```
+
+- **Sign-in and authorization.** Supabase Auth issues the session. FastAPI validates it and checks the active profile, role, and course membership before accessing protected data. Student self-registration verifies a school-issued ID and matching roster email.
+- **Grading and exams.** The API records durable jobs. An independent worker claims jobs, calls Judge0, and saves grades. Sample runs use visible cases. Official submissions use the full grading set, with hidden inputs and expected outputs withheld from students. Exam content is frozen for the attempt and results follow the instructor’s release workflow.
+- **Materials and AI.** Uploaded PDFs are stored privately. Searchable passages are indexed in pgvector with Gemini Embedding 2. Gemini 3.5 Flash-Lite uses relevant authorized excerpts for tutoring and activity generation. Instructors review and publish generated drafts.
+- **Research and ML.** Deterministic rules drive live recommendations. The offline pipeline compares Logistic Regression and Random Forest on student-disjoint splits. Forecasting requires approved data, a reviewed model run, and appropriate consent. [ML evaluation and activation](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/ml_pipeline/README.md)
+
+[Architecture blueprint](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/BYTEQUEST_ARCHITECTURE_BLUEPRINT.md) · [API security and privacy](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/LOCAL_API_SECURITY.md)
+
+## Stack and deployment
+
+| Layer | Technology |
+| --- | --- |
+| Web app | Next.js App Router, React, TypeScript, CSS design tokens, Monaco Editor, Recharts |
+| API and grading worker | Python 3.11, FastAPI, SQLAlchemy |
+| Application data | Supabase PostgreSQL, Auth, Storage, and pgvector |
+| Code execution | Judge0 Extra CE with Python, C++, and Java runtimes. Judge0 uses its own PostgreSQL and Redis services. |
+| AI and ML | Google Gemini 3.5 Flash-Lite, Gemini Embedding 2, scikit-learn |
+| Infrastructure | PowerShell and Windows launchers for development, Docker Compose and Caddy for the planned VPS |
+
+| Environment | Services |
+| --- | --- |
+| Local development and demo | Next.js, FastAPI, and the grading worker run on the workstation. Supabase CLI runs the data services in Docker. A private Ubuntu VM runs Judge0. The prepared core learning flow can run offline. Gemini features require internet. |
+| Planned hosted pilot | Vercel serves the frontend. Caddy terminates HTTPS on the Hostinger KVM 2 VPS, which runs FastAPI, the grading worker, and private Judge0 with Docker Compose. Hosted Supabase holds the application data. Gemini is optional for the pilot. |
+
+The VPS rehearsal needs a matching frontend and API release, applied migrations, working sign-in and recovery, private PDF access, a class-size grading test, and a tested restore. [KVM 2 deployment checklist](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/KVM2_LIVE_PILOT_CHECKLIST.md) · [Backup and restore](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/PHASE7_BACKUP_RESTORE_RUNBOOK.md)
 
 ## Repository layout
 
+The paths below are on the current development branch.
+
 ```text
 ByteQuest_2.0/
-├── backend/        # FastAPI app: api routes, core, models, services, scripts, tests
-├── frontend/       # Next.js and TypeScript app with shared and workspace-specific styles
-├── infra/          # Local launcher, VM config, and VPS deployment templates
-├── ml_pipeline/    # Shared features and offline model comparison
-├── supabase/       # Database migrations and idempotent local seed data
-└── docs/           # Architecture, setup, and dated verification evidence
+├── frontend/
+│   ├── src/app/                 Next.js routes and shared layouts
+│   ├── src/components/          Coding Arena, chat, and role workspaces
+│   ├── src/lib/                 API client, Auth, and shared types
+│   ├── public/                  Static assets
+│   └── scripts/                 Editor preparation and browser QA
+├── backend/
+│   ├── app/main.py              FastAPI application and health endpoints
+│   ├── app/api/                 Student, instructor, admin, exam, and chat routes
+│   ├── app/core/                Settings, authorization, database, and quotas
+│   ├── app/models/              SQLAlchemy data models
+│   ├── app/services/            Grading, Judge0, AI, materials, and gamification
+│   ├── scripts/                 Local fixtures and verification tools
+│   └── tests/                   Unit, integration, and synthetic pilot tests
+├── supabase/
+│   ├── config.toml              Local Supabase configuration
+│   ├── migrations/              Database schema and access changes
+│   └── seed.sql                 Local baseline fixtures
+├── infra/                       Launchers, Judge0 setup, VPS Compose, and preflight
+├── ml_pipeline/                 Feature engineering and offline model evaluation
+├── docs/                        Architecture, runbooks, reviews, and evidence
+├── graphify-out/                Generated codebase knowledge graph
+├── .github/workflows/           GitHub Actions regression checks
+└── *-BYTEQUEST*.bat              Windows launch and offline verification shortcuts
 ```
 
-## Quick start (Windows)
+[Frontend](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split/frontend) · [Backend](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split/backend) · [Migrations](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split/supabase/migrations) · [Infrastructure](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split/infra)
 
-**Prerequisites:** Docker Desktop, Supabase CLI **v2** (on `PATH`), Python 3.11, Node.js, PowerShell 7, and the private Judge0 Ubuntu VM. The first offline preparation run needs internet access to install or cache missing packages and Docker images.
+## Start locally on Windows
 
-### One-click
+You’ll need Docker Desktop, Supabase CLI v2, Python 3.11, Node.js 20.9 or later with npm, PowerShell 7, and a configured private Ubuntu Judge0 VM.
 
-While connected and plugged in, first run [`PREPARE-BYTEQUEST-OFFLINE.bat`](PREPARE-BYTEQUEST-OFFLINE.bat). It installs missing local dependencies, caches the Supabase containers, builds the frontend with a locally served code editor, checks published content and grading languages, and configures a host-only Judge0 link. The Ubuntu SSH and sudo steps may ask for the VM password; it is not saved.
-
-Then double-click [`START-BYTEQUEST.bat`](START-BYTEQUEST.bat) from the repo root, including on battery with Wi-Fi off. It reuses the frontend build and local data, starts the CPU-based services, checks database and grading readiness, and opens the sign-in screen. Windows asks for administrator access only if it must start the Judge0 VM. Startup errors identify the phase and are recorded under `logs/`. To verify with AC, Ethernet, and Wi-Fi disconnected, run [`TEST-BYTEQUEST-OFFLINE.bat`](TEST-BYTEQUEST-OFFLINE.bat); it writes `logs/offline-battery-acceptance.log`. See the [full startup guide](docs/LOCAL_E2E.md#one-click-windows-startup).
-
-### Manual
+For a new checkout, clone the branch documented here.
 
 ```powershell
-# 1. Local Supabase + env files (writes ignored .env.local, applies migrations + seed)
-powershell -NoProfile -ExecutionPolicy Bypass -File .\infra\start-local.ps1
-
-# 2. Backend API (use the port start-local.ps1 reports; 8000 by default)
-Set-Location .\backend
-python -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-
-# 3. Frontend (second terminal)
-Set-Location .\frontend
-npm install; npm run dev
+git clone --branch fix/ml-pr-auc-student-disjoint-split https://github.com/K1ezy/ByteQuest_2.0.git
+Set-Location ByteQuest_2.0
 ```
 
-Open <http://127.0.0.1:3000/onboarding>. The one-click battery launcher skips Supabase Studio and other services unused by the learning flow; start the full local stack manually when you need Studio. It keeps Mailpit running, so local password-reset emails can be opened at <http://127.0.0.1:15434>.
+1. Run `PREPARE-BYTEQUEST-OFFLINE.bat` once while connected. This prepares the local containers, dependencies, frontend build, and Judge0 connection. [Preparation launcher](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/PREPARE-BYTEQUEST-OFFLINE.bat)
+2. Run `START-BYTEQUEST.bat` to start the local stack and open sign-in. The launcher starts the API and grading worker together. [Startup launcher](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/START-BYTEQUEST.bat)
+3. Open [local sign-in](http://127.0.0.1:3000/onboarding). Sign in to an existing test account or follow the local guide for account and course setup.
 
-If the Judge0 VM's IP changes, re-point the client with `.\infra\configure-judge0-vm.ps1` (add `-SetApiToken` to update a rotated token), then restart the API. `GEMINI_API_KEY` is required only for AI generation, not for the core coding flow.
+For hot reload, run `pwsh -NoProfile -File .\infra\start-bytequest.ps1 -Development` after setup. The manual setup and offline acceptance procedure are in the local guide. [Local setup and troubleshooting](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/LOCAL_E2E.md)
 
-## Testing
+## Test and verify
+
+With local Supabase and the development dependencies available, run the following from the repository root.
 
 ```powershell
-# From backend/, with local Supabase running:
+Push-Location backend
 .\.venv\Scripts\python.exe -m pytest -q
+Pop-Location
+
+Push-Location frontend
+npm run lint
+npm run typecheck
+npm test
+npm run build
+Pop-Location
 ```
 
-The suite covers instructor publication, student submissions, hidden-case privacy, XP idempotency, and quest-group persistence; Judge0's transport is stubbed and every test rolls back in an outer transaction, so local accounts and progress are preserved. The [GitHub Actions workflow](.github/workflows/regression.yml) runs these plus frontend lint, typecheck, and build. To exercise the real Judge0 VM, run `scripts\verify_all_languages.py` from `backend/`.
+The regression workflow runs the backend suite plus frontend lint, typechecking, tests, and build. The local Judge0 language check is `backend/scripts/verify_all_languages.py`. The 20 November 2026 verification recorded **260 backend tests** and **178 frontend tests** passing on the weekly update. [GitHub Actions workflow](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/.github/workflows/regression.yml) · [Dated verification](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split/docs/verification)
 
-## Usernames and faculty forecasts
+## Configuration and security
 
-Apply `supabase/migrations/20261111154648_usernames_ml_dashboard.sql` and `supabase/migrations/20261112000100_exam_attempt_release_time.sql` before deploying this version of the API. The first migration backfills unique alphabetic usernames and records the winning model on new prediction snapshots. The second records the release time of each exam attempt so retakes cannot move earlier results in the ML timeline. Local startup applies pending local migrations without resetting accounts.
-
-Profile owners edit their username on `/profile`; the username is a public display handle, not a login credential. Faculty use **Machine Learning** in the workspace navigation to view historical course results and forecast states. The Performance page continues to show grades and attempt history.
-
-New students choose a unique public username of 3–44 letters and sign in using email. Student self-registration requires the school-issued ID, such as `26-00001`, and the corresponding roster email. Apply the current migration set and prepare the approved roster before opening hosted self-registration. [School-issued registration migration](supabase/migrations/20261119041043_school_issued_student_registration.sql)
-
-There is **no approved active model** in the repository. Historical charts work now; real probabilities require institution-approved de-identified training exports, a reviewed model run and activation manifest, research approval, and each learner's current consent. The [training export and review guide](ml_pipeline/README.md) documents the released-exam feature schema. Synthetic development runs must not be activated or presented as learner forecasts.
-
-## Security
-
-- `backend/.env.local` and `frontend/.env.local` hold machine-specific settings and are Git-ignored.
-- Keep Judge0 tokens, Gemini/Supabase service-role keys, and passwords out of source, commits, screenshots, and logs.
-- The frontend receives only the Supabase anon key; service credentials stay backend-only.
-- Judge0 and its Redis/Postgres stay private — the browser never submits code to Judge0 directly.
-- Local seed data is safe to reapply; avoid `supabase db reset` when preserving local accounts or attempts.
+- Local machine settings live in ignored `.env.local` files. Keep Gemini keys, Supabase privileged credentials, database passwords, and Judge0 tokens on the server.
+- Use the dedicated production templates for the hosted pilot. Configure exact HTTPS origins for the API and keep Judge0, Redis, and the sandbox database on private networks.
+- Enable saved chat history on the hosted pilot after checking its privacy notice, retention, deletion, and scheduled purge. Use approved synthetic accounts for deployment and recovery rehearsals. [Pilot operator runbook](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/PILOT_OPERATOR_RUNBOOK.md)
 
 ## Documentation
 
-- [Current system status and weekly change log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md) — current features, readiness scores, verification, and UI/UX priorities.
-- [Master plan](docs/MASTER_PLAN.md) — architecture, invariants, schema, and roadmap (source of truth).
-- [Local end-to-end guide](docs/LOCAL_E2E.md) — setup plus full instructor/student workflows.
-- [Local API security](docs/LOCAL_API_SECURITY.md) — route permissions, quotas, and request limits.
-- [Verification evidence](docs/verification/) — dated records and outstanding gates.
+- [Current system status and weekly change log](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md)
+- [Release readiness and classroom acceptance gates](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/SYSTEM_STATUS_AND_RELEASE_PLAN.md)
+- [KVM 2 live pilot setup](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/KVM2_LIVE_PILOT_CHECKLIST.md)
+- [System design and roadmap](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/MASTER_PLAN.md)
+- [Repository guidance for coding assistants](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/AGENTS.md)
 
-Core coding workflows have local evidence across C++, Python, and Java. The supervised classroom pilot remains pending hosted acceptance. [Current release status](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md)
+[MIT license](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/LICENSE)
