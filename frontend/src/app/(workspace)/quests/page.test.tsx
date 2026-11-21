@@ -5,7 +5,7 @@ import type { MasteryConcept, Quest } from "@/lib/types";
 const mocks = vi.hoisted(() => ({ api: vi.fn(), push: vi.fn(), params: new URLSearchParams() }));
 vi.mock("next/navigation", () => ({
   usePathname: () => "/quests",
-  useRouter: () => ({ push: mocks.push }),
+  useRouter: () => ({ push: mocks.push, replace: mocks.push }),
   useSearchParams: () => mocks.params,
 }));
 vi.mock("@/components/app-shell", () => ({ useShellProfile: () => ({ role: "student", enrolled_language: "python" }) }));
@@ -47,14 +47,21 @@ it("syncs the mastery view with the URL and uses a node to filter the quest list
     name: "Loops, 2 of 3 complete, 67% mastery, in progress, average 2.5 of 3 stars, weak spot logic errors",
   });
   fireEvent.click(node);
-  expect(mocks.push).toHaveBeenLastCalledWith("/quests", { scroll: false });
-  mocks.params = new URLSearchParams();
+  expect(mocks.push).toHaveBeenLastCalledWith("/quests?concept=Loops", { scroll: false });
+  mocks.params = new URLSearchParams("concept=Loops");
   rerender(<QuestsPage />);
   expect(screen.getByRole("heading", { name: "Repeat a step" })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Loops in a different concept" })).toBeNull();
   const search = screen.getByRole("searchbox");
   expect(document.activeElement).toBe(search);
+  expect((search as HTMLInputElement).value).toBe("Loops");
+  // The URL still holds the concept until the router replaces it; typed text must not be lost meanwhile.
+  fireEvent.change(search, { target: { value: "Loopsx" } });
+  expect((search as HTMLInputElement).value).toBe("Loopsx");
+  expect(mocks.push).toHaveBeenLastCalledWith("/quests", { scroll: false });
   fireEvent.change(search, { target: { value: "" } });
+  mocks.params = new URLSearchParams();
+  rerender(<QuestsPage />);
   expect(screen.getByRole("heading", { name: "Loops in a different concept" })).toBeTruthy();
 });
 

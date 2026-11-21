@@ -26,7 +26,7 @@ signing in. For local testing, open the confirmation email in Mailpit at
 | Published quests, alias leaderboard | 401 | Published track content | Published content | Published content |
 | Progress, dashboard, drafts, hints, consent | 401 | Own data and published track activities | 403 | 403 |
 | `/api/v1/submission-jobs` | 401 | Create and read own jobs | 403 for create, 404 for other jobs | 403 for create, 404 for other jobs |
-| Quest groups | 401 | Join by code and list joined groups | Create and manage owned groups; list joined groups | May manage any group by ID |
+| Workshops (`/api/v1/workshops`) | 401 | Join by code and list joined workshops | Create and manage owned workshops; list joined workshops | May manage any workshop by ID |
 | Instructor documents, activities, student group summary, analytics | 401 | 403 | Own documents, activities, and groups; aggregate analytics | Cross-instructor override |
 | Instructor exam management | 401 | 403 | Own exams and groups | Cross-instructor override |
 | Student exams and attempts | 401 | Assigned published exams and own attempts | No student attempt access | No student attempt access |
@@ -57,8 +57,8 @@ from AI cost quotas: a failed AI hint spends provider quota, but not a hint.
 | --- | --- |
 | Practice jobs and exam sample runs | 5/minute per student, separately |
 | Practice quiz submissions | 10/minute per student |
-| Group-code attempts, including invalid codes | 12/hour per account |
-| Group creation | 5/hour per instructor |
+| Workshop-code attempts, including invalid codes | 12/hour per account |
+| Workshop creation | 5/hour per instructor |
 | Instructor code verification | 5/minute per instructor |
 | Student AI hints | 3/hour and 10/day per student |
 | Instructor AI draft generation | 2/hour and 8/day per instructor |

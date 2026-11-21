@@ -16,7 +16,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from seed_local_quest_demo import ACTIVITY_ID, GROUP_NAME  # noqa: E402
-from app.api.quest_groups import JoinQuestGroup, join_quest_group, list_quest_groups  # noqa: E402
+from app.api.workshops import JoinWorkshop, join_workshop, list_workshops  # noqa: E402
 from app.api.quests_gamification import (  # noqa: E402
     QuizSubmissionRequest,
     get_student_progress,
@@ -31,8 +31,8 @@ from app.models.entities import (  # noqa: E402
     LearningActivity,
     Profile,
     ProgrammingLang,
-    QuestGroup,
-    QuestGroupMember,
+    Workshop,
+    WorkshopMember,
     TestCase,
     UserRole,
 )
@@ -56,7 +56,7 @@ def smoke_demo_quest(
     baseline_challenge_attempts = 0
     baseline_memberships = 0
     try:
-        group = db.query(QuestGroup).filter(QuestGroup.name == group_name).one()
+        group = db.query(Workshop).filter(Workshop.name == group_name).one()
         group_id = group.id
         students = (
             db.query(Profile)
@@ -86,9 +86,9 @@ def smoke_demo_quest(
                 ActivityAttempt.student_id == student_id,
                 ActivityAttempt.activity_id == challenge_id,
             ).count()
-        baseline_memberships = db.query(QuestGroupMember).filter(
-            QuestGroupMember.group_id == group_id,
-            QuestGroupMember.profile_id == student_id,
+        baseline_memberships = db.query(WorkshopMember).filter(
+            WorkshopMember.workshop_id == group_id,
+            WorkshopMember.profile_id == student_id,
         ).count()
         before_xp = student.xp_points
         prior_success = db.query(ActivityAttempt).filter(
@@ -99,16 +99,16 @@ def smoke_demo_quest(
         request = Request({
             "type": "http",
             "method": "POST",
-            "path": "/api/v1/quest-groups/join",
+            "path": "/api/v1/workshops/join",
             "headers": [],
             "client": ("127.0.0.1", 0),
             "app": SimpleNamespace(state=SimpleNamespace(ml_shadow_status="disabled")),
         })
 
-        joined = join_quest_group(JoinQuestGroup(code=group.join_code), student, db)
-        joined_again = join_quest_group(JoinQuestGroup(code=group.join_code), student, db)
+        joined = join_workshop(JoinWorkshop(code=group.join_code), student, db)
+        joined_again = join_workshop(JoinWorkshop(code=group.join_code), student, db)
         assert joined.id == group_id and joined_again.member_count == joined.member_count
-        assert any(item.id == group_id for item in list_quest_groups(student, db))
+        assert any(item.id == group_id for item in list_workshops(student, db))
 
         quiz = next(item for item in list_published_quests(student, db) if item.id == activity_id)
         assert quiz.quiz_questions is not None and len(quiz.quiz_questions) == 3
@@ -201,9 +201,9 @@ def smoke_demo_quest(
                 ActivityAttempt.student_id == student_id,
                 ActivityAttempt.activity_id == challenge_id,
             ).count() == baseline_challenge_attempts
-        assert check.query(QuestGroupMember).filter(
-            QuestGroupMember.group_id == group_id,
-            QuestGroupMember.profile_id == student_id,
+        assert check.query(WorkshopMember).filter(
+            WorkshopMember.workshop_id == group_id,
+            WorkshopMember.profile_id == student_id,
         ).count() == baseline_memberships
     finally:
         check.close()

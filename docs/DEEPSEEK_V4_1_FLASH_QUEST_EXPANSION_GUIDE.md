@@ -1,5 +1,7 @@
 # ByteQuest 2.0: implementation guide and DeepSeek V4.1 Flash prompt
 
+> **Renamed 11/21/26:** quest groups are now **Workshops** in code. Read `/api/v1/quest-groups` as `/api/v1/workshops`, `quest_groups.py` as `workshops.py`, `QuestGroup*` as `Workshop*`, and the `quest_group*` tables as `workshop*`. This guide otherwise describes the repository on 29 October 2026.
+
 This guide is for extending four existing features: code challenges, lesson review, Create Quest, and Join Quest. It describes the repository as it exists on 29 October 2026. A **quest group** is a shared collection of published learning activities; an **activity** is either a coding challenge or a concept quiz. Keep that distinction when naming routes, models, and UI.
 
 ## 1. Current architecture

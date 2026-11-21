@@ -12,7 +12,7 @@ import asyncio
 import uuid
 
 from seed_local_quest_demo import seed_demo_quest
-from app.api.quest_groups import AddGroupActivities, add_group_activities
+from app.api.workshops import AddWorkshopActivities, add_workshop_activities
 from app.api.rag_instructor import (
     ActivityReviewUpdate,
     publish_learning_activity,
@@ -25,8 +25,8 @@ from app.models.entities import (
     LearningActivity,
     Profile,
     ProgrammingLang,
-    QuestGroup,
-    QuestGroupActivity,
+    Workshop,
+    WorkshopActivity,
     ReviewState,
     TestCase,
     UserRole,
@@ -100,8 +100,8 @@ def seed_python_challenge() -> None:
         owner = db.get(Profile, quiz.created_by)
         if owner is None or owner.role not in (UserRole.instructor, UserRole.admin):
             raise SystemExit("The Python demo quiz has no faculty/admin owner.")
-        group = db.query(QuestGroup).filter(
-            QuestGroup.name == GROUP_NAME, QuestGroup.created_by == owner.id
+        group = db.query(Workshop).filter(
+            Workshop.name == GROUP_NAME, Workshop.created_by == owner.id
         ).one_or_none()
         if group is None:
             raise SystemExit("The Python demo group is missing; rerun the quiz seed first.")
@@ -156,12 +156,12 @@ def seed_python_challenge() -> None:
         elif challenge.review_status != ReviewState.published or not challenge.judge0_verified:
             raise SystemExit("The Python demo challenge is not a verified, published activity.")
 
-        if not db.query(QuestGroupActivity).filter(
-            QuestGroupActivity.group_id == group.id,
-            QuestGroupActivity.activity_id == CHALLENGE_ID,
+        if not db.query(WorkshopActivity).filter(
+            WorkshopActivity.workshop_id == group.id,
+            WorkshopActivity.activity_id == CHALLENGE_ID,
         ).first():
-            add_group_activities(
-                group.id, AddGroupActivities(activity_ids=[CHALLENGE_ID]), owner, db
+            add_workshop_activities(
+                group.id, AddWorkshopActivities(activity_ids=[CHALLENGE_ID]), owner, db
             )
         print(f"Local Python journey ready: {GROUP_NAME}")
         print(f"Student join code: {group.join_code}")

@@ -13,9 +13,9 @@ from app.models.entities import (
     CourseMember,
     ExamAttempt,
     LearningActivity,
-    QuestGroupActivity,
-    QuestGroupMember,
-    QuestGroup,
+    WorkshopActivity,
+    WorkshopMember,
+    Workshop,
     Profile,
     ReviewState,
     UserRole,
@@ -117,7 +117,7 @@ def activity_has_opened(activity: LearningActivity, now: datetime | None = None)
 def student_activity_clause(student_id: uuid.UUID):
     """A student reaches an activity through its course, or a workshop holding it.
 
-    Joining a workshop by code adds a quest-group membership and no course row,
+    Joining a workshop by code adds a workshop membership and no course row,
     so scoping on the course alone would hide the activities a student joined for.
 
     An activity with no course belongs to no one and cannot be scoped, so it stays
@@ -132,11 +132,11 @@ def student_activity_clause(student_id: uuid.UUID):
     )
     in_workshop = exists().where(
         and_(
-            QuestGroupActivity.activity_id == LearningActivity.id,
-            QuestGroupMember.group_id == QuestGroupActivity.group_id,
-            QuestGroupMember.profile_id == student_id,
-            QuestGroup.id == QuestGroupActivity.group_id,
-            workshop_shareable_activity_clause(QuestGroup.created_by),
+            WorkshopActivity.activity_id == LearningActivity.id,
+            WorkshopMember.workshop_id == WorkshopActivity.workshop_id,
+            WorkshopMember.profile_id == student_id,
+            Workshop.id == WorkshopActivity.workshop_id,
+            workshop_shareable_activity_clause(Workshop.created_by),
         )
     ).correlate(LearningActivity)
     return or_(LearningActivity.course_id.is_(None), in_course, in_workshop)

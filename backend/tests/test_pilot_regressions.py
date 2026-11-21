@@ -11,13 +11,13 @@ from test_learning_flow_integration import flow, _token, _challenge, _quiz, _pub
 from test_faculty_admin import workspace, _token as faculty_token
 from app.models.entities import (
     ActivityAttempt, ActivityKind, Badge, ChallengeHint, CourseMember, Exam, ExamAssignment, ExamAttempt, ExamItem, HintUse,
-    LearningActivity, Profile, ProgrammingLang, QuestGroup, QuestGroupActivity, QuestGroupMember, SubmissionJob,
+    LearningActivity, Profile, ProgrammingLang, Workshop, WorkshopActivity, WorkshopMember, SubmissionJob,
     TestCase as GradingCase,
 )
 from app.services.gamification.badges import evaluate_and_award_badges
 from app.services.activity_publishing import apply_publish_rules
 from app.api.faculty import activities as faculty_activities
-from app.api import chat, pilot, quest_groups
+from app.api import chat, pilot, workshops
 from app.core.config import settings
 from app.services import exam_worker, submission_worker
 from app.services.judge0.client import Judge0UnavailableError, judge0_client
@@ -293,14 +293,14 @@ def test_restricted_exam_keeps_items_out_of_practice_and_requires_course_enrollm
     with sessions() as db:
         activity = db.get(LearningActivity, ids["draft"])
         activity.exam_only = True
-        group = QuestGroup(name="Restricted exam group", language=ProgrammingLang.python,
-                           join_code="".join(secrets.choice(quest_groups.CODE_ALPHABET) for _ in range(8)),
+        group = Workshop(name="Restricted exam group", language=ProgrammingLang.python,
+                           join_code="".join(secrets.choice(workshops.CODE_ALPHABET) for _ in range(8)),
                            created_by=ids["faculty"])
         db.add(group)
         db.flush()
         group_id = group.id
         for student_id in (ids["student"], ids["other_student"]):
-            db.add(QuestGroupMember(group_id=group_id, profile_id=student_id))
+            db.add(WorkshopMember(workshop_id=group_id, profile_id=student_id))
         db.commit()
 
     approval = client.post(f"/api/v1/faculty/drafts/{ids['draft']}/approve", headers=instructor,
@@ -310,7 +310,7 @@ def test_restricted_exam_keeps_items_out_of_practice_and_requires_course_enrollm
     assert str(ids["draft"]) not in {item["id"] for item in practice}
     payload = {"title": "Restricted assessment", "opens_at": (now+timedelta(minutes=1)).isoformat(),
                "closes_at": (now+timedelta(hours=1)).isoformat(), "duration_minutes": 30,
-               "group_ids": [str(group_id)], "items": [{"activity_id": str(ids["draft"]), "points": 10}]}
+               "workshop_ids": [str(group_id)], "items": [{"activity_id": str(ids["draft"]), "points": 10}]}
     assert client.post("/api/v1/exams/instructor", headers=instructor, json=payload).status_code == 422
     created = client.post("/api/v1/exams/instructor", headers=instructor, json=payload | {"content_mode": "restricted"})
     assert created.status_code == 201, created.text
@@ -337,27 +337,27 @@ def test_restricted_exam_keeps_items_out_of_practice_and_requires_course_enrollm
 
 def test_workshop_sharing_checks_instructor_course_membership(workspace, monkeypatch):
     client, sessions, ids = workspace
-    monkeypatch.setattr(quest_groups, "reserve", lambda *args, **kwargs: None)
+    monkeypatch.setattr(workshops, "reserve", lambda *args, **kwargs: None)
     title = {"name": "Pilot classroom", "language": "python"}
     activities = {"activity_ids": [str(ids["published"])]}
     unrelated = faculty_token(ids["other_faculty"])
-    assert client.post("/api/v1/quest-groups", headers=unrelated, json=title | activities).status_code == 422
-    created = client.post("/api/v1/quest-groups", headers=unrelated, json=title)
+    assert client.post("/api/v1/workshops", headers=unrelated, json=title | activities).status_code == 422
+    created = client.post("/api/v1/workshops", headers=unrelated, json=title)
     assert created.status_code == 201
     group_id = created.json()["id"]
-    assert client.post(f"/api/v1/quest-groups/{group_id}/activities", headers=unrelated, json=activities).status_code == 422
-    authorized = client.post("/api/v1/quest-groups", headers=faculty_token(ids["faculty"]), json=title | activities)
+    assert client.post(f"/api/v1/workshops/{group_id}/activities", headers=unrelated, json=activities).status_code == 422
+    authorized = client.post("/api/v1/workshops", headers=faculty_token(ids["faculty"]), json=title | activities)
     assert authorized.status_code == 201
     assert authorized.json()["activity_ids"] == activities["activity_ids"]
 
     # Exercise the read-side policy for assignments saved by an older release.
     with sessions() as db:
-        db.add(QuestGroupActivity(group_id=uuid.UUID(group_id), activity_id=ids["published"]))
-        db.add(QuestGroupMember(group_id=uuid.UUID(group_id), profile_id=ids["other_student"]))
+        db.add(WorkshopActivity(workshop_id=uuid.UUID(group_id), activity_id=ids["published"]))
+        db.add(WorkshopMember(workshop_id=uuid.UUID(group_id), profile_id=ids["other_student"]))
         db.commit()
     headers = faculty_token(ids["other_student"])
-    workshops = client.get("/api/v1/quest-groups", headers=headers).json()
-    assert next(group for group in workshops if group["id"] == group_id)["activity_ids"] == []
+    listed = client.get("/api/v1/workshops", headers=headers).json()
+    assert next(group for group in listed if group["id"] == group_id)["activity_ids"] == []
     assert all(quest["id"] != str(ids["published"]) for quest in client.get("/api/v1/quests", headers=headers).json())
 
 
@@ -597,16 +597,16 @@ def test_disabled_gemini_keeps_reviewed_hints_available(flow, monkeypatch):
 def test_dashboard_skips_finished_exam_before_selecting_next_due_exam(flow):
     client, sessions, users = flow
     instructor, student = _token(users["instructor"]), _token(users["student"])
-    group = client.post("/api/v1/quest-groups", headers=instructor,
+    group = client.post("/api/v1/workshops", headers=instructor,
                         json={"name": "Audit due exams", "language": "python", "activity_ids": []}).json()
-    assert client.post("/api/v1/quest-groups/join", headers=student, json={"code": group["join_code"]}).status_code == 200
+    assert client.post("/api/v1/workshops/join", headers=student, json={"code": group["join_code"]}).status_code == 200
     now = datetime.now(timezone.utc)
     with sessions() as db:
         exams = [Exam(title=f"Audit exam {i}", created_by=users["instructor"], published_at=now-timedelta(hours=2),
                       opens_at=now-timedelta(hours=1), closes_at=now+timedelta(hours=i), duration_minutes=30) for i in [1,2]]
         db.add_all(exams)
         db.flush()
-        db.add_all([ExamAssignment(exam_id=e.id, group_id=uuid.UUID(group["id"])) for e in exams])
+        db.add_all([ExamAssignment(exam_id=e.id, workshop_id=uuid.UUID(group["id"])) for e in exams])
         db.add(ExamAttempt(exam_id=exams[0].id, student_id=users["student"], attempt_number=1, status="submitted",
                            started_at=now-timedelta(minutes=40),due_at=now-timedelta(minutes=10),submitted_at=now,
                            answers_json={}))

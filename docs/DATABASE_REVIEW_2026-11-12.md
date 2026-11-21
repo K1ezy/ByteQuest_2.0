@@ -1,5 +1,7 @@
 # ByteQuest 2.0 database review — 12 November 2026
 
+> **Renamed 11/21/26:** `quest_groups`, `quest_group_members` and `quest_group_activities` are now `workshops`, `workshop_members` and `workshop_activities`, and their `group_id` columns (and `exam_assignments.group_id`) are `workshop_id`. Index and constraint names follow. This review keeps the names it found on 12 November.
+
 Scope: the 18 migration files, live local PostgreSQL catalog, 29 SQLAlchemy models, the submission/exam/ML paths, relevant API queries and tests, and Chapter 3 draft. **Verified** means inspected in code or the local catalog. **Inferred** means a scale or future-workload estimate. This is a review of the local thesis system, not a production certification.
 
 ## A. Inventory

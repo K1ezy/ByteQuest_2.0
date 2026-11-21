@@ -367,7 +367,7 @@ def test_submission_comparison_uses_previous_coding_practice_and_only_public_fie
 def test_group_owner_role_downgrade_revokes_management(flow):
     client, new_session, users = flow
     owner = _token(users["instructor"])
-    created = client.post("/api/v1/quest-groups", headers=owner, json={
+    created = client.post("/api/v1/workshops", headers=owner, json={
         "name": "Role downgrade group", "language": "python",
     })
     assert created.status_code == 201, created.text
@@ -379,11 +379,11 @@ def test_group_owner_role_downgrade_revokes_management(flow):
         profile.role = UserRole.student
         db.commit()
 
-    listed = client.get("/api/v1/quest-groups", headers=owner)
+    listed = client.get("/api/v1/workshops", headers=owner)
     assert listed.status_code == 200
     assert listed.json()[0]["join_code"] is None
     assert listed.json()[0]["is_owner"] is False
-    add = client.post(f"/api/v1/quest-groups/{group_id}/activities", headers=owner,
+    add = client.post(f"/api/v1/workshops/{group_id}/activities", headers=owner,
         json={"activity_ids": [str(uuid.uuid4())]})
     assert add.status_code == 403
 
@@ -579,20 +579,20 @@ def test_quest_join_quiz_and_progress_survive_new_client(flow):
     assert client.patch(f"{path}/review", json={"reviewed": True}, headers=instructor).status_code == 200
     assert client.patch(f"{path}/publish", headers=instructor).status_code == 200
 
-    created = client.post("/api/v1/quest-groups", headers=instructor, json={
+    created = client.post("/api/v1/workshops", headers=instructor, json={
         "name": "Regression group", "language": "python", "activity_ids": [str(activity_id)],
     })
     assert created.status_code == 201, created.text
     group = created.json()
     code = group["join_code"]
-    assert client.post("/api/v1/quest-groups", headers=student, json={
+    assert client.post("/api/v1/workshops", headers=student, json={
         "name": "Student group", "language": "python",
     }).status_code == 403
-    assert client.post("/api/v1/quest-groups/join", headers=other_track, json={"code": code}).status_code == 409
-    joined = client.post("/api/v1/quest-groups/join", headers=student, json={"code": code})
+    assert client.post("/api/v1/workshops/join", headers=other_track, json={"code": code}).status_code == 409
+    joined = client.post("/api/v1/workshops/join", headers=student, json={"code": code})
     assert joined.status_code == 200, joined.text
     assert joined.json()["join_code"] is None
-    assert client.post("/api/v1/quest-groups/join", headers=student, json={"code": code}).status_code == 200
+    assert client.post("/api/v1/workshops/join", headers=student, json={"code": code}).status_code == 200
 
     public_quests = client.get("/api/v1/quests", headers=student)
     quiz = next(row for row in public_quests.json() if row["id"] == str(activity_id))
@@ -622,7 +622,7 @@ def test_quest_join_quiz_and_progress_survive_new_client(flow):
 
     # A fresh HTTP client simulates the page reloading from persisted API state.
     with TestClient(app) as reloaded:
-        groups = reloaded.get("/api/v1/quest-groups", headers=student)
+        groups = reloaded.get("/api/v1/workshops", headers=student)
         progress = reloaded.get("/api/v1/quests/progress", headers=student)
         quests = reloaded.get("/api/v1/quests", headers=student)
         dashboard = reloaded.get("/api/v1/pilot/dashboard", headers=student)
@@ -651,12 +651,12 @@ def test_python_quiz_and_challenge_update_dashboard_together(flow):
     assert client.patch(f"{challenge_path}/review", json={"reviewed": True}, headers=instructor).status_code == 200
     assert client.patch(f"{challenge_path}/publish", headers=instructor).status_code == 200
 
-    group = client.post("/api/v1/quest-groups", headers=instructor, json={
+    group = client.post("/api/v1/workshops", headers=instructor, json={
         "name": "Python journey", "language": "python",
         "activity_ids": [str(quiz_id), str(challenge_id)],
     })
     assert group.status_code == 201, group.text
-    joined = client.post("/api/v1/quest-groups/join", headers=student,
+    joined = client.post("/api/v1/workshops/join", headers=student,
                          json={"code": group.json()["join_code"]})
     assert joined.status_code == 200
     assert set(joined.json()["activity_ids"]) == {str(quiz_id), str(challenge_id)}
@@ -849,12 +849,12 @@ def test_invite_guessing_and_failed_ai_hint_quota(flow, monkeypatch):
         activity.review_status = ReviewState.published
         db.commit()
 
-    assert client.post("/api/v1/quest-groups/join", headers=student,
+    assert client.post("/api/v1/workshops/join", headers=student,
                        json={"code": "!!!!!!!!"}).status_code == 422
     for _ in range(12):
-        assert client.post("/api/v1/quest-groups/join", headers=student,
+        assert client.post("/api/v1/workshops/join", headers=student,
                            json={"code": "ZZZZZZZZ"}).status_code == 404
-    limited = client.post("/api/v1/quest-groups/join", headers={**student,
+    limited = client.post("/api/v1/workshops/join", headers={**student,
                           "Origin": "http://127.0.0.1:3000"},
                           json={"code": "ZZZZZZZZ"})
     assert limited.status_code == 429
@@ -893,23 +893,23 @@ def test_exam_snapshot_autosave_and_result_embargo(flow, monkeypatch):
         db.commit()
     instructor = _token(users["instructor"])
     student = _token(users["student"])
-    group_response = client.post("/api/v1/quest-groups", headers=instructor,
+    group_response = client.post("/api/v1/workshops", headers=instructor,
         json={"name": "Exam pilot group", "language": "python", "activity_ids": [str(quiz_id), str(challenge_id)]})
     assert group_response.status_code == 201, group_response.text
     group = group_response.json()
     other_instructor = _token(users["other_instructor"])
     admin = _token(users["admin"])
-    assert client.get(f"/api/v1/pilot/instructor/groups/{group['id']}/students",
+    assert client.get(f"/api/v1/pilot/instructor/workshops/{group['id']}/students",
         headers=other_instructor).status_code == 404
-    assert client.get(f"/api/v1/pilot/instructor/groups/{group['id']}/students",
+    assert client.get(f"/api/v1/pilot/instructor/workshops/{group['id']}/students",
         headers=admin).status_code == 200
-    assert client.post("/api/v1/quest-groups/join", headers=student,
+    assert client.post("/api/v1/workshops/join", headers=student,
         json={"code": group["join_code"]}).status_code == 200
     now = datetime.now(timezone.utc)
     created = client.post("/api/v1/exams/instructor", headers=instructor, json={
         "title": "Regression exam", "opens_at": (now + timedelta(minutes=5)).isoformat(),
         "closes_at": (now + timedelta(hours=2)).isoformat(), "duration_minutes": 45,
-        "group_ids": [group["id"]],
+        "workshop_ids": [group["id"]],
         "items": [{"activity_id": str(quiz_id), "points": 40},
                   {"activity_id": str(challenge_id), "points": 60}],
     })
@@ -1130,16 +1130,16 @@ def _started_quiz_exam(client, new_session, users) -> tuple[str, str]:
         db.commit()
     instructor = _token(users["instructor"])
     student = _token(users["student"])
-    group = client.post("/api/v1/quest-groups", headers=instructor,
+    group = client.post("/api/v1/workshops", headers=instructor,
         json={"name": "Deadline group", "language": "python", "activity_ids": [str(quiz_id)]})
     assert group.status_code == 201, group.text
-    assert client.post("/api/v1/quest-groups/join", headers=student,
+    assert client.post("/api/v1/workshops/join", headers=student,
         json={"code": group.json()["join_code"]}).status_code == 200
     now = datetime.now(timezone.utc)
     created = client.post("/api/v1/exams/instructor", headers=instructor, json={
         "title": "Deadline exam", "opens_at": (now + timedelta(minutes=5)).isoformat(),
         "closes_at": (now + timedelta(hours=2)).isoformat(), "duration_minutes": 30,
-        "group_ids": [group.json()["id"]], "items": [{"activity_id": str(quiz_id), "points": 10}],
+        "workshop_ids": [group.json()["id"]], "items": [{"activity_id": str(quiz_id), "points": 10}],
     })
     assert created.status_code == 201, created.text
     exam_id = created.json()["id"]
@@ -1172,10 +1172,10 @@ def test_workshop_list_query_count_does_not_grow_with_workshops(flow):
         db.commit()
 
     def join_new_workshop(name: str) -> None:
-        group = client.post("/api/v1/quest-groups", headers=instructor,
+        group = client.post("/api/v1/workshops", headers=instructor,
                             json={"name": name, "language": "python", "activity_ids": [str(quiz_id)]})
         assert group.status_code == 201, group.text
-        assert client.post("/api/v1/quest-groups/join", headers=student,
+        assert client.post("/api/v1/workshops/join", headers=student,
                            json={"code": group.json()["join_code"]}).status_code == 200
 
     def queries_to_list_workshops() -> int:
@@ -1183,7 +1183,7 @@ def test_workshop_list_query_count_does_not_grow_with_workshops(flow):
         record = lambda *args: statements.append(args[2])  # noqa: E731 - (conn, cursor, statement, ...)
         event.listen(Engine, "before_cursor_execute", record)
         try:
-            listed = client.get("/api/v1/quest-groups", headers=student)
+            listed = client.get("/api/v1/workshops", headers=student)
         finally:
             event.remove(Engine, "before_cursor_execute", record)
         assert listed.status_code == 200, listed.text

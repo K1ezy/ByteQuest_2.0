@@ -6,7 +6,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { apiRequest, getErrorMessage } from "@/lib/api";
 
 type ExamMode = "practice" | "restricted";
-interface Catalog { groups: { id: string; name: string; language: string }[];
+interface Catalog { workshops: { id: string; name: string; language: string }[];
   activities: { id: string; title: string; kind: string; language: string; exam_only?: boolean }[] }
 interface Exam { id: string; title: string; opens_at: string; closes_at: string; published: boolean;
   results_released: boolean; has_unreleased_results?: boolean }
@@ -16,7 +16,7 @@ interface AttemptResult {
   attempt_number: number; status: string; score: number | null; max_score: number | null;
   results_released: boolean; xp_awarded: number | null;
 }
-interface ExamDetail { id: string; groups: { id: string; name: string }[];
+interface ExamDetail { id: string; workshops: { id: string; name: string }[];
   students: { id: string; alias: string; attempts: number; results?: AttemptResult[] }[] }
 
 function manilaIso(local: string): string { return new Date(`${local}:00+08:00`).toISOString(); }
@@ -30,7 +30,7 @@ export default function InstructorExamsPage() {
   const [open, setOpen] = useState("");
   const [close, setClose] = useState("");
   const [duration, setDuration] = useState(45);
-  const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [workshopIds, setWorkshopIds] = useState<string[]>([]);
   const [activityIds, setActivityIds] = useState<string[]>([]);
   const [points, setPoints] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
@@ -49,9 +49,9 @@ export default function InstructorExamsPage() {
     apiRequest<Catalog>("/exams/instructor/catalog"), apiRequest<Exam[]>("/exams/instructor"),
   ]).then(([source, existing]) => { setCatalog(source); setExams(existing); })
     .catch((cause) => setError(getErrorMessage(cause))); }, []);
-  const selectedGroups = catalog?.groups.filter((group) => groupIds.includes(group.id)) ?? [];
-  const selectedLanguage = selectedGroups[0]?.language;
-  const eligibleGroups = selectedGroups.filter((group) => group.language === selectedLanguage);
+  const selectedWorkshops = catalog?.workshops.filter((workshop) => workshopIds.includes(workshop.id)) ?? [];
+  const selectedLanguage = selectedWorkshops[0]?.language;
+  const eligibleWorkshops = selectedWorkshops.filter((workshop) => workshop.language === selectedLanguage);
   const modeActivities = catalog?.activities.filter((activity) => Boolean(activity.exam_only) === (contentMode === "restricted")) ?? [];
   const eligibleActivities = modeActivities.filter((activity) => activity.language === selectedLanguage);
   const eligibleActivityIds = new Set(eligibleActivities.map((activity) => activity.id));
@@ -60,26 +60,26 @@ export default function InstructorExamsPage() {
   function toggle(id: string, selected: string[], setter: (value: string[]) => void) {
     setter(selected.includes(id) ? selected.filter((item) => item !== id) : [...selected, id]);
   }
-  function toggleGroup(group: Catalog["groups"][number]) {
-    if (selectedLanguage && group.language !== selectedLanguage) return;
-    toggle(group.id, eligibleGroups.map((item) => item.id), setGroupIds);
-    if (eligibleGroups.length === 1 && eligibleGroups[0].id === group.id) {
+  function toggleWorkshop(workshop: Catalog["workshops"][number]) {
+    if (selectedLanguage && workshop.language !== selectedLanguage) return;
+    toggle(workshop.id, eligibleWorkshops.map((item) => item.id), setWorkshopIds);
+    if (eligibleWorkshops.length === 1 && eligibleWorkshops[0].id === workshop.id) {
       setActivityIds([]);
       setPoints({});
     }
   }
   async function create(event: FormEvent) {
     event.preventDefault();
-    if (busy || eligibleGroups.length === 0 || selectedActivityIds.length === 0) return;
+    if (busy || eligibleWorkshops.length === 0 || selectedActivityIds.length === 0) return;
     setBusy(true); setError(""); setMessage("");
     try {
       const created = await apiRequest<{ id: string }>("/exams/instructor", { method: "POST",
         body: JSON.stringify({ title, content_mode: contentMode, opens_at: manilaIso(open), closes_at: manilaIso(close),
-          duration_minutes: duration, group_ids: eligibleGroups.map((group) => group.id),
+          duration_minutes: duration, workshop_ids: eligibleWorkshops.map((workshop) => workshop.id),
           items: selectedActivityIds.map((id) => ({ activity_id: id, points: points[id] || 10 })) }) });
       await apiRequest(`/exams/instructor/${created.id}/publish`, { method: "POST" });
       setMessage("Exam published with a frozen copy of the reviewed activities.");
-      setTitle(""); setGroupIds([]); setActivityIds([]); setPoints({});
+      setTitle(""); setWorkshopIds([]); setActivityIds([]); setPoints({});
       await load();
     } catch (cause) { setError(getErrorMessage(cause)); }
     finally { setBusy(false); }
@@ -127,7 +127,7 @@ export default function InstructorExamsPage() {
     finally { setBusy(false); }
   }
   return <div className="page-shell pilot-dashboard"><p className="eyebrow-label">Instructor studio</p>
-    <h1>Exams</h1><p className="pilot-lead">Assign groups and schedule in Asia/Manila. Publishing freezes the exam content.</p>
+    <h1>Exams</h1><p className="pilot-lead">Assign workshops and schedule in Asia/Manila. Publishing freezes the exam content.</p>
     <Link href={role === "admin" ? "/admin/teaching" : "/instructor"}>Back to workspace</Link>
     {error && <p className="notice error" role="alert">{error}</p>}
     {message && <p className="notice" role="status">{message}</p>}
@@ -144,7 +144,7 @@ export default function InstructorExamsPage() {
           <option value="practice">Timed practice · Published activities</option>
           <option value="restricted">Restricted assessment · Exam-only activities</option>
         </select>
-        {contentMode === "restricted" && <p>Use exam-only activities from one course. Learners need both a group assignment and active enrollment in that course.</p>}
+        {contentMode === "restricted" && <p>Use exam-only activities from one course. Learners need both a workshop assignment and active enrollment in that course.</p>}
       </div>
       <div className="pilot-dashboard-grid"><div className="field"><label htmlFor="exam-open">Opens · Manila time</label>
         <input id="exam-open" type="datetime-local" required value={open} onChange={(event) => setOpen(event.target.value)} /></div>
@@ -153,13 +153,13 @@ export default function InstructorExamsPage() {
       <div className="field"><label htmlFor="exam-duration">Minutes per student</label>
         <input id="exam-duration" type="number" min={1} max={240} required value={duration}
           onChange={(event) => setDuration(Number(event.target.value))} /></div>
-      <fieldset className="pilot-question"><legend>Assign groups</legend>
-        {catalog.groups.length > 0 ? <p>Each exam uses one language track. Clear your group selection to switch tracks.</p> :
+      <fieldset className="pilot-question"><legend>Assign workshops</legend>
+        {catalog.workshops.length > 0 ? <p>Each exam uses one language track. Clear your workshop selection to switch tracks.</p> :
           <p><Link href="/workshops">Create a workshop</Link> to assign learners to this exam.</p>}
-        {catalog.groups.map((group) => <label key={group.id}><input type="checkbox"
-          checked={eligibleGroups.some((item) => item.id === group.id)}
-          disabled={busy || (!!selectedLanguage && group.language !== selectedLanguage)}
-          onChange={() => toggleGroup(group)} /> {group.name} · {group.language}</label>)}
+        {catalog.workshops.map((workshop) => <label key={workshop.id}><input type="checkbox"
+          checked={eligibleWorkshops.some((item) => item.id === workshop.id)}
+          disabled={busy || (!!selectedLanguage && workshop.language !== selectedLanguage)}
+          onChange={() => toggleWorkshop(workshop)} /> {workshop.name} · {workshop.language}</label>)}
       </fieldset>
       <fieldset className="pilot-question"><legend>Reviewed activities and points</legend>
         {eligibleActivities.map((activity) => <div key={activity.id} className="row">
@@ -170,9 +170,9 @@ export default function InstructorExamsPage() {
         </div>)}
         {modeActivities.length === 0 || (selectedLanguage && eligibleActivities.length === 0) ? (
           <p><Link href={activitiesHref}>{contentMode === "restricted" ? "Create an exam-only activity" : "Publish an activity"}</Link> for the assigned track.</p>
-        ) : !selectedLanguage ? <p>Select a group to see its eligible activities.</p> : null}
+        ) : !selectedLanguage ? <p>Select a workshop to see its eligible activities.</p> : null}
       </fieldset>
-      <button className="button button-primary" type="submit" disabled={busy || eligibleGroups.length === 0 || selectedActivityIds.length === 0}>
+      <button className="button button-primary" type="submit" disabled={busy || eligibleWorkshops.length === 0 || selectedActivityIds.length === 0}>
         {busy ? "Working…" : "Create and publish exam"}</button>
     </form>}
     <section className="pilot-card"><div className="row"><h2>Your exams</h2>
@@ -216,7 +216,7 @@ export default function InstructorExamsPage() {
         <button className="button button-outline" disabled={busy || !retakeOpen || !retakeClose || student.attempts === 0}
           onClick={() => void grant(student.id)}>Grant retake</button>
       </div>)}
-      {detail.students.length === 0 && <p>No students have joined the assigned groups.</p>}
+      {detail.students.length === 0 && <p>No students have joined the assigned workshops.</p>}
     </section>}
   </div>;
 }

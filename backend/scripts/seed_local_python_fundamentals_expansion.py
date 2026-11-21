@@ -36,9 +36,9 @@ if (
         "Refusing to seed outside the local development Supabase database on port 54322."
     )
 
-from app.api.quest_groups import (  # noqa: E402
-    AddGroupActivities,
-    add_group_activities,
+from app.api.workshops import (  # noqa: E402
+    AddWorkshopActivities,
+    add_workshop_activities,
 )
 from app.api.rag_instructor import (  # noqa: E402
     ActivityReviewUpdate,
@@ -52,8 +52,8 @@ from app.models.entities import (  # noqa: E402
     LearningActivity,
     Profile,
     ProgrammingLang,
-    QuestGroup,
-    QuestGroupActivity,
+    Workshop,
+    WorkshopActivity,
     ReviewState,
     TestCase,
     UserRole,
@@ -305,10 +305,10 @@ CHALLENGE_SUM_ONE_TO_N = {
 
 def get_demo_context(db):
     group = (
-        db.query(QuestGroup)
+        db.query(Workshop)
         .filter(
-            QuestGroup.name == GROUP_NAME,
-            QuestGroup.language == LANGUAGE,
+            Workshop.name == GROUP_NAME,
+            Workshop.language == LANGUAGE,
         )
         .one_or_none()
     )
@@ -324,17 +324,17 @@ def get_demo_context(db):
 
 def ensure_group_activity(db, group, activity_id, owner) -> None:
     linked = (
-        db.query(QuestGroupActivity)
+        db.query(WorkshopActivity)
         .filter(
-            QuestGroupActivity.group_id == group.id,
-            QuestGroupActivity.activity_id == activity_id,
+            WorkshopActivity.workshop_id == group.id,
+            WorkshopActivity.activity_id == activity_id,
         )
         .first()
     )
     if linked is None:
-        add_group_activities(
+        add_workshop_activities(
             group.id,
-            AddGroupActivities(activity_ids=[activity_id]),
+            AddWorkshopActivities(activity_ids=[activity_id]),
             owner,
             db,
         )
@@ -503,8 +503,8 @@ def main() -> None:
         seed_challenge(db, CHALLENGE_SUM_ONE_TO_N, owner, group)
 
         total_linked = (
-            db.query(QuestGroupActivity)
-            .filter(QuestGroupActivity.group_id == group.id)
+            db.query(WorkshopActivity)
+            .filter(WorkshopActivity.workshop_id == group.id)
             .count()
         )
         print(f"Group now contains {total_linked} published activities.")

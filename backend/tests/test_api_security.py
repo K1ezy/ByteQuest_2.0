@@ -55,7 +55,7 @@ def test_production_cors_requires_exact_https_origin():
 
 def test_request_body_limit_precedes_authentication():
     with TestClient(app) as client:
-        response = client.post("/api/v1/quest-groups", content=b"x" * (12 * 1024 * 1024 + 1),
+        response = client.post("/api/v1/workshops", content=b"x" * (12 * 1024 * 1024 + 1),
                                headers={"Origin": "http://localhost:3000"})
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "request_too_large"

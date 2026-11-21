@@ -16,8 +16,8 @@ from app.core.security import get_current_user, require_instructor
 from app.core.quotas import reserve
 from app.models.entities import (
     ActivityKind, CourseMember, Exam, ExamAssignment, ExamAttempt, ExamItem, ExamRetakeGrant,
-    ExamSampleRun, LearningActivity, NotificationOutbox, Profile, QuestGroup,
-    QuestGroupMember, ReviewState, TestCase, UserRole,
+    ExamSampleRun, LearningActivity, NotificationOutbox, Profile, Workshop,
+    WorkshopMember, ReviewState, TestCase, UserRole,
 )
 from app.services.gamification.badges import evaluate_and_award_badges
 from app.services.gamification.completion_rewards import exam_completion_awards
@@ -67,7 +67,7 @@ class DraftExam(BaseModel):
     opens_at: datetime
     closes_at: datetime
     duration_minutes: int = Field(ge=1, le=240)
-    group_ids: list[uuid.UUID] = Field(min_length=1, max_length=10)
+    workshop_ids: list[uuid.UUID] = Field(min_length=1, max_length=10)
     items: list[DraftItem] = Field(min_length=1, max_length=30)
 
     @field_validator("opens_at", "closes_at")
@@ -98,15 +98,15 @@ def _student_exam_course_clause(student_id: uuid.UUID):
 
 def assigned(db: Session, exam_id: uuid.UUID, student_id: uuid.UUID) -> bool:
     return db.query(ExamAssignment.id).join(Exam, Exam.id == ExamAssignment.exam_id).join(
-        QuestGroupMember, QuestGroupMember.group_id == ExamAssignment.group_id
-    ).filter(ExamAssignment.exam_id == exam_id, QuestGroupMember.profile_id == student_id,
+        WorkshopMember, WorkshopMember.workshop_id == ExamAssignment.workshop_id
+    ).filter(ExamAssignment.exam_id == exam_id, WorkshopMember.profile_id == student_id,
              _student_exam_course_clause(student_id)).first() is not None
 
 
 def assigned_exam_numbers(db: Session, student_id: uuid.UUID):
     assignments = db.query(ExamAssignment.exam_id).join(
-        QuestGroupMember, QuestGroupMember.group_id == ExamAssignment.group_id
-    ).filter(QuestGroupMember.profile_id == student_id)
+        WorkshopMember, WorkshopMember.workshop_id == ExamAssignment.workshop_id
+    ).filter(WorkshopMember.profile_id == student_id)
     return db.query(
         Exam.id,
         func.row_number().over(order_by=(Exam.published_at, Exam.created_at, Exam.id)).label("exam_number"),
@@ -173,14 +173,14 @@ def public_item(item: ExamItem) -> dict:
 def create_exam(body: DraftExam, user: Profile = Depends(require_instructor), db: Session = Depends(get_db)):
     if body.closes_at <= body.opens_at or body.opens_at <= utcnow():
         raise HTTPException(422, "Choose a future exam window with the close after the open.")
-    if len(set(body.group_ids)) != len(body.group_ids) or len({i.activity_id for i in body.items}) != len(body.items):
+    if len(set(body.workshop_ids)) != len(body.workshop_ids) or len({i.activity_id for i in body.items}) != len(body.items):
         raise HTTPException(422, "Groups and activities must be unique.")
-    groups = db.query(QuestGroup).filter(QuestGroup.id.in_(body.group_ids)).all()
-    if len(groups) != len(body.group_ids) or (user.role != UserRole.admin and any(g.created_by != user.id for g in groups)):
-        raise HTTPException(404, "Quest group not found.")
-    languages = {g.language for g in groups}
+    workshops = db.query(Workshop).filter(Workshop.id.in_(body.workshop_ids)).all()
+    if len(workshops) != len(body.workshop_ids) or (user.role != UserRole.admin and any(g.created_by != user.id for g in workshops)):
+        raise HTTPException(404, "Workshop not found.")
+    languages = {g.language for g in workshops}
     if len(languages) != 1:
-        raise HTTPException(422, "All assigned groups must use one language track.")
+        raise HTTPException(422, "All assigned workshops must use one language track.")
     activities = db.query(LearningActivity).filter(LearningActivity.id.in_([i.activity_id for i in body.items])).all()
     if len(activities) != len(body.items) or any(
         not may_manage_instructional_content(db, user, a.course_id, a.created_by) for a in activities
@@ -199,7 +199,7 @@ def create_exam(body: DraftExam, user: Profile = Depends(require_instructor), db
                 restricted_course_id=next(iter(course_ids)) if restricted else None)
     db.add(exam)
     db.flush()
-    db.add_all(ExamAssignment(exam_id=exam.id, group_id=g.id) for g in groups)
+    db.add_all(ExamAssignment(exam_id=exam.id, workshop_id=g.id) for g in workshops)
     db.add_all(ExamItem(exam_id=exam.id, activity_id=item.activity_id,
                         position=position, points=item.points, snapshot_json={})
                for position, item in enumerate(body.items, 1))
@@ -229,21 +229,21 @@ def instructor_exams(user: Profile = Depends(require_instructor), db: Session = 
 
 @router.get("/instructor/catalog")
 def exam_catalog(user: Profile = Depends(require_instructor), db: Session = Depends(get_db)):
-    groups_query = db.query(QuestGroup)
+    workshops_query = db.query(Workshop)
     activities_query = db.query(LearningActivity).filter(
         LearningActivity.archived_at.is_(None), or_(LearningActivity.review_status == ReviewState.published,
                                                    LearningActivity.exam_only.is_(True)),
     )
     if user.role != UserRole.admin:
-        groups_query = groups_query.filter(QuestGroup.created_by == user.id)
+        workshops_query = workshops_query.filter(Workshop.created_by == user.id)
         course_ids = active_membership_course_ids(db, user.id, "instructor")
         activities_query = activities_query.filter(or_(
             LearningActivity.course_id.in_(course_ids),
             LearningActivity.course_id.is_(None) & (LearningActivity.created_by == user.id),
         ))
-    groups = groups_query.order_by(QuestGroup.created_at.desc()).all()
+    workshops = workshops_query.order_by(Workshop.created_at.desc()).all()
     activities = activities_query.order_by(LearningActivity.sequence_order).all()
-    return {"groups": [{"id": g.id, "name": g.name, "language": g.language.value} for g in groups],
+    return {"workshops": [{"id": g.id, "name": g.name, "language": g.language.value} for g in workshops],
             "activities": [{"id": a.id, "title": a.title or a.topic_concept,
                             "kind": a.activity_type.value, "language": a.language.value,
                             "exam_only": a.exam_only}
@@ -253,10 +253,10 @@ def exam_catalog(user: Profile = Depends(require_instructor), db: Session = Depe
 @router.get("/instructor/{exam_id}")
 def instructor_exam_detail(exam_id: uuid.UUID, user: Profile = Depends(require_instructor), db: Session = Depends(get_db)):
     exam = instructor_exam(db, exam_id, user)
-    groups = db.query(QuestGroup).join(ExamAssignment, ExamAssignment.group_id == QuestGroup.id).filter(
+    workshops = db.query(Workshop).join(ExamAssignment, ExamAssignment.workshop_id == Workshop.id).filter(
         ExamAssignment.exam_id == exam_id).all()
-    students = db.query(Profile).join(QuestGroupMember, QuestGroupMember.profile_id == Profile.id).join(
-        ExamAssignment, ExamAssignment.group_id == QuestGroupMember.group_id
+    students = db.query(Profile).join(WorkshopMember, WorkshopMember.profile_id == Profile.id).join(
+        ExamAssignment, ExamAssignment.workshop_id == WorkshopMember.workshop_id
     ).filter(ExamAssignment.exam_id == exam_id, Profile.role == UserRole.student).distinct().order_by(
         Profile.pseudonym_id).all()
     attempts_by_student: dict[uuid.UUID, list[dict]] = {}
@@ -279,7 +279,7 @@ def instructor_exam_detail(exam_id: uuid.UUID, user: Profile = Depends(require_i
             "xp_awarded": result.get("pending_xp") if result.get("xp_released") else None,
         })
     return {"id": exam.id, "title": exam.title,
-            "groups": [{"id": g.id, "name": g.name} for g in groups],
+            "workshops": [{"id": g.id, "name": g.name} for g in workshops],
             "students": [{"id": s.id, "alias": s.username,
                           "attempts": len(attempts_by_student.get(s.id, ())),
                           "results": attempts_by_student.get(s.id, [])} for s in students]}
@@ -330,11 +330,11 @@ def publish_exam(exam_id: uuid.UUID, user: Profile = Depends(require_instructor)
             ]
         item.snapshot_json = snapshot
     exam.published_at = utcnow()
-    members = db.query(QuestGroupMember.profile_id).join(
-        ExamAssignment, ExamAssignment.group_id == QuestGroupMember.group_id
+    members = db.query(WorkshopMember.profile_id).join(
+        ExamAssignment, ExamAssignment.workshop_id == WorkshopMember.workshop_id
     ).filter(ExamAssignment.exam_id == exam.id)
     if restricted:
-        members = members.filter(QuestGroupMember.profile_id.in_(db.query(CourseMember.profile_id).filter(
+        members = members.filter(WorkshopMember.profile_id.in_(db.query(CourseMember.profile_id).filter(
             CourseMember.course_id == exam.restricted_course_id,
             CourseMember.member_role == "student", CourseMember.status == "active",
         )))

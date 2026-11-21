@@ -1,4 +1,4 @@
-"""Create and join shared quest groups using short invite codes."""
+"""Create and join workshops using short invite codes."""
 
 import secrets
 import uuid
@@ -18,18 +18,18 @@ from app.models.entities import (
     LearningActivity,
     Profile,
     ProgrammingLang,
-    QuestGroup,
-    QuestGroupActivity,
-    QuestGroupMember,
+    Workshop,
+    WorkshopActivity,
+    WorkshopMember,
     ReviewState,
     UserRole,
 )
 
-router = APIRouter(prefix="/api/v1/quest-groups", tags=["Quest Groups"])
+router = APIRouter(prefix="/api/v1/workshops", tags=["Workshops"])
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
-class CreateQuestGroup(BaseModel):
+class CreateWorkshop(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     name: str = Field(min_length=3, max_length=80)
@@ -38,19 +38,19 @@ class CreateQuestGroup(BaseModel):
     activity_ids: list[uuid.UUID] = Field(default_factory=list, max_length=40)
 
 
-class JoinQuestGroup(BaseModel):
+class JoinWorkshop(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     code: str = Field(min_length=8, max_length=12)
 
 
-class AddGroupActivities(BaseModel):
+class AddWorkshopActivities(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     activity_ids: list[uuid.UUID] = Field(min_length=1, max_length=40)
 
 
-class QuestGroupView(BaseModel):
+class WorkshopView(BaseModel):
     id: uuid.UUID
     name: str
     description: Optional[str]
@@ -86,37 +86,37 @@ def _published_activities(
     return activities
 
 
-def _group_views(db: Session, groups: list[QuestGroup], current_user: Profile) -> list[QuestGroupView]:
+def _group_views(db: Session, groups: list[Workshop], current_user: Profile) -> list[WorkshopView]:
     """Build views for many workshops with two queries in total."""
-    group_ids = [group.id for group in groups]
-    if not group_ids:
+    workshop_ids = [group.id for group in groups]
+    if not workshop_ids:
         return []
     member_counts = dict(
-        db.query(QuestGroupMember.group_id, func.count(QuestGroupMember.profile_id))
-        .filter(QuestGroupMember.group_id.in_(group_ids))
-        .group_by(QuestGroupMember.group_id)
+        db.query(WorkshopMember.workshop_id, func.count(WorkshopMember.profile_id))
+        .filter(WorkshopMember.workshop_id.in_(workshop_ids))
+        .group_by(WorkshopMember.workshop_id)
         .all()
     )
-    activity_ids: dict[uuid.UUID, list[uuid.UUID]] = {group_id: [] for group_id in group_ids}
-    for group_id, activity_id in (
-        db.query(QuestGroupActivity.group_id, QuestGroupActivity.activity_id)
-        .join(LearningActivity, LearningActivity.id == QuestGroupActivity.activity_id)
-        .join(QuestGroup, QuestGroup.id == QuestGroupActivity.group_id)
+    activity_ids: dict[uuid.UUID, list[uuid.UUID]] = {workshop_id: [] for workshop_id in workshop_ids}
+    for workshop_id, activity_id in (
+        db.query(WorkshopActivity.workshop_id, WorkshopActivity.activity_id)
+        .join(LearningActivity, LearningActivity.id == WorkshopActivity.activity_id)
+        .join(Workshop, Workshop.id == WorkshopActivity.workshop_id)
         .filter(
-            QuestGroupActivity.group_id.in_(group_ids),
+            WorkshopActivity.workshop_id.in_(workshop_ids),
             LearningActivity.review_status == ReviewState.published,
             LearningActivity.archived_at.is_(None),
-            workshop_shareable_activity_clause(QuestGroup.created_by),
+            workshop_shareable_activity_clause(Workshop.created_by),
         )
         .order_by(LearningActivity.sequence_order, LearningActivity.id)
     ):
-        activity_ids[group_id].append(activity_id)
+        activity_ids[workshop_id].append(activity_id)
     views = []
     for group in groups:
         is_owner = current_user.role == UserRole.admin or (
             current_user.role == UserRole.instructor and group.created_by == current_user.id
         )
-        views.append(QuestGroupView(
+        views.append(WorkshopView(
             id=group.id,
             name=group.name,
             description=group.description,
@@ -129,38 +129,38 @@ def _group_views(db: Session, groups: list[QuestGroup], current_user: Profile) -
     return views
 
 
-def _group_view(db: Session, group: QuestGroup, current_user: Profile) -> QuestGroupView:
+def _group_view(db: Session, group: Workshop, current_user: Profile) -> WorkshopView:
     return _group_views(db, [group], current_user)[0]
 
 
-@router.get("", response_model=list[QuestGroupView])
-def list_quest_groups(
+@router.get("", response_model=list[WorkshopView])
+def list_workshops(
     current_user: Profile = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[QuestGroupView]:
+) -> list[WorkshopView]:
     groups = (
-        db.query(QuestGroup)
-        .join(QuestGroupMember, QuestGroupMember.group_id == QuestGroup.id)
-        .filter(QuestGroupMember.profile_id == current_user.id)
-        .order_by(QuestGroup.created_at.desc(), QuestGroup.id.desc())
+        db.query(Workshop)
+        .join(WorkshopMember, WorkshopMember.workshop_id == Workshop.id)
+        .filter(WorkshopMember.profile_id == current_user.id)
+        .order_by(Workshop.created_at.desc(), Workshop.id.desc())
         .limit(100)
         .all()
     )
     return _group_views(db, groups, current_user)
 
 
-@router.post("", response_model=QuestGroupView, status_code=status.HTTP_201_CREATED)
-def create_quest_group(
-    payload: CreateQuestGroup,
+@router.post("", response_model=WorkshopView, status_code=status.HTTP_201_CREATED)
+def create_workshop(
+    payload: CreateWorkshop,
     current_user: Profile = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> QuestGroupView:
+) -> WorkshopView:
     if current_user.role not in (UserRole.instructor, UserRole.admin):
-        raise HTTPException(status_code=403, detail="Faculty or admin access is required to create a quest.")
+        raise HTTPException(status_code=403, detail="Faculty or admin access is required to create a workshop.")
     activity_ids = [activity.id for activity in _published_activities(db, payload.activity_ids, payload.language, current_user.id)]
-    reserve("group_create", current_user.id, session=db, commit=True)
+    reserve("workshop_create", current_user.id, session=db, commit=True)
     for _ in range(3):
-        group = QuestGroup(
+        group = Workshop(
             name=payload.name,
             description=payload.description or None,
             language=payload.language,
@@ -170,40 +170,40 @@ def create_quest_group(
         try:
             db.add(group)
             db.flush()
-            db.add(QuestGroupMember(group_id=group.id, profile_id=current_user.id))
-            db.add_all(QuestGroupActivity(group_id=group.id, activity_id=activity_id) for activity_id in activity_ids)
+            db.add(WorkshopMember(workshop_id=group.id, profile_id=current_user.id))
+            db.add_all(WorkshopActivity(workshop_id=group.id, activity_id=activity_id) for activity_id in activity_ids)
             db.commit()
             db.refresh(group)
             return _group_view(db, group, current_user)
         except IntegrityError:
             db.rollback()
-    raise HTTPException(status_code=503, detail="Could not make a unique quest code. Try again.")
+    raise HTTPException(status_code=503, detail="Could not make a unique workshop code. Try again.")
 
 
-@router.post("/join", response_model=QuestGroupView)
-def join_quest_group(
-    payload: JoinQuestGroup,
+@router.post("/join", response_model=WorkshopView)
+def join_workshop(
+    payload: JoinWorkshop,
     current_user: Profile = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> QuestGroupView:
+) -> WorkshopView:
     code = payload.code.strip().replace("-", "").upper()
     if len(code) != 8 or any(char not in CODE_ALPHABET for char in code):
-        raise HTTPException(status_code=422, detail="Enter the eight-character quest code.")
+        raise HTTPException(status_code=422, detail="Enter the eight-character workshop code.")
     # Charge a valid-format guess before lookup using the request's own connection.
     # A second connection per request can exhaust the pool when a class joins together.
-    reserve("group_join", current_user.id, session=db, commit=True)
-    group = db.query(QuestGroup).filter(QuestGroup.join_code == code).first()
+    reserve("workshop_join", current_user.id, session=db, commit=True)
+    group = db.query(Workshop).filter(Workshop.join_code == code).first()
     if group is None:
-        raise HTTPException(status_code=404, detail="No quest matches that code.")
+        raise HTTPException(status_code=404, detail="No workshop matches that code.")
     if current_user.role == UserRole.student and group.language != current_user.enrolled_language:
-        raise HTTPException(status_code=409, detail="This quest uses a different language track. Change your track before joining.")
+        raise HTTPException(status_code=409, detail="This workshop uses a different language track. Change your track before joining.")
     existing = (
-        db.query(QuestGroupMember)
-        .filter(QuestGroupMember.group_id == group.id, QuestGroupMember.profile_id == current_user.id)
+        db.query(WorkshopMember)
+        .filter(WorkshopMember.workshop_id == group.id, WorkshopMember.profile_id == current_user.id)
         .first()
     )
     if existing is None:
-        db.add(QuestGroupMember(group_id=group.id, profile_id=current_user.id))
+        db.add(WorkshopMember(workshop_id=group.id, profile_id=current_user.id))
         try:
             db.commit()
         except IntegrityError:
@@ -211,27 +211,27 @@ def join_quest_group(
     return _group_view(db, group, current_user)
 
 
-@router.post("/{group_id}/activities", response_model=QuestGroupView)
-def add_group_activities(
-    group_id: uuid.UUID,
-    payload: AddGroupActivities,
+@router.post("/{workshop_id}/activities", response_model=WorkshopView)
+def add_workshop_activities(
+    workshop_id: uuid.UUID,
+    payload: AddWorkshopActivities,
     current_user: Profile = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> QuestGroupView:
+) -> WorkshopView:
     if current_user.role not in (UserRole.instructor, UserRole.admin):
         raise HTTPException(status_code=403, detail="Instructor or admin access is required.")
-    group = db.query(QuestGroup).filter(QuestGroup.id == group_id).first()
+    group = db.query(Workshop).filter(Workshop.id == workshop_id).first()
     if group is None:
-        raise HTTPException(status_code=404, detail="Quest not found.")
+        raise HTTPException(status_code=404, detail="Workshop not found.")
     if group.created_by != current_user.id and current_user.role != UserRole.admin:
-        raise HTTPException(status_code=404, detail="Quest not found.")
+        raise HTTPException(status_code=404, detail="Workshop not found.")
     activities = _published_activities(db, payload.activity_ids, group.language, group.created_by)
     existing_ids = {
         activity_id
-        for (activity_id,) in db.query(QuestGroupActivity.activity_id).filter(QuestGroupActivity.group_id == group.id).all()
+        for (activity_id,) in db.query(WorkshopActivity.activity_id).filter(WorkshopActivity.workshop_id == group.id).all()
     }
     db.add_all(
-        QuestGroupActivity(group_id=group.id, activity_id=activity.id)
+        WorkshopActivity(workshop_id=group.id, activity_id=activity.id)
         for activity in activities
         if activity.id not in existing_ids
     )

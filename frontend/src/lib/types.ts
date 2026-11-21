@@ -56,7 +56,7 @@ export interface Quest {
   quiz_questions?: QuizQuestion[] | null;
 }
 
-export interface QuestGroup {
+export interface Workshop {
   id: string;
   name: string;
   description: string | null;

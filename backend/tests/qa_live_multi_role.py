@@ -519,7 +519,7 @@ def cleanup() -> None:
                             "or course_id = cast(:course as uuid)"), params)
             db.execute(text("delete from public.activity_attempts where student_id = any(cast(:ids as uuid[]))"), params)
             db.execute(text("delete from public.exams where created_by = any(cast(:ids as uuid[]))"), params)
-            db.execute(text("delete from public.quest_groups where created_by = any(cast(:ids as uuid[]))"), params)
+            db.execute(text("delete from public.workshops where created_by = any(cast(:ids as uuid[]))"), params)
             db.execute(text("delete from public.learning_activities where created_by = any(cast(:ids as uuid[])) "
                             "or course_id = cast(:course as uuid)"), params)
             if course_id:

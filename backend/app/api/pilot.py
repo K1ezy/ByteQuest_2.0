@@ -16,9 +16,9 @@ from app.core.security import get_current_user, require_instructor
 from app.models.entities import (
     ActivityAttempt, ActivityDraft, ActivityKind, ChallengeHint, HintUse,
     LearningActivity, Profile, ResearchConsent, ReviewState, SubmissionJob, UserRole,
-    QuestGroupMember,
+    WorkshopMember,
     NotificationOutbox,
-    QuestGroup, QuestGroupActivity,
+    Workshop, WorkshopActivity,
     Course, CourseAnnouncement, _utcnow,
 )
 from app.services.ai_rag.error_explainer import explain_code_error
@@ -128,23 +128,23 @@ def dashboard(user: Profile = Depends(get_current_user), db: Session = Depends(g
     }
 
 
-@router.get("/instructor/groups/{group_id}/students")
-def group_students(group_id: uuid.UUID, user: Profile = Depends(require_instructor), db: Session = Depends(get_db)):
-    group = db.get(QuestGroup, group_id)
-    if group is None:
-        raise HTTPException(404, "Quest group not found.")
-    if group.created_by != user.id and user.role != UserRole.admin:
-        raise HTTPException(404, "Quest group not found.")
-    activity_ids = [row[0] for row in db.query(QuestGroupActivity.activity_id).join(
-        LearningActivity, LearningActivity.id == QuestGroupActivity.activity_id
-    ).filter(QuestGroupActivity.group_id == group_id, workshop_shareable_activity_clause(group.created_by)).all()]
-    members = db.query(Profile).join(QuestGroupMember, QuestGroupMember.profile_id == Profile.id).filter(
-        QuestGroupMember.group_id == group_id, Profile.role == UserRole.student).order_by(Profile.pseudonym_id).all()
+@router.get("/instructor/workshops/{workshop_id}/students")
+def workshop_students(workshop_id: uuid.UUID, user: Profile = Depends(require_instructor), db: Session = Depends(get_db)):
+    workshop = db.get(Workshop, workshop_id)
+    if workshop is None:
+        raise HTTPException(404, "Workshop not found.")
+    if workshop.created_by != user.id and user.role != UserRole.admin:
+        raise HTTPException(404, "Workshop not found.")
+    activity_ids = [row[0] for row in db.query(WorkshopActivity.activity_id).join(
+        LearningActivity, LearningActivity.id == WorkshopActivity.activity_id
+    ).filter(WorkshopActivity.workshop_id == workshop_id, workshop_shareable_activity_clause(workshop.created_by)).all()]
+    members = db.query(Profile).join(WorkshopMember, WorkshopMember.profile_id == Profile.id).filter(
+        WorkshopMember.workshop_id == workshop_id, Profile.role == UserRole.student).order_by(Profile.pseudonym_id).all()
     counts = dict(db.query(ActivityAttempt.student_id, func.count(func.distinct(ActivityAttempt.activity_id))).filter(
         ActivityAttempt.student_id.in_([m.id for m in members]),
         ActivityAttempt.activity_id.in_(activity_ids), ActivityAttempt.is_successful.is_(True)
     ).group_by(ActivityAttempt.student_id).all()) if members and activity_ids else {}
-    return {"group_id": group_id, "total_activities": len(activity_ids),
+    return {"workshop_id": workshop_id, "total_activities": len(activity_ids),
             "students": [{"alias": m.username, "completed": counts.get(m.id, 0),
                           "level": m.current_level} for m in members]}
 

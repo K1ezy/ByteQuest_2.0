@@ -36,8 +36,8 @@ POLICIES: dict[str, tuple[Rule, ...]] = {
     "official_submit": (Rule("official_submit", "account", "minute", 5),),
     "exam_sample": (Rule("exam_sample", "account", "minute", 5),),
     "quiz_submit": (Rule("quiz_submit", "account", "minute", 10),),
-    "group_join": (Rule("group_join", "account", "hour", 12),),
-    "group_create": (Rule("group_create", "account", "hour", 5),),
+    "workshop_join": (Rule("workshop_join", "account", "hour", 12),),
+    "workshop_create": (Rule("workshop_create", "account", "hour", 5),),
     "instructor_verify": (Rule("instructor_verify", "account", "minute", 5),),
     # Student global caps = class size (30) × the per-student daily cap, so one user can't starve the class.
     "student_ai": (

@@ -10,7 +10,7 @@ import { ActivityDateFilter } from "@/components/activity-date-filter";
 import { activityDateMatches, formatActivityDate } from "@/lib/activity-date";
 import { SolveStars } from "@/components/solve-stars";
 import { MasteryMap } from "@/components/mastery-map";
-import type { ProgrammingLanguage, Quest, QuestGroup } from "@/lib/types";
+import type { ProgrammingLanguage, Quest, Workshop } from "@/lib/types";
 
 type QuestStatusFilter = "all" | "next" | "completed";
 
@@ -40,7 +40,7 @@ function QuestsPageContent() {
   const isStudent = profile?.role === "student";
   const showMastery = isStudent && !workshops && searchParams.get("view") === "map";
   const [quests, setQuests] = useState<Quest[]>([]);
-  const [groups, setGroups] = useState<QuestGroup[]>([]);
+  const [groups, setGroups] = useState<Workshop[]>([]);
   const [groupError, setGroupError] = useState("");
   const [actionMode, setActionMode] = useState<"create" | "join" | "add" | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
@@ -56,8 +56,14 @@ function QuestsPageContent() {
   const [message, setMessage] = useState("");
   const [isError, setIsError] = useState(false);
   const [questFilter, setQuestFilter] = useState<QuestStatusFilter>("all");
-  const [search, setSearch] = useState("");
-  const [selectedConcept, setSelectedConcept] = useState<string | null>(null);
+  const selectedConcept = workshops ? null : searchParams.get("concept");
+  // The box shows a chosen concept but owns its text, so typing never waits on the URL update.
+  const [search, setSearch] = useState(selectedConcept ?? "");
+  const [shownConcept, setShownConcept] = useState(selectedConcept);
+  if (shownConcept !== selectedConcept) {
+    setShownConcept(selectedConcept);
+    if (selectedConcept !== null) setSearch(selectedConcept);
+  }
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
   const searchInput = useRef<HTMLInputElement>(null);
   const focusSearch = useRef(false);
@@ -78,7 +84,7 @@ function QuestsPageContent() {
     try {
       const [questResult, groupResult] = await Promise.allSettled([
         apiRequest<Quest[]>("/quests"),
-        workshops ? apiRequest<QuestGroup[]>("/quest-groups") : Promise.resolve([]),
+        workshops ? apiRequest<Workshop[]>("/workshops") : Promise.resolve([]),
       ]);
       if (questResult.status === "rejected") throw questResult.reason;
       setQuests(questResult.value);
@@ -151,7 +157,7 @@ function QuestsPageContent() {
   const visibleQuests = filteredQuests.filter((quest) => category === "code-challenge"
     ? quest.activity_type === "challenge" : category === "lessons-review"
       ? quest.activity_type === "quiz" : true);
-  const hasFilters = Boolean(category || search.trim() || questFilter !== "all" || dateRange.from || dateRange.to);
+  const hasFilters = Boolean(category || selectedConcept || search.trim() || questFilter !== "all" || dateRange.from || dateRange.to);
 
   // Keyboard navigation & activation (Enter launches selected card; arrows navigate grid)
   useEffect(() => {
@@ -239,9 +245,11 @@ function QuestsPageContent() {
   function clearFilters() {
     setQuestFilter("all");
     setSearch("");
-    setSelectedConcept(null);
     setDateRange({ from: "", to: "" });
-    if (categoryParam) handleCategorySelect("");
+    const query = new URLSearchParams(searchParams);
+    query.delete("category");
+    query.delete("concept");
+    router.push(query.size ? pathname + "?" + query : pathname, { scroll: false });
   }
 
   function changeView(view: "list" | "map", concept?: string) {
@@ -249,8 +257,8 @@ function QuestsPageContent() {
     if (view === "map") query.set("view", "map");
     else query.delete("view");
     if (concept !== undefined) {
+      query.set("concept", concept);
       setSearch(concept);
-      setSelectedConcept(concept);
       setQuestFilter("all");
       setDateRange({ from: "", to: "" });
       query.delete("category");
@@ -277,9 +285,9 @@ function QuestsPageContent() {
     setActionBusy(true);
     setActionError("");
     try {
-      let updatedGroup: QuestGroup;
+      let updatedGroup: Workshop;
       if (actionMode === "create") {
-        updatedGroup = await apiRequest<QuestGroup>("/quest-groups", {
+        updatedGroup = await apiRequest<Workshop>("/workshops", {
           method: "POST",
           body: JSON.stringify({
             name: newGroupName.trim(),
@@ -291,13 +299,13 @@ function QuestsPageContent() {
         setNewGroupName("");
         setNewGroupDescription("");
       } else if (actionMode === "join") {
-        updatedGroup = await apiRequest<QuestGroup>("/quest-groups/join", {
+        updatedGroup = await apiRequest<Workshop>("/workshops/join", {
           method: "POST",
           body: JSON.stringify({ code: joinCode.trim() }),
         });
         setJoinCode("");
       } else if (actionMode === "add" && selectedGroup) {
-        updatedGroup = await apiRequest<QuestGroup>(`/quest-groups/${selectedGroup.id}/activities`, {
+        updatedGroup = await apiRequest<Workshop>(`/workshops/${selectedGroup.id}/activities`, {
           method: "POST",
           body: JSON.stringify({ activity_ids: selectedActivityIds }),
         });
@@ -326,7 +334,7 @@ function QuestsPageContent() {
       {!showMastery && loading ? <section className="panel" role="status">Loading {workshops ? "workshops" : "quest map"}…</section>
       : !showMastery && isError ? <section className="panel"><p role="alert">{message}</p><button type="button" className="button button-outline" onClick={() => void loadData()}>Retry</button></section>
       : (
-        <div className={workshops ? "quests-workspace-expanded qm-panel" : "quests-workspace-expanded"} id="quest-groups">
+        <div className={workshops ? "quests-workspace-expanded qm-panel" : "quests-workspace-expanded"} id="quest-panel">
           <div className="qm-panel-heading">
             <div>
               <h1>{selectedGroup?.name || (workshops ? "Workshops" : "Quest Map")}</h1>
@@ -442,7 +450,14 @@ function QuestsPageContent() {
                       <input
                         ref={searchInput}
                         value={search}
-                        onChange={(event) => { setSelectedConcept(null); setSearch(event.target.value); }}
+                        onChange={(event) => {
+                          setSearch(event.target.value);
+                          if (selectedConcept) {
+                            const query = new URLSearchParams(searchParams);
+                            query.delete("concept");
+                            router.replace(query.size ? pathname + "?" + query : pathname, { scroll: false });
+                          }
+                        }}
                         placeholder="Search quests"
                         type="search"
                       />

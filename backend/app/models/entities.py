@@ -279,8 +279,8 @@ class LearningActivity(Base):
     attempts = relationship("ActivityAttempt", back_populates="activity", cascade="all, delete-orphan")
 
 
-class QuestGroup(Base):
-    __tablename__ = "quest_groups"
+class Workshop(Base):
+    __tablename__ = "workshops"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(80), nullable=False)
@@ -291,22 +291,22 @@ class QuestGroup(Base):
     created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 
-class QuestGroupMember(Base):
-    __tablename__ = "quest_group_members"
-    __table_args__ = (UniqueConstraint("group_id", "profile_id", name="uq_quest_group_member"),)
+class WorkshopMember(Base):
+    __tablename__ = "workshop_members"
+    __table_args__ = (UniqueConstraint("workshop_id", "profile_id", name="uq_workshop_member"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    group_id = Column(UUID(as_uuid=True), ForeignKey("quest_groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    workshop_id = Column(UUID(as_uuid=True), ForeignKey("workshops.id", ondelete="CASCADE"), nullable=False, index=True)
     profile_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
     joined_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 
-class QuestGroupActivity(Base):
-    __tablename__ = "quest_group_activities"
-    __table_args__ = (UniqueConstraint("group_id", "activity_id", name="uq_quest_group_activity"),)
+class WorkshopActivity(Base):
+    __tablename__ = "workshop_activities"
+    __table_args__ = (UniqueConstraint("workshop_id", "activity_id", name="uq_workshop_activity"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    group_id = Column(UUID(as_uuid=True), ForeignKey("quest_groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    workshop_id = Column(UUID(as_uuid=True), ForeignKey("workshops.id", ondelete="CASCADE"), nullable=False, index=True)
     activity_id = Column(UUID(as_uuid=True), ForeignKey("learning_activities.id", ondelete="CASCADE"), nullable=False, index=True)
 
 
@@ -541,11 +541,11 @@ class ExamItem(Base):
 
 class ExamAssignment(Base):
     __tablename__ = "exam_assignments"
-    __table_args__ = (UniqueConstraint("exam_id", "group_id", name="uq_exam_assignment_group"),)
+    __table_args__ = (UniqueConstraint("exam_id", "workshop_id", name="uq_exam_assignment_workshop"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     exam_id = Column(UUID(as_uuid=True), ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
-    group_id = Column(UUID(as_uuid=True), ForeignKey("quest_groups.id", ondelete="CASCADE"), nullable=False)
+    workshop_id = Column(UUID(as_uuid=True), ForeignKey("workshops.id", ondelete="CASCADE"), nullable=False)
 
 
 class ExamAttempt(Base):
