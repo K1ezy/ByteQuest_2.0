@@ -131,6 +131,8 @@ Work through terms one page at a time with the metric definitions and API states
 
 ## 8. Delivery order
 
+Progress: slices 1–3 were delivered on 21 November 2026 and checkpointed in commit `07df51d`. What changed, how it was checked and what remains are in the [21 November change log](verification/ui-ux-harmonization-2026-11-21.md).
+
 | Slice | Work to ship | Gate before moving on |
 | --- | --- | --- |
 | 0 · Baseline and flow map | Record actual role screens and loaded states. Build a navigation/name map, a term inventory, and a role/visibility matrix. Capture representative small-screen, exam, and instructor/admin data views. Resolve conflicts between outdated docs and current behavior. | Three critical journeys documented with their real data, gates, and entry/exit links. Current pain points reproducible or recorded as verification questions. |
