@@ -787,17 +787,6 @@ h1, h2, h3, p { margin-top: 0; }
 .case-check input { accent-color: var(--green); }
 .remove-case { margin-top: 12px; color: #a64e43; font-size: var(--text-sm); }
 .muted-copy { color: #64756e; font-size: var(--text-sm); line-height: var(--leading-normal); }
-.shadow-analytics-panel { display: grid; gap: 14px; margin-top: 20px; }
-.shadow-analytics-panel .panel-subtitle { margin: 0; }
-.shadow-analytics-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.shadow-analytics-status .muted-copy, .shadow-analytics-footnote { margin: 0; }
-.shadow-analytics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; }
-.shadow-analytics-metric { display: grid; min-width: 0; gap: 8px; padding: 14px; border: 1px solid #e1e9e2; border-radius: 10px; background: var(--surface); }
-.shadow-analytics-metric dt { color: #62756d; font-size: var(--text-xs); line-height: 1.45; }
-.shadow-analytics-metric dd { margin: 0; color: #273e34; font: 700 var(--text-lg) var(--font-heading); overflow-wrap: anywhere; }
-.shadow-model-versions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; color: #44584e; font-size: var(--text-xs); }
-.shadow-model-versions ul { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding-left: 16px; }
-.shadow-analytics-panel .workspace-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; }
 .workspace-library-heading, .challenge-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .workspace-library-heading .eyebrow-label, .challenge-editor-heading .eyebrow-label { margin-bottom: 6px; }
 .challenge-review > .panel-subtitle { margin-bottom: 0; }
@@ -854,7 +843,6 @@ h1, h2, h3, p { margin-top: 0; }
   .workspace-library-heading, .challenge-editor-heading { align-items: flex-start; }
   .workspace-list-row { align-items: flex-start; }
   .challenge-row-status { align-items: end; }
-  .shadow-analytics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .field.full { grid-column: auto; }
   .quest-toolbar { align-items: stretch; }
   .quest-filters { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); }
@@ -1123,6 +1111,10 @@ h1, h2, h3, p { margin-top: 0; }
   .leaderboard-standing { grid-template-columns: auto 1fr; }
   .leaderboard-standing-actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
+@media (max-width: 420px) {
+  /* Beside a docked rail there is no room for the rank tile and the sentence side by side. */
+  .leaderboard-standing { grid-template-columns: minmax(0, 1fr); justify-items: start; }
+}
 
 /* Animations */
 @keyframes slideInRight {
@@ -1171,6 +1163,11 @@ h1, h2, h3, p { margin-top: 0; }
   .leader-level-pill {
     display: none;
   }
+}
+@media (max-width: 520px) {
+  /* Rank and XP keep their own width; the name column shrinks and wraps instead of pushing XP off-screen. */
+  .leaderboard-table-head, .leader-row-card { grid-template-columns: 44px minmax(0, 1fr) auto; column-gap: 8px; padding-inline: 12px; }
+  .leader-row-card > * { min-width: 0; overflow-wrap: anywhere; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1678,9 +1675,12 @@ input[type="password"]::-webkit-strong-password-auto-fill-button {
 .legal-document h2 { margin-bottom: .35rem; }
 .legal-document section p { margin-left: .75rem; }
 
-.auth-password-toggle:focus-visible {
-  outline: none !important;
-  color: var(--emerald-700);
+/* 44px touch target inside the 50px field; outline stays inside the field border. */
+.auth-password-toggle { right: 3px; width: 44px; height: 44px; border-radius: 8px; }
+.auth-form-card .auth-password-toggle:focus-visible {
+  outline: 2px solid var(--violet-700);
+  outline-offset: 0;
+  color: var(--violet-800);
 }
 
 /* Quest Map: rounded, quiet workspace inspired by the supplied wireframe. */
@@ -2014,11 +2014,12 @@ body { background: var(--paper); color: var(--ink); }
 .qm-sidebar a.is-active span { color: inherit; }
 .qm-sidebar a.is-active { background: var(--violet-50); color: var(--purple-dark); }
 
-.quest-map-page .accessibility-panel {
+.accessibility-panel {
   display: flex;
   flex-direction: column;
   gap: 22px;
   padding: clamp(20px, 3vw, 30px);
+  border-radius: 24px;
 }
 
 .accessibility-panel-heading {
@@ -2029,7 +2030,7 @@ body { background: var(--paper); color: var(--ink); }
   flex-wrap: wrap;
 }
 
-.accessibility-panel-copy { min-width: 0; max-width: 720px; }
+.accessibility-panel-copy { flex: 1 1 0; min-width: 0; max-width: 720px; }
 .accessibility-panel-copy h1 {
   margin: 0;
   color: #202330;
@@ -2791,7 +2792,6 @@ html[data-contrast="high"] .progress-track span {
   .chat-page-state { height: auto; }
   .chat-window-btn, .chat-jump, .chat-activity button, .chat-suggestions button { min-height: 44px; }
   .chat-window-btn { width: 44px; }
-  .chat-restore-bar { bottom: calc(80px + env(safe-area-inset-bottom)); }
   .chat-history-drawer[open] {
     position: fixed;
     inset: auto 0 0;
@@ -3569,6 +3569,7 @@ html[data-contrast="high"] .ws-row-meta { color: #252337; }
 .ws-page-heading-side > .ws-chip-row { justify-content: flex-end; }
 .ws-row-meta strong { display: inline; font-weight: 700; }
 .ws-row-meta code { font-size: 11.5px; }
+.submission-reference { margin-top: 12px; overflow-wrap: anywhere; }
 @media (max-width: 850px) {
   .ws-page-heading-side { justify-content: flex-start; }
   .ws-page-heading-side > .ws-chip-row { justify-content: flex-start; }
@@ -3623,19 +3624,9 @@ html[data-contrast="high"] .ws-row-meta { color: #252337; }
 .profile-edit { display: flex; flex-direction: column; gap: 12px; }
 
 /* Sparkline */
-.profile-spark { width: 100%; height: auto; display: block; }
-.profile-spark-fill { fill: color-mix(in srgb, var(--purple, var(--purple)) 12%, transparent); stroke: none; }
-.profile-spark-line { fill: none; stroke: var(--purple, var(--purple)); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
-.profile-spark-dot { fill: var(--purple, var(--purple)); }
 .profile-recent { margin-top: 12px; }
 
 /* Breakdown bars */
-.profile-bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
-.profile-bar-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; margin-bottom: 4px; }
-.profile-bar-head span { color: var(--muted); }
-.profile-bar-head strong { color: var(--ink); font-weight: 700; }
-.profile-bar-track { height: 8px; border-radius: 999px; background: var(--purple-soft, var(--violet-100)); overflow: hidden; }
-.profile-bar-fill { height: 100%; border-radius: 999px; background: var(--purple, var(--purple)); }
 
 /* Badges */
 .profile-badges { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
@@ -3665,11 +3656,11 @@ html[data-contrast="high"] .ws-row-meta { color: #252337; }
 .profile-avatar-optional { color: var(--muted-soft); font-size: var(--text-2xs); }
 
 /* URL-backed profile navigation. */
-.profile-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 5px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); scrollbar-width: thin; }
-.profile-tabs a { display: inline-flex; align-items: center; justify-content: center; min-width: 112px; min-height: 44px; padding: 8px 18px; border-radius: 9px; color: var(--muted); font-size: var(--text-xs); font-weight: 750; text-decoration: none; white-space: nowrap; }
-.profile-tabs a:hover { background: var(--violet-50); color: var(--purple-dark); }
-.profile-tabs a[aria-current="page"] { background: var(--purple); color: var(--ink-inverse); box-shadow: 0 4px 12px rgb(91 37 176 / 18%); }
-.profile-tabs a:focus-visible { outline: 3px solid var(--violet-600); outline-offset: 2px; }
+.profile-tabs, .ws-section-nav { display: flex; gap: 6px; overflow-x: auto; padding: 5px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); scrollbar-width: thin; }
+.profile-tabs a, .ws-section-nav a { display: inline-flex; align-items: center; justify-content: center; min-width: 112px; min-height: 44px; padding: 8px 18px; border-radius: 9px; color: var(--muted); font-size: var(--text-xs); font-weight: 750; text-decoration: none; white-space: nowrap; }
+.profile-tabs a:hover, .ws-section-nav a:hover { background: var(--violet-50); color: var(--purple-dark); }
+.profile-tabs a[aria-current="page"], .ws-section-nav a[aria-current="page"] { background: var(--purple); color: var(--ink-inverse); box-shadow: 0 4px 12px rgb(91 37 176 / 18%); }
+.profile-tabs a:focus-visible, .ws-section-nav a:focus-visible { outline: 3px solid var(--violet-600); outline-offset: 2px; }
 
 
 /* ===========================================================================
@@ -4090,6 +4081,13 @@ html[data-contrast="high"] .ws-row-meta { color: #252337; }
 .bq-quest-map .qm-panel-heading p { color: var(--muted); }
 .bq-quest-map .quest-progress,
 .bq-quest-map .quest-card { box-shadow: none; }
+@media (max-width: 700px) {
+  /* Search and filters lead on phones; progress stays a compact summary below them. */
+  .bq-quest-map .quest-progress { padding: 14px 16px; }
+  .bq-quest-map .quest-progress-heading .eyebrow-label { display: none; }
+  .bq-quest-map .quest-progress-heading h2 { font-size: var(--text-base); }
+  .bq-quest-map .quest-progress-percent { font-size: var(--text-lg); }
+}
 .bq-quest-map .quest-grid-expanded {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
   gap: clamp(16px, 2vw, 24px);
@@ -4224,7 +4222,9 @@ html[data-contrast="high"] .ws-row-meta { color: #252337; }
 .bq-quest-map .quest-results-summary { min-height: 32px; }
 @media (max-width: 520px) {
   .quest-map-toolbar .quest-filters { width: 100%; }
-  .quest-map-toolbar .filter-button { flex: 1 1 0; padding-inline: 6px; }
+  /* One row of type filters with full labels; the row scrolls sideways when it runs out of room. */
+  .quest-map-toolbar .quest-filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+  .quest-map-toolbar .filter-button { flex: 1 0 auto; padding-inline: 10px; white-space: nowrap; }
   .quest-refine-controls { flex-basis: 100%; }
   .quest-refine-controls .quest-search { flex-basis: 8.5rem; }
 }
@@ -4348,7 +4348,7 @@ html[data-contrast="high"] :is(.filter-button, .ws-filter-chip, .arena-case-butt
 .dashboard-heading, .dashboard-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .dashboard-heading { margin-bottom: 22px; }
 .dashboard-heading > div { min-width: 0; }
-.dashboard-heading h1 { margin: 4px 0 6px; overflow-wrap: anywhere; }
+.dashboard-heading h1 { margin: 4px 0 6px; line-height: var(--leading-tight); overflow-wrap: anywhere; }
 .dashboard-heading .pilot-lead { margin: 0; color: var(--muted); }
 .dashboard-refresh { flex: none; gap: 8px; }
 .dashboard-refresh-icon { display: inline-block; font-size: 1.05em; line-height: 1; }
@@ -4449,8 +4449,12 @@ html[data-contrast="high"] :is(.filter-button, .ws-filter-chip, .arena-case-butt
 @keyframes dashboard-rise { from { opacity: 0; transform: translateY(8px); } }
 
 @media (max-width: 700px) {
-  .dashboard-heading { flex-direction: column; align-items: stretch; }
+  .dashboard-heading { flex-direction: column; align-items: stretch; margin-bottom: 16px; }
+  .dashboard-heading h1 { font-size: var(--text-2xl); }
+  /* Refresh is secondary; keep it compact so the next action stays in the first screen. */
+  .dashboard-refresh { align-self: flex-start; }
   .dashboard-exam { flex-wrap: wrap; }
+  .dashboard-exam-icon { display: none; } /* decorative; the title needs the width beside the rail */
   .dashboard-exam .button { width: 100%; }
   .dashboard-next { padding: 18px; }
   .dashboard-next::after { display: none; }
@@ -4618,7 +4622,7 @@ html[data-motion="reduced"] .mastery-path li { animation: none; }
 html[data-contrast="high"] .solve-stars .is-earned { color: #7a4a00; }
 
 /* Gamification Insights (instructor). Series colour validated for lightness band and >= 3:1 on the surface. */
-:root { --chart-series: var(--violet-700); --chart-grid: var(--line); --chart-annotation: var(--muted-soft); }
+:root { --chart-series-2: var(--emerald-700); --chart-series-3: var(--warning-ink); --chart-series: var(--violet-700); --chart-grid: var(--line); --chart-annotation: var(--muted-soft); }
 .insights-view { display: grid; gap: 16px; }
 .insights-chart { position: relative; margin-top: 8px; border-radius: 10px; outline-offset: 4px; }
 .insights-chart svg { display: block; overflow: visible; }
@@ -4648,7 +4652,8 @@ html[data-contrast="high"] .solve-stars .is-earned { color: #7a4a00; }
 .insights-method ul { display: grid; gap: 6px; margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: var(--text-sm); line-height: 1.55; }
 .insights-skeleton-chart { display: block; height: 260px; margin-top: 16px; border-radius: 14px; }
 @media (max-width: 620px) {
-  .insights-meters li { grid-template-columns: 1fr 9rem; }
+  /* The figure takes only its own width so the topic name keeps the rest of a narrow panel. */
+  .insights-meters li { grid-template-columns: minmax(0, 1fr) auto; }
   .insights-meter-track { grid-column: 1 / -1; grid-row: 2; }
 }
 
@@ -4772,7 +4777,7 @@ html[data-motion="reduced"] .chat-panel { animation: none; }
    App shell: phone navigation
    Wide screens keep the sidebar. At 850px and below the shell becomes:
    - one slim top bar (brand, chat, account), so the work starts near the top;
-   - a bottom tab bar with the same five destinations, one tap away in thumb reach;
+   - a side rail with the same destinations, docked on the side the user chose;
    - an account bottom sheet that holds the track and role tags.
    Focus pages (challenge, quiz, exam) hide the tab bar and keep one way back.
    ========================================================================== */
@@ -4814,7 +4819,7 @@ html { scroll-padding-top: 5rem; }
 @keyframes bq-sheet-up { from { opacity: 0; transform: translateY(32px); } }
 
 @media (max-width: 850px) {
-  html { scroll-padding-bottom: calc(80px + env(safe-area-inset-bottom)); scroll-padding-top: 4.5rem; }
+  html { scroll-padding-top: 4.5rem; }
   html:has(.arena-page) { scroll-padding-block: 0; }
 
   /* One row: brand on the left, chat and account on the right. */
@@ -4823,7 +4828,7 @@ html { scroll-padding-top: 5rem; }
     padding: calc(6px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
   }
   .bq-app-brand { font-size: 1.6rem; }
-  .bq-has-tabbar .bq-app-location { display: none; } /* each page shows its own title; the tab bar shows where you are */
+  .bq-has-tabbar .bq-app-location { display: none; } /* each page shows its own title; the rail shows where you are */
   .bq-app-context { display: none; }                  /* track and role move into the account sheet */
   .bq-app-utilities { flex-wrap: nowrap; gap: .25rem; margin-inline-start: auto; }
   .bq-app-utilities .bq-chat-action { width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0; border-radius: 999px; }
@@ -4831,15 +4836,7 @@ html { scroll-padding-top: 5rem; }
   .bq-account-trigger-label, .bq-account-chevron { display: none; }
   .bq-account-context { display: flex; }
 
-  /* Bottom tab bar. z-index stays under the sticky top bar so the account sheet,
-     which lives inside the top bar, covers it. */
-  .bq-app-nav {
-    position: fixed; inset-inline: 0; bottom: 0; z-index: 19;
-    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px;
-    padding: 6px max(6px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
-    border-top: 1px solid var(--line); background: var(--surface);
-    box-shadow: 0 -6px 20px rgb(30 20 60 / 6%);
-  }
+  /* Rail links: icon over a short label. The rail itself is styled with .bq-dock below. */
   .bq-app-nav a {
     flex-direction: column; justify-content: center; gap: 4px; min-height: 56px; padding: 4px 0;
     border-radius: 12px; color: var(--muted); background: transparent; box-shadow: none;
@@ -4854,7 +4851,7 @@ html { scroll-padding-top: 5rem; }
   .bq-app-nav a:active .bq-nav-icon { background: var(--control-pressed); }
   .bq-nav-label { display: none; }
   .bq-nav-short { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .bq-has-tabbar .bq-app-content { padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
+  .bq-has-tabbar .bq-app-content { padding-bottom: calc(clamp(.75rem, 3vw, 2rem) + env(safe-area-inset-bottom)); }
 
   /* Account bottom sheet */
   .bq-account-sheet::backdrop {
@@ -4875,11 +4872,17 @@ html { scroll-padding-top: 5rem; }
   .leaderboard-back { display: none; }
 }
 /* Timed exam controls and code need to share the first phone viewport. */
-.exam-attempt-header { border: 2px solid #047857; }
+.exam-attempt-header { border: 2px solid var(--emerald-700); }
+/* Time left and the last confirmed save stay in view while answering, on screens tall enough
+   to spare the room. Short viewports (landscape, an open keyboard) let the header scroll away. */
+@media (min-height: 560px) {
+  .exam-attempt-header { position: sticky; top: 0; z-index: 6; box-shadow: 0 6px 16px rgb(30 20 60 / 8%); }
+  .exam-attempt-page :is(input, textarea, select, button, [contenteditable="true"], [tabindex="0"]) { scroll-margin-top: 150px; }
+}
 .exam-attempt-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .exam-attempt-timer { padding: 6px 14px; font-size: 1.1rem; }
 .exam-save-panel { margin-top: 16px; padding: 12px 16px; overflow-wrap: anywhere; }
-.exam-last-save { color: #4a5d58; font-size: 13px; font-weight: 500; }
+.exam-last-save { color: var(--muted); font-size: .8125rem; font-weight: 500; }
 .exam-conflict-copies > * { min-width: 0; overflow-wrap: anywhere; }
 .exam-attempt-page :is(h1, h2, .pilot-task, legend) { overflow-wrap: anywhere; }
 .exam-attempt-page .pilot-question { min-inline-size: 0; }
@@ -4902,3 +4905,111 @@ html { scroll-padding-top: 5rem; }
 }
 html[data-contrast="high"] .bq-app-nav [aria-current="page"] .bq-nav-icon { background: #000; color: #fff; box-shadow: none; }
 html[data-contrast="high"] .bq-app-nav [aria-current="page"] { color: #000; }
+
+/* Both workspace shells share the navigation and its docking preference. Holding it starts a
+   drag, so it must not select text or open the link callout; vertical scrolling still works. */
+.bq-dock {
+  min-width: 0; align-self: start;
+  touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+/* Menu position, styled like the Accessibility setting cards beside it. */
+.bq-dock-side {
+  min-width: 0; margin: 0; padding: 16px 18px;
+  border: 1px solid var(--slate-200); border-radius: 12px; background: var(--slate-50);
+}
+.bq-dock-side legend {
+  float: left; width: 100%; margin: 0 0 5px; padding: 0; /* float keeps the legend inside the border */
+  color: var(--slate-900); font-size: var(--text-sm); font-weight: 700; line-height: 1.35;
+}
+.bq-dock-side p { clear: both; margin: 0 0 12px; color: var(--slate-500); font-size: var(--text-2xs); line-height: 1.45; }
+.bq-dock-side button { min-height: 44px; margin: 0 8px 0 0; padding: 0 16px; font-size: var(--text-xs); }
+.bq-dock-side [aria-pressed="true"] { border-color: var(--purple); background: var(--purple-soft); font-weight: 750; }
+
+/* Accessibility settings over the current page; tapping the space around the card closes it. */
+.bq-settings-dialog {
+  width: min(46rem, 100%); max-width: 100%; max-height: 100dvh; margin: auto; box-sizing: border-box;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  overflow-y: auto; overscroll-behavior: contain; border: 0; background: transparent; color: var(--ink);
+}
+.bq-settings-dialog::backdrop { background: rgb(18 14 32 / 45%); }
+.bq-settings-dialog .accessibility-panel { box-shadow: 0 24px 64px rgb(18 14 32 / 28%); }
+html:has(.bq-settings-dialog[open]) { overflow: hidden; }
+.bq-settings-close {
+  display: grid; place-items: center; flex: none; width: 44px; height: 44px; padding: 0;
+  border: 1px solid var(--slate-200); border-radius: 999px; color: var(--slate-600); background: var(--slate-50);
+  font: 600 1.375rem/1 var(--font-body); cursor: pointer;
+}
+.bq-settings-close:hover { background: var(--slate-100); color: var(--slate-900); }
+.bq-settings-close:focus-visible { outline: 3px solid #6b35bd; outline-offset: 2px; }
+@media (width > 850px) {
+  .bq-app-columns:has(> .bq-dock[data-side="right"]) { grid-template-columns: minmax(0, 1fr) minmax(13rem, 16rem); }
+  .bq-dock[data-side="right"] { grid-column: 2; grid-row: 1; }
+  .bq-dock[data-side="right"] + main { grid-column: 1; grid-row: 1; }
+}
+@media (max-width: 850px) {
+  /* Handheld navigation is a rail on the saved side. It starts under the sticky top bar
+     (z-index 20), so the account sheet still covers it. */
+  :root { --bq-rail: 68px; }
+  .bq-dock {
+    position: fixed; z-index: 19; inset: 0 auto 0 0; display: flex; flex-direction: column; gap: 4px;
+    align-self: stretch; /* the desktop `start` would shrink a fixed box to its content */
+    width: calc(var(--bq-rail) + env(safe-area-inset-left));
+    padding: calc(68px + env(safe-area-inset-top)) 4px calc(6px + env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+    border-right: 1px solid var(--line); background: var(--surface); box-shadow: 6px 0 20px rgb(30 20 60 / 6%);
+  }
+  .bq-dock[data-side="right"] {
+    inset: 0 0 0 auto; width: calc(var(--bq-rail) + env(safe-area-inset-right));
+    padding-inline: 4px max(4px, env(safe-area-inset-right));
+    border-right: 0; border-left: 1px solid var(--line); box-shadow: -6px 0 20px rgb(30 20 60 / 6%);
+  }
+  /* On short screens the links scroll inside the rail. */
+  .bq-dock > .bq-app-nav, .ic-shell .bq-dock > .ic-mobile-nav {
+    /* The browser resolves touch gestures at this scroll container before reaching the outer dock. */
+    flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;
+    display: grid; grid-auto-flow: row; align-content: start; justify-content: stretch; gap: 2px;
+    position: static; z-index: auto; padding: 0; border: 0; box-shadow: none; background: none;
+  }
+  .bq-dock[data-side="left"] + main { margin-left: calc(var(--bq-rail) + env(safe-area-inset-left)); }
+  .bq-dock[data-side="right"] + main { margin-right: calc(var(--bq-rail) + env(safe-area-inset-right)); }
+  html:has(.bq-dock[data-side="right"]) .chat-restore-bar { right: calc(var(--bq-rail) + 12px + env(safe-area-inset-right)); }
+  .bq-dock .bq-nav-icon { max-width: 100%; }
+  .bq-app-content :is(pre, .ws-table-wrap), .ic-body :is(pre, .ws-table-wrap) { max-width: 100%; overflow-x: auto; }
+  .bq-app-content :is(fieldset, .ws-field), .ic-body :is(fieldset, .ws-field) { min-inline-size: 0; }
+  /* Long emails and usernames in list rows must wrap, or they widen the page beside the rail. */
+  .bq-app-content :is(h1, h2, legend, .ws-panel li), .ic-body :is(h1, h2, legend) { overflow-wrap: anywhere; }
+}
+@media (max-width: 360px) {
+  /* Narrowest phones: while a text field has focus (the keyboard is open), the rail steps aside
+     so the field and its page get the full width. It returns, on the saved side, on blur. */
+  .bq-app-columns:has(> main :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"], [type="file"]), textarea, [contenteditable="true"]):focus) > .bq-dock { display: none; }
+  .bq-app-columns:has(> main :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"], [type="file"]), textarea, [contenteditable="true"]):focus) > main { margin-inline: 0; }
+}
+
+html[data-contrast="high"] { --chart-series: CanvasText; --chart-series-2: CanvasText; --chart-series-3: CanvasText; --chart-grid: CanvasText; --chart-annotation: CanvasText; }
+.insight-plot { width: 100%; height: 240px; min-width: 0; }
+.insight-legend { display: flex; flex-wrap: wrap; gap: 1rem; }
+@media (pointer: coarse) {
+  .insights-table-toggle summary, .insights-method summary, .insight-practice { min-height: 44px; display: inline-flex; align-items: center; }
+  /* Compact buttons keep their look on desktop but get a full 44px touch target on touch screens. */
+  .button.small, .arena-reset { min-height: 44px; }
+}
+
+.roster-table { min-width: max-content; }
+@media (pointer: coarse) {
+  .ws-table .ws-touch-action { display: inline-flex; align-items: center; min-width: 44px; }
+}
+
+#instructor-gradebook .ws-panel-head { flex-wrap: wrap; }
+.instructor-exams :is(.field, .pilot-dashboard-grid > *, fieldset, label) { min-inline-size: 0; }
+.instructor-exams :is(input, select) { max-inline-size: 100%; box-sizing: border-box; }
+/* Exam and student rows: details on the left, actions beside them, one divider per row. */
+.instructor-exams section > .row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; padding: 14px 0; border-top: 1px solid var(--line); }
+.instructor-exams section > .row:first-child { padding-top: 0; border-top: 0; }
+.instructor-exams section > .row p { margin: 4px 0 0; }
+.instructor-exams .field input[type="datetime-local"] { display: block; width: 100%; min-inline-size: 0; }
+@media (max-width: 850px) {
+  .instructor-exams .pilot-dashboard-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.ws-panel[aria-labelledby="teach-title"] .ws-panel-head { flex-wrap: wrap; }

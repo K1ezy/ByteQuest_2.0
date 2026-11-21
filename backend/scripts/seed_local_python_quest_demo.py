@@ -13,12 +13,7 @@ import uuid
 
 from seed_local_quest_demo import seed_demo_quest
 from app.api.workshops import AddWorkshopActivities, add_workshop_activities
-from app.api.rag_instructor import (
-    ActivityReviewUpdate,
-    publish_learning_activity,
-    reverify_instructor_draft,
-    update_activity_review,
-)
+from app.services.activity_publishing import apply_publish_rules
 from app.core.database import SessionLocal
 from app.models.entities import (
     ActivityKind,
@@ -31,7 +26,7 @@ from app.models.entities import (
     TestCase,
     UserRole,
 )
-from app.services.challenge_verification import challenge_is_verified
+from app.services.challenge_verification import challenge_is_verified, verify_saved_challenge
 
 
 ACTIVITY_ID = uuid.uuid5(uuid.NAMESPACE_URL, "bytequest:local-demo:python-basics-quiz:v1")
@@ -148,11 +143,13 @@ def seed_python_challenge() -> None:
 
         if challenge.review_status == ReviewState.draft:
             if not challenge_is_verified(challenge):
-                verified = asyncio.run(reverify_instructor_draft(CHALLENGE_ID, owner, db))
-                if not verified["judge0_verified"]:
+                verified = asyncio.run(verify_saved_challenge(db, challenge))
+                db.commit()
+                if verified is None or not verified.judge0_verified:
                     raise SystemExit("Judge0 could not verify the Python demo challenge. Start the VM and rerun this script.")
-            update_activity_review(CHALLENGE_ID, ActivityReviewUpdate(reviewed=True), owner, db)
-            asyncio.run(publish_learning_activity(CHALLENGE_ID, owner, db))
+            challenge = db.get(LearningActivity, CHALLENGE_ID)
+            apply_publish_rules(db, challenge, owner)
+            db.commit()
         elif challenge.review_status != ReviewState.published or not challenge.judge0_verified:
             raise SystemExit("The Python demo challenge is not a verified, published activity.")
 

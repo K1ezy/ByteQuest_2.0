@@ -9,7 +9,6 @@ student progress, or any non-demo activity.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 import uuid
 from pathlib import Path
@@ -39,11 +38,7 @@ from app.api.workshops import (  # noqa: E402
     add_workshop_activities,
     create_workshop,
 )
-from app.api.rag_instructor import (  # noqa: E402
-    ActivityReviewUpdate,
-    publish_learning_activity,
-    update_activity_review,
-)
+from app.services.activity_publishing import apply_publish_rules  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.models.entities import (  # noqa: E402
     ActivityKind,
@@ -148,9 +143,8 @@ def seed_demo_quest(
             db.commit()
 
         if activity.review_status == ReviewState.draft:
-            if activity.reviewed_by is None:
-                update_activity_review(activity_id, ActivityReviewUpdate(reviewed=True), owner, db)
-            asyncio.run(publish_learning_activity(activity_id, owner, db))
+            apply_publish_rules(db, activity, owner)
+            db.commit()
         elif activity.review_status != ReviewState.published:
             raise SystemExit("The demo quiz is not a draft or published activity; no group was created.")
 

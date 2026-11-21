@@ -1,6 +1,6 @@
 # Workshops: Create, Join and the Workshop page
 
-**Plan, 11/21/26. Revised 11/21/26 after the first critique: the code is renamed to `workshop` throughout, the Section field is dropped, and Workshops stay separate from courses. Nothing is built yet.**
+**Plan, 11/21/26. The Workshop feature now includes optional classroom details. Workshops remain independent of courses.**
 
 Google Classroom's *class* is ByteQuest's **Workshop**. "Create class" becomes
 **Create Workshop** and "Join class" becomes **Join Workshop**. Both actions and
@@ -36,7 +36,7 @@ grid, topics and a settings page.
 | Home with class cards | `/workshops` card grid. Each card shows a banner, the name, the owner, a language chip, the member and activity counts, and the next item closing. | ByteQuest banner art per language. Instructors see **Teaching** and **Joined** groups. |
 | Join class dialog | **Join Workshop** dialog. A "Signed in as" block shows the username **and the language track**, then the code field and three short rules. | The track is shown because a code for another language is refused. There is no "Switch account" button; signing out is in the account menu. |
 | "Using Classroom at a school?" notice | Dropped. | Not relevant: everyone signs in with a ByteQuest account. |
-| Create class dialog (name, section, level, subject, room) | **Create Workshop** dialog: Name\*, Language\*, Description. | Subject is the language. Section, Level and Room are dropped. A workshop has no section and no course link, so it cannot be mistaken for a course group (see section 3). |
+| Create class dialog (name, section, level, subject, room) | **Create Workshop** asks for a Workshop name and Programming language. Block, Year level, Subject and Room are optional. | Classroom details describe the workshop. Joining uses the invite code and the student’s programming track. |
 | Stream | **Board** tab: the banner, a code card (owner only), an **Upcoming** card, and announcements from the instructor. | Students read announcements but do not post or comment in v1. |
 | Classwork with its Create menu | **Activities** tab. The owner's **Add** menu offers *Published activity*, *Exam* and *Topic*. Activities are grouped under topics and can be reordered. | There is no assignment authoring here: activities are still made and verified in Instructor Studio. |
 | People | **People** tab: Instructor, then Students. The owner can remove a student and copy the invite link. | Students see classmates by username only, as on the leaderboard. |
@@ -166,7 +166,7 @@ and hard delete.
 | # | Decision | Recommendation |
 | --- | --- | --- |
 | W1 | Classroom "class" = ByteQuest **Workshop**. Rename `quest_group` to `workshop` everywhere as slice 0, with no aliases left behind. | **Decided 11/21/26** |
-| W2 | Create fields: Name\*, Language\*, Description. Drop Section, Subject, Level and Room; a workshop has no course link. | **Decided 11/21/26** |
+| W2 | Create fields are Workshop name, Programming language, and optional Block, Year level, Subject and Room. | **Updated 11/21/26** |
 | W3 | Join dialog shows the username and the track, with no Switch account button. | Yes |
 | W4 | Four tabs: Board, Activities, People, Progress (Progress for the owner only). | Yes |
 | W5 | Board posts come from instructors only; no student posts or comments in v1. | Yes |

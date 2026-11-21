@@ -25,7 +25,7 @@ README = Path(__file__).resolve().parents[2] / "ml_pipeline" / "README.md"
 
 def _export_queries() -> list[str]:
     queries = re.findall(r"```sql\s*\n(.*?)```", README.read_text(encoding="utf-8"), re.S)
-    assert len(queries) == 2, "Expected the attempt and released-exam export examples"
+    assert len(queries) == 2, "Expected the attempt and hint-reveal export examples"
     return queries
 
 
@@ -105,6 +105,16 @@ def test_documented_exports_require_latest_current_consent() -> None:
                     )
                     connection.execute(
                         text(
+                            "INSERT INTO public.hint_uses "
+                            "(student_id, activity_id, request_key, source, body, created_at) "
+                            "VALUES (:student_id, :activity_id, 'synthetic-hint', 'reviewed', "
+                            "'Never exported hint text', :created_at)"
+                        ),
+                        {"student_id": student_id, "activity_id": activity_id,
+                         "created_at": now - timedelta(hours=2)},
+                    )
+                    connection.execute(
+                        text(
                             "INSERT INTO public.exam_attempts "
                             "(exam_id, student_id, attempt_number, status, started_at, due_at, "
                             "submitted_at, result_released_at, score, max_score) "
@@ -157,6 +167,7 @@ def test_documented_exports_require_latest_current_consent() -> None:
                     exported = " ".join(str(value) for row in current for value in row.values())
                     assert all(hexed not in exported.replace("-", "") for hexed in account_hexes)
                     assert all(pseudonym not in exported for _, pseudonym in students.values())
+                    assert "Never exported hint text" not in exported
                     old = connection.execute(
                         query, {"current_consent_version": old_version}
                     ).mappings().all()

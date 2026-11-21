@@ -309,6 +309,7 @@ export function clearSharedComputerData(): void {
     for (let i = 0; i < window.localStorage.length; i++) {
       const key = window.localStorage.key(i);
       if (!key || PRESERVED_LOCAL_PREFERENCES.has(key)) continue;
+      if (key.startsWith("bytequest:menu-side:") && ["left", "right"].includes(window.localStorage.getItem(key) ?? "")) continue;
       if (
         key.startsWith("bytequest:") ||
         key.startsWith("draft:") ||

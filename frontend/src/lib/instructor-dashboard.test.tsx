@@ -34,3 +34,11 @@ it("uses a safe fallback when audit entries identify an actor only by an ID", ()
     summary: "Changed availability for “Count Vowels” to closed", created_at: "2026-10-28T16:00:00Z" }))
     .toEqual({ actor: "Unknown user", verb: "closed", item: "Count Vowels", day: "Oct 29" });
 });
+
+it("turns a summary that ends with its verb into a readable sentence", () => {
+  expect(recentActivity({ id: "a1", actor: "jdoe", action: "announcement.created",
+    summary: "Course announcement created.", created_at: "2026-11-21T03:00:00Z" }))
+    .toEqual({ actor: "jdoe", verb: "created", item: "a course announcement", day: "Nov 21" });
+  expect(recentActivity({ id: "a2", actor: "jdoe", action: "exam.archived",
+    summary: "Exam archived", created_at: "2026-11-21T03:00:00Z" }).item).toBe("an exam");
+});

@@ -264,6 +264,12 @@ $backendEnvPath = Join-Path $backendPath ".env.local"
 $frontendEnvPath = Join-Path $frontendPath ".env.local"
 $logPath = Join-Path $repoRoot "logs"
 New-Item -ItemType Directory -Path $logPath -Force | Out-Null
+$backendStatePath = Join-Path $logPath '.launcher-backend-state.json'
+$backendRuntime = $null
+if (-not $Development -and (Test-Path -LiteralPath $backendStatePath -PathType Leaf)) {
+    try { $backendRuntime = Get-Content -LiteralPath $backendStatePath -Raw | ConvertFrom-Json }
+    catch { $backendRuntime = $null }
+}
 $previousFrontendApiUrl = Read-EnvValue -Path $frontendEnvPath -Name "NEXT_PUBLIC_API_URL"
 
 Write-Host "ByteQuest local startup" -ForegroundColor Green
@@ -414,6 +420,7 @@ Write-Step "Initialize local Supabase and write settings"
 $phaseClock = [System.Diagnostics.Stopwatch]::StartNew()
 $localSetupArguments = @{ DockerAlreadyVerified = $true }
 if ($ForceMigrate) { $localSetupArguments["ForceMigrate"] = $true }
+if ($backendRuntime) { $localSetupArguments["BackendRuntime"] = $backendRuntime }
 & $localSetupScript @localSetupArguments
 
 $frontendApiUrl = Read-EnvValue -Path $frontendEnvPath -Name "NEXT_PUBLIC_API_URL"
@@ -572,82 +579,109 @@ Add-PhaseTiming -Name "Judge0" -Clock $phaseClock
 # ---------------------------------------------------------------------------
 # Phase 5: FastAPI and the grading worker, started together.
 # ---------------------------------------------------------------------------
-Write-Step "Start FastAPI and the grading worker"
+Write-Step "Check FastAPI and the grading worker"
 $phaseClock = [System.Diagnostics.Stopwatch]::StartNew()
 
 $apiHealthUrl = "http://127.0.0.1:$apiPort/readyz"
-# Always restart the API, as the worker below is. Reusing a healthy API kept the
-# previous backend code answering after every change, so a re-run applied nothing.
-$existingApis = @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match "(?i)(?:-m\s+)?uvicorn\s+app\.main:app.*--port\s+$apiPort(?:\s|$)" })
-foreach ($existingApi in $existingApis) {
-    Stop-Process -Id $existingApi.ProcessId -Force -ErrorAction SilentlyContinue
+$backendFingerprint = if (-not $Development) { Get-BackendFingerprint -RepoRoot $repoRoot }
+$canReuseBackend = $backendRuntime -and $backendRuntime.ApiPort -eq $apiPort -and
+    $backendRuntime.Fingerprint -eq $backendFingerprint -and
+    (Test-LocalBackendProcesses -State $backendRuntime -ListenerPidMap (Get-ListenerPidMap)) -and
+    (Test-HttpReady -Uri $apiHealthUrl -TimeoutSeconds 2)
+if ($canReuseBackend) {
+    Write-Host 'FastAPI and the grading worker are already running with the current code and settings.'
 }
-$apiPortFree = Wait-Until -TimeoutSeconds 10 -PollMilliseconds 250 -Condition {
-    -not (Test-TcpPort -ComputerName '127.0.0.1' -Port $apiPort -TimeoutMilliseconds 300)
-}
-if (-not $apiPortFree) {
-    throw "Port $apiPort is still held by a process the launcher could not stop (it may be running as administrator). Close it and run the launcher again, or it would keep serving old backend code."
-}
+else {
+    Write-Host 'Starting FastAPI and the grading worker.'
+    $existingApis = @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match "(?i)(?:-m\s+)?uvicorn\s+app\.main:app.*--port\s+$apiPort(?:\s|$)" })
+    foreach ($existingApi in $existingApis) {
+        Stop-Process -Id $existingApi.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    $apiPortFree = Wait-Until -TimeoutSeconds 10 -PollMilliseconds 250 -Condition {
+        -not (Test-TcpPort -ComputerName '127.0.0.1' -Port $apiPort -TimeoutMilliseconds 300)
+    }
+    if (-not $apiPortFree) {
+        throw "Port $apiPort is still held by a process the launcher could not stop (it may be running as administrator). Close it and run the launcher again, or it would keep serving old backend code."
+    }
 
-$apiArguments = @('-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', "$apiPort")
-if ($Development) { $apiArguments += '--reload' }
-Start-Process -FilePath $backendPython -WorkingDirectory $backendPath -WindowStyle Hidden `
-    -ArgumentList $apiArguments `
-    -RedirectStandardOutput (Join-Path $logPath 'api.log') `
-    -RedirectStandardError (Join-Path $logPath 'api.err.log') | Out-Null
+    $apiArguments = @('-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', "$apiPort")
+    if ($Development) { $apiArguments += '--reload' }
+    $apiProcess = Start-Process -FilePath $backendPython -WorkingDirectory $backendPath -WindowStyle Hidden -PassThru `
+        -ArgumentList $apiArguments `
+        -RedirectStandardOutput (Join-Path $logPath 'api.log') `
+        -RedirectStandardError (Join-Path $logPath 'api.err.log')
 
-New-Item -ItemType Directory -Path $logPath -Force | Out-Null
-# Stop the supervisor before its worker, or it would restart the one just killed.
-$workerSupervisorScript = Join-Path $PSScriptRoot 'run-grading-worker.ps1'
-$existingSupervisors = @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match '(?i)run-grading-worker\.ps1' })
-foreach ($existingSupervisor in $existingSupervisors) {
-    Stop-Process -Id $existingSupervisor.ProcessId -Force -ErrorAction SilentlyContinue
-}
-$existingWorkers = @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
-    Where-Object {
-        $_.ExecutablePath -eq $backendPython -and
-        $_.CommandLine -match '(?i)-m\s+app\.services\.submission_worker(?:\s|$)'
-    })
-foreach ($existingWorker in $existingWorkers) {
-    Stop-Process -Id $existingWorker.ProcessId -Force -ErrorAction SilentlyContinue
-}
+    New-Item -ItemType Directory -Path $logPath -Force | Out-Null
+    # Stop the supervisor before its worker, or it would restart the one just killed.
+    $workerSupervisorScript = Join-Path $PSScriptRoot 'run-grading-worker.ps1'
+    $existingSupervisors = @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '(?i)run-grading-worker\.ps1' })
+    foreach ($existingSupervisor in $existingSupervisors) {
+        Stop-Process -Id $existingSupervisor.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    $existingWorkers = @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ExecutablePath -eq $backendPython -and
+            $_.CommandLine -match '(?i)-m\s+app\.services\.submission_worker(?:\s|$)'
+        })
+    foreach ($existingWorker in $existingWorkers) {
+        Stop-Process -Id $existingWorker.ProcessId -Force -ErrorAction SilentlyContinue
+    }
 
-# The worker runs under a supervisor that restarts it if it dies. Without one, a
-# crashed worker left every submission queued and the student on an endless spinner.
-$worker = Start-Process -FilePath (Get-Command pwsh.exe -ErrorAction Stop).Source `
-    -ArgumentList @(
-        "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $workerSupervisorScript,
-        "-Python", $backendPython,
-        "-WorkingDirectory", $backendPath,
-        "-OutLog", (Join-Path $logPath "submission-worker.log"),
-        "-ErrorLog", (Join-Path $logPath "submission-worker.err.log")
-    ) `
-    -WorkingDirectory $backendPath -WindowStyle Hidden -PassThru
+    # The worker runs under a supervisor that restarts it if it dies. Without one, a
+    # crashed worker left every submission queued and the student on an endless spinner.
+    $worker = Start-Process -FilePath (Get-Command pwsh.exe -ErrorAction Stop).Source `
+        -ArgumentList @(
+            "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $workerSupervisorScript,
+            "-Python", $backendPython,
+            "-WorkingDirectory", $backendPath,
+            "-OutLog", (Join-Path $logPath "submission-worker.log"),
+            "-ErrorLog", (Join-Path $logPath "submission-worker.err.log")
+        ) `
+        -WorkingDirectory $backendPath -WindowStyle Hidden -PassThru
 
-# Quarter-second polling: Uvicorn's import of the router tree finishes on no
-# particular boundary, and the old two-second sleep rounded every start up.
-$apiReady = Wait-Until -TimeoutSeconds 60 -PollMilliseconds 250 -Condition {
-    Test-HttpReady -Uri $apiHealthUrl -TimeoutSeconds 2
-}
-if (-not $apiReady) {
-    throw "FastAPI or the local database did not become ready within 60 seconds. Check logs/api.err.log and logs/startup-diagnostics.log."
-}
+    # Quarter-second polling: Uvicorn's import of the router tree finishes on no
+    # particular boundary, and the old two-second sleep rounded every start up.
+    $apiReady = Wait-Until -TimeoutSeconds 60 -PollMilliseconds 250 -Condition {
+        Test-HttpReady -Uri $apiHealthUrl -TimeoutSeconds 2
+    }
+    if (-not $apiReady) {
+        throw "FastAPI or the local database did not become ready within 60 seconds. Check logs/api.err.log and logs/startup-diagnostics.log."
+    }
 
-if ($worker.HasExited) {
-    throw "The grading worker exited during startup. Check logs/submission-worker.err.log."
+    if ($worker.HasExited) {
+        throw "The grading worker exited during startup. Check logs/submission-worker.err.log."
+    }
+    # The supervisor is alive; confirm it actually got a worker running underneath it,
+    # so a worker that cannot start at all still fails startup instead of looping quietly.
+    $workerRunning = Wait-Until -TimeoutSeconds 30 -PollMilliseconds 500 -Condition {
+        [bool](Get-CimInstance Win32_Process -Filter "ParentProcessId = $($worker.Id) AND Name = 'python.exe'" -ErrorAction SilentlyContinue)
+    }
+    if (-not $workerRunning) {
+        throw "The grading worker did not stay running. Check logs/submission-worker.err.log."
+    }
+    Write-Host "Grading worker started cleanly and is supervised (supervisor PID $($worker.Id))."
+    if ($backendFingerprint) {
+        $apiPids = Get-PortListenerPids -ListenerPidMap (Get-ListenerPidMap) -Port $apiPort
+        $processes = Get-ProcessDetailMap -ProcessIds (@($apiPids) + @($worker.Id))
+        $listener = $processes.Values | Where-Object {
+            $_.ProcessId -in $apiPids -and
+            ($_.ProcessId -eq $apiProcess.Id -or $_.ParentProcessId -eq $apiProcess.Id)
+        } | Select-Object -First 1
+        $supervisor = Get-ProcessDetail -DetailMap $processes -ProcessId $worker.Id
+        if ($listener.StartedUtcTicks -and $supervisor.StartedUtcTicks) {
+            [pscustomobject]@{
+                Fingerprint = $backendFingerprint
+                ApiPort = $apiPort
+                ApiPid = $listener.ProcessId
+                ApiStartedUtcTicks = $listener.StartedUtcTicks
+                SupervisorPid = $supervisor.ProcessId
+                SupervisorStartedUtcTicks = $supervisor.StartedUtcTicks
+            } | ConvertTo-Json | Set-Content -LiteralPath $backendStatePath -Encoding utf8
+        }
+    }
 }
-# The supervisor is alive; confirm it actually got a worker running underneath it,
-# so a worker that cannot start at all still fails startup instead of looping quietly.
-$workerRunning = Wait-Until -TimeoutSeconds 30 -PollMilliseconds 500 -Condition {
-    @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match '(?i)-m\s+app\.services\.submission_worker(?:\s|$)' }).Count -gt 0
-}
-if (-not $workerRunning) {
-    throw "The grading worker did not stay running. Check logs/submission-worker.err.log."
-}
-Write-Host "Grading worker started cleanly and is supervised (supervisor PID $($worker.Id))."
 Add-PhaseTiming -Name "FastAPI + worker" -Clock $phaseClock
 
 # ---------------------------------------------------------------------------

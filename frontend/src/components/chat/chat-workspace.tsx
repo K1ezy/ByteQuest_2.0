@@ -52,6 +52,7 @@ function HistoryPanel({ select, start, drawer }: {
   const request = useRef<AbortController | null>(null);
   const mutation = useRef<AbortController | null>(null);
   const searchId = useId();
+  const temporaryNoteId = useId();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -133,8 +134,10 @@ function HistoryPanel({ select, start, drawer }: {
     <div className="chat-history-controls">
       <div className="chat-new-actions">
         <button type="button" className="button button-primary" onClick={() => start("saved")}>New chat</button>
-        <button type="button" className="button button-outline" onClick={() => start("temporary")}>Temporary Chat</button>
+        <button type="button" className="button button-outline" onClick={() => start("temporary")}
+          aria-describedby={temporaryNoteId}>Temporary Chat</button>
       </div>
+      <p id={temporaryNoteId} className="ws-row-meta">Temporary Chat isn’t saved to your history. It stays in this browser tab.</p>
       {!drawer && <h2>Chat history</h2>}
       <label className="sr-only" htmlFor={searchId}>Search chat titles</label>
       <input id={searchId} type="search" placeholder="Search chat titles" value={query} maxLength={100}

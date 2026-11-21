@@ -8,19 +8,18 @@ import logging
 import math
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import joblib
 import pandas as pd
 import sklearn
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.entities import ActivityAttempt, LearningActivity, Profile
-from app.services.ml_predictor.exam_history import released_exam_history
+from app.models.entities import ActivityAttempt, HintUse, LearningActivity, Profile
 from app.services.ml_predictor.feature_engineering import (
     FEATURE_NAMES,
     extract_features_from_dataframe,
@@ -66,8 +65,21 @@ def _partition_report(scores: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _scores_only(by_name: Any) -> dict[str, Any]:
+    """Keep only the allowlisted partition keys of each estimator's score."""
+    if not isinstance(by_name, dict):
+        return {}
+    return {
+        name: {key: score[key] for key in _PARTITION_KEYS if key in score}
+        for name, score in by_name.items()
+        if isinstance(score, dict)
+    }
+
+
 def _sanitized_report(metrics: dict[str, Any]) -> dict[str, Any]:
     """Allowlist the validated metrics summary for the faculty evaluation view."""
+    live = (metrics.get("supplementary") or {}).get("live_eligible")
+    live = live if isinstance(live, dict) else {}
     return {
         "model_version": metrics.get("model_version"),
         "dataset_source": metrics.get("dataset_source"),
@@ -89,6 +101,19 @@ def _sanitized_report(metrics: dict[str, Any]) -> dict[str, Any]:
             for name, scores in (metrics.get("baselines") or {}).items()
             if isinstance(scores, dict)
         },
+        "confidence_intervals": {
+            name: {key: intervals.get(key) for key in ("level", "n_resamples", "skipped_single_class", "metrics")}
+            for name, intervals in (metrics.get("confidence_intervals") or {}).items()
+            if isinstance(intervals, dict)
+        },
+        "adequacy": metrics.get("adequacy") or {},
+        "supplementary": {
+            "live_eligible": {
+                "min_prior_tasks": live.get("min_prior_tasks"),
+                "models": _scores_only(live.get("models")),
+                "baselines": _scores_only(live.get("baselines")),
+            }
+        } if live else {},
     }
 
 
@@ -193,7 +218,7 @@ def load_ml_models() -> ModelBundle:
                 raise ModelArtifactError(
                     "Active model directory name does not match its recorded model version."
                 )
-            if metadata.get("schema_version") != 2:
+            if metadata.get("schema_version") != 3:
                 raise ModelArtifactError("Model artifact metadata schema is unsupported.")
             if metadata.get("features") != list(FEATURE_NAMES):
                 raise ModelArtifactError("Model metadata feature schema does not match this backend version.")
@@ -299,23 +324,24 @@ def predict_student_success(
     *,
     as_of: datetime | None = None,
 ) -> PredictionResult:
-    """Predict success using only the student's prior attempts in the target track."""
+    """Predict the first-submission outcome on a challenge from the learner's course history.
+
+    History is every graded, non-exam attempt and hint reveal in the target's
+    course and language, up to the source attempt (or ``as_of``). The snapshot
+    time is the live t0, matching how the trainer cuts history at t0.
+    """
     models = load_ml_models()
+    in_scope = (
+        LearningActivity.course_id == target_activity.course_id,
+        LearningActivity.language == target_activity.language,
+    )
     history_query = (
-        db.query(
-            ActivityAttempt,
-            LearningActivity.activity_type,
-            LearningActivity.language,
-            LearningActivity.topic_concept,
-        )
+        db.query(ActivityAttempt, LearningActivity.activity_type)
         .join(LearningActivity, ActivityAttempt.activity_id == LearningActivity.id)
         .filter(
             ActivityAttempt.student_id == student.id,
             ActivityAttempt.exam_attempt_id.is_(None),
-            LearningActivity.course_id == target_activity.course_id,
-            LearningActivity.language == target_activity.language,
-            func.lower(func.trim(LearningActivity.topic_concept))
-            == str(target_activity.topic_concept).strip().casefold(),
+            *in_scope,
         )
     )
     if source_attempt is not None:
@@ -336,14 +362,6 @@ def predict_student_success(
     elif as_of is not None:
         history_query = history_query.filter(ActivityAttempt.created_at <= as_of)
 
-    history_rows = (
-        history_query.order_by(
-            ActivityAttempt.created_at.asc(),
-            ActivityAttempt.attempt_number.asc(),
-            ActivityAttempt.id.asc(),
-        )
-        .all()
-    )
     history = [
         {
             "id": str(attempt.id),
@@ -353,25 +371,28 @@ def predict_student_success(
             "is_successful": attempt.is_successful,
             "error_category": attempt.error_category,
             "compiler_status_id": attempt.compiler_status_id,
-            "execution_time_ms": attempt.execution_time_ms,
-            "time_spent_seconds": attempt.time_spent_seconds,
             "score_percentage": attempt.score_percentage,
             "activity_type": activity_type,
-            "language": language,
-            "topic_concept": topic_concept,
         }
-        for attempt, activity_type, language, topic_concept in history_rows
+        for attempt, activity_type in history_query.all()
     ]
+    hints = [
+        {"activity_id": str(activity_id), "created_at": created_at}
+        for activity_id, created_at in db.query(HintUse.activity_id, HintUse.created_at)
+        .join(LearningActivity, HintUse.activity_id == LearningActivity.id)
+        .filter(HintUse.student_id == student.id, *in_scope)
+        .all()
+    ]
+    # The snapshot moment is t0. Rows were already limited to the source
+    # attempt above; the cutoff sits just after it so that attempt counts.
+    cutoff = as_of or datetime.now(timezone.utc)
+    if history:
+        cutoff = max(cutoff, max(row["created_at"] for row in history) + timedelta(microseconds=1))
     features = extract_features_from_dataframe(
-        pd.DataFrame.from_records(history),
-        target_difficulty=target_activity.difficulty_level,
-        target_language=target_activity.language,
-        target_topic=target_activity.topic_concept,
-        exam_history=released_exam_history(
-            db, student.id, target_activity.course_id,
-            as_of=source_attempt.created_at if source_attempt else as_of,
-            include_at_cutoff=source_attempt is None,
-        ) if target_activity.course_id else [],
+        history,
+        cutoff=cutoff,
+        hint_reveals=hints,
+        target_activity_id=target_activity.id,
     )
     model_input = pd.DataFrame([features], columns=FEATURE_NAMES, dtype=float)
 

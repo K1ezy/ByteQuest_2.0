@@ -166,7 +166,8 @@ export function StatCard({
       {inner}
     </Link>
   ) : (
-    <div className="ws-stat-card" data-tooltip={tooltip}>
+    // Focusable only when it carries help, so keyboard users can open the tip too.
+    <div className="ws-stat-card" data-tooltip={tooltip} tabIndex={tooltip ? 0 : undefined}>
       {inner}
     </div>
   );
@@ -187,7 +188,7 @@ export function StatusChip({
 }) {
   const resolvedTone = tone || stateTone(state);
   return (
-    <span className={`ws-chip ${resolvedTone}`} data-tooltip={tooltip}>
+    <span className={`ws-chip ${resolvedTone}`} data-tooltip={tooltip} tabIndex={tooltip ? 0 : undefined}>
       {label || prettify(state)}
     </span>
   );

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import secrets
 import statistics
@@ -80,6 +81,8 @@ EXPECTED_PASSES = {
 # Setup helpers
 # ---------------------------------------------------------------------------
 def api_base() -> str:
+    if os.environ.get("BQ_QA_API"):
+        return os.environ["BQ_QA_API"].rstrip("/")
     env = (ROOT / "frontend" / ".env.local").read_text(encoding="utf-8") if (ROOT / "frontend" / ".env.local").exists() else ""
     match = re.search(r"^NEXT_PUBLIC_API_URL=(\S+)", env, re.M)
     return (match.group(1) if match else "http://127.0.0.1:8001/api/v1").rstrip("/")
@@ -117,15 +120,11 @@ def create_accounts(run: str, students: int, state: dict) -> None:
             label = f"{role}{index + 1}" if role == "student" else role
             password = secrets.token_urlsafe(18)
             email = f"qa-{run}-{label}@bytequest.test"
-            with SessionLocal.begin() as db:
-                school_id = db.scalar(text("""
-                    INSERT INTO bytequest_private.student_registration_roster (school_id, email)
-                    VALUES (:school_id, :email) ON CONFLICT DO NOTHING RETURNING school_id
-                """), {"school_id": f"00-{secrets.randbelow(99_999) + 1:05d}", "email": email})
-            if not school_id:
-                raise SystemExit("Synthetic School ID collided with an existing roster entry. Retry the QA run.")
-            state.setdefault("roster_emails", []).append(email)
-            save_state(state)
+            school_id = f"00-{secrets.randbelow(99_999) + 1:05d}"
+            with SessionLocal() as db:
+                if db.scalar(text("select exists (select 1 from public.profiles where school_id = :id)"),
+                             {"id": school_id}):
+                    raise SystemExit("Synthetic School ID collided with an existing account. Retry the QA run.")
             response = client.post(f"{auth}/admin/users", headers=headers, json={
                 "email": email, "password": password, "email_confirm": True,
                 "user_metadata": {"username": f"qa{run}{role[:3]}{letters(index)}", "school_id": school_id,
@@ -408,6 +407,20 @@ async def verify(s: Session, report: dict, admin: dict, instructor: dict, studen
     perf = (await s.call(instructor["token"], "GET", f"/faculty/performance?course_id={course_id}")).json()
     gradebook = (await s.call(instructor["token"], "GET", f"/faculty/gradebook?course_id={course_id}")).json()
     columns = {item["activity_id"]: item for item in gradebook["activities"]}
+    health = {row["activity_id"]: row["health"] for row in (await s.call(
+        instructor["token"], "GET", f"/faculty/activities?course_id={course_id}")).json()["items"]}
+    snapshot = (await s.call(instructor["token"], "GET", f"/faculty/dashboard?course_id={course_id}")).json()["class_snapshot"]
+    inactive = (await s.call(instructor["token"], "GET", f"/faculty/performance?course_id={course_id}&inactive=1")).json()["students"]
+    check("Active, inactive and not started partition enrolled learners",
+          snapshot["active_7d"] + snapshot["inactive_7d"] + snapshot["need_follow_up"] == len(students)
+          and len(inactive) == snapshot["inactive_7d"])
+    admin_health = (await s.call(admin["token"], "GET", "/admin/course-health")).json()
+    row = next(r for r in admin_health["courses"] if r["id"] == course_id)
+    check("Administrator and instructor see consistent course aggregates",
+          row["enrolled"] == snapshot["active_learners"] and row["published_activities"] == snapshot["published_activities"]
+          and (row["active_7d"], row["not_started"], row["activities_passed"]) == (
+            (snapshot["active_7d"], snapshot["need_follow_up"], snapshot["average_completion_percent"])
+            if len(students) >= 5 else (None, None, None)))
     for label, aid in ids.items():
         analysis = (await s.call(instructor["token"], "GET", f"/faculty/activities/{aid}/analysis")).json()
         stuck_at = gradebook["stuck_after_attempts"]
@@ -422,6 +435,7 @@ async def verify(s: Session, report: dict, admin: dict, instructor: dict, studen
         )).json()
         check(f"Activity analysis agrees with practice records, gradebook and Student Progress ({label})",
               (analysis.get("attempted"), analysis.get("passed"), analysis.get("stuck")) == expected
+              and tuple(health[aid][field] for field in ("attempted", "passed", "stuck")) == expected
               and (column.get("attempted"), column.get("passed")) == expected[:2]
               and len(stuck_progress.get("students", ())) == expected[2])
     posted = await s.call(instructor["token"], "POST", "/faculty/announcements", expect=(201,), json={
@@ -473,6 +487,31 @@ async def verify(s: Session, report: dict, admin: dict, instructor: dict, studen
         await s.call(admin["token"], "GET", f"/faculty/activities/{ids['double']}", expect=(403,)),
     ]
     check("Each role is refused the other roles' pages", all(r.status_code == 403 for r in denied))
+
+    # Run an actual released exam after the practice/XP checks so its rewards cannot affect them.
+    from qa_mixed_exam_load import prepare_exam, save_exam, report_exam_grading
+    from app.models.entities import Exam
+    tokens = [student["token"] for student in students]
+    exam_id = await prepare_exam(s, instructor["token"], tokens, ids)
+    detail_path = f"/exams/instructor/{exam_id}"
+    before = (await s.call(instructor["token"], "GET", detail_path)).json()
+    check("An exam without released results has no class summary", before["summary"] is None)
+    submissions = await asyncio.gather(*(save_exam(s, token, exam_id) for token in tokens[:2]))
+    await asyncio.gather(*(s.call(token, "POST", f"/exams/attempts/{aid}/submit", student=True)
+                           for token, aid in zip(tokens, submissions)))
+    await report_exam_grading(exam_id, len(submissions), None)
+    with SessionLocal.begin() as db:
+        db.get(Exam, uuid.UUID(exam_id)).closes_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await s.call(instructor["token"], "POST", detail_path + "/release")
+    released = (await s.call(instructor["token"], "GET", detail_path)).json()
+    results = [r for student in released["students"] for r in student["results"] if r["results_released"]]
+    exam_summary = released["summary"]
+    check("Exam summary matches released results, item passes and assigned learners",
+          len(results) == exam_summary["submitted"] == len(submissions) and exam_summary["assigned"] == len(tokens)
+          and exam_summary["average_percent"] == sum(100*r["score"]/r["max_score"] for r in results)/len(results)
+          and exam_summary["score_bands"][-1]["count"] == len(submissions)
+          and len(exam_summary["items"]) == 2
+          and all(i["passed"] == i["attempted"] == len(submissions) for i in exam_summary["items"]))
 
 
 def summary(values: list[float]) -> dict:

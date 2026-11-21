@@ -1,32 +1,23 @@
-"use client";
-
-import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { useAccessibility } from "@/components/accessibility-provider";
+import { InsightLineChart } from "@/components/insights/line-chart";
+import { SMALL_SAMPLE } from "@/components/insights/ui";
 import type { WeekPoint } from "./gamification-insights";
 
 export default function EngagementChart({ weeks, codexWeek, memoryWeek }: {
   weeks: WeekPoint[]; codexWeek: number; memoryWeek: number;
 }) {
-  const { preferences } = useAccessibility();
-  const data = weeks.map((point) => ({
-    week: `Week ${point.week + 1}`,
-    share: point.eligible >= 5 && point.events >= 5 ? Math.round(100 * point.active / point.eligible) : null,
-  }));
-  return <div className="ic-chart" role="group" aria-label="Share of learners active each week since their first activity">
-    <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-      <LineChart data={data} accessibilityLayer margin={{ top: 24, right: 24, bottom: 6, left: 0 }}>
-        <CartesianGrid stroke="var(--line)" vertical={false} />
-        <XAxis dataKey="week" tick={{ fill: "var(--muted)", fontSize: 12 }} stroke="var(--line)" />
-        <YAxis domain={[0, 100]} ticks={[0, 50, 100]} width={44} tickFormatter={(value) => value + "%"}
-          tick={{ fill: "var(--muted)", fontSize: 12 }} stroke="var(--line)" />
-        <Tooltip formatter={(value) => [value + "%", "Active learners"]} />
-        {[{ week: codexWeek, label: "Codex unlocks" }, { week: memoryWeek, label: "Memory unlocks" }].map(({ week, label }) => (
-          data[week] ? <ReferenceLine key={label} x={data[week].week} stroke="var(--muted)" strokeDasharray="3 3"
-            label={{ value: label, position: "insideTopRight", fill: "var(--muted)", fontSize: 11 }} /> : null
-        ))}
-        <Line dataKey="share" stroke="var(--purple)" strokeWidth={2} connectNulls={false}
-          dot={{ fill: "var(--purple)", r: 3 }} isAnimationActive={preferences.reducedMotion ? false : "auto"} animationDuration={220} />
-      </LineChart>
-    </ResponsiveContainer>
-  </div>;
+  const rows = weeks.map(p => {
+    const visible = p.eligible >= SMALL_SAMPLE && p.events >= SMALL_SAMPLE;
+    return { x: "Week " + (p.week + 1), share: visible ? Math.round(100*p.active/p.eligible) : null,
+      active: visible ? p.active : null, reached: visible ? p.eligible : null, events: visible ? p.events : null };
+  });
+  const latest = rows.filter(r => r.share !== null).at(-1);
+  return <InsightLineChart rows={rows} domain={[0,100]} xLabel="Week" label="Learners active each week"
+    series={[{key:"share",label:"Active learners (%)",token:"var(--chart-series)"}]}
+    summary={latest ? latest.share + "% practised in " + latest.x + "." : "Not enough data yet."}
+    references={[{x:"Week "+(codexWeek+1),label:"Codex unlocks"},{x:"Week "+(memoryWeek+1),label:"Memory unlocks"}]}
+    table={<table className="ws-table insights-table"><caption>Learners active each week since their first activity</caption>
+      <thead><tr>{["Week","Learners reached","Active","Share active","Practice events"].map(h=><th key={h} scope="col">{h}</th>)}</tr></thead>
+      <tbody>{rows.map(r=><tr key={r.x}><th scope="row">{r.x}</th>{r.share === null ? <td colSpan={4}>Not enough data yet</td>
+        : <><td>{r.reached}</td><td>{r.active}</td><td>{r.share}%</td><td>{r.events}</td></>}</tr>)}</tbody>
+    </table>} />;
 }

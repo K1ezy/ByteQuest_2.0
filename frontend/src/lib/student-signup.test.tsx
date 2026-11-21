@@ -2,12 +2,13 @@ import { afterEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   check: vi.fn(),
+  schoolId: vi.fn(),
   signUp: vi.fn(),
 }));
-vi.mock("@/lib/api", () => ({ checkUsernameAvailability: mocks.check }));
+vi.mock("@/lib/api", () => ({ checkUsernameAvailability: mocks.check, checkSchoolIdAvailability: mocks.schoolId }));
 vi.mock("@/lib/supabase", () => ({ getSupabase: () => ({ auth: { signUp: mocks.signUp } }) }));
 
-import { signUpStudent } from "./student-signup";
+import { checkStudentSignup, SCHOOL_ID_TAKEN_ERROR, signUpStudent } from "./student-signup";
 
 const registration = { schoolId: " 26-00123 ", yearLevel: 3, blockSection: "F" };
 
@@ -38,6 +39,30 @@ it("reports a signup race while allowing a different username retry", async () =
   mocks.check.mockResolvedValue(true);
   mocks.signUp.mockResolvedValueOnce({ data: { session: null }, error: { message: "Database error saving new user" } })
     .mockResolvedValueOnce({ data: { session: null }, error: null });
-  await expect(signUpStudent("learner@example.test", "password", "firsthandle", registration)).rejects.toThrow("match the school roster");
+  await expect(signUpStudent("learner@example.test", "password", "firsthandle", registration)).rejects.toThrow("may have just been registered");
   await expect(signUpStudent("learner@example.test", "password", "secondhandle", registration)).resolves.toHaveProperty("data.session", null);
+});
+
+it("checks every credential before the Terms step, including an already-used School ID", async () => {
+  for (const [email, password, schoolId, message] of [
+    ["not-an-email", "password", "26-00123", "valid email"],
+    ["learner@example.test", "short", "26-00123", "at least 8 characters"],
+    ["learner@example.test", "password", "26-00000", "format 26-00001"],
+  ]) {
+    await expect(checkStudentSignup(email, password, "AdaHandle", { ...registration, schoolId })).rejects.toThrow(message);
+  }
+  expect(mocks.check).not.toHaveBeenCalled();
+
+  mocks.check.mockResolvedValue(true);
+  mocks.schoolId.mockResolvedValueOnce(false);
+  await expect(checkStudentSignup(" learner@example.test ", "password", "AdaHandle", registration)).rejects.toThrow(SCHOOL_ID_TAKEN_ERROR);
+  expect(mocks.schoolId).toHaveBeenCalledWith("26-00123");
+
+  mocks.schoolId.mockResolvedValueOnce(true);
+  await expect(checkStudentSignup("learner@example.test", "password", "AdaHandle", registration)).resolves.toBeUndefined();
+  // Staff School IDs are free-form and are not checked against student IDs.
+  await expect(checkStudentSignup("staff@example.test", "password", "StaffHandle",
+    { ...registration, schoolId: "T-1", role: "instructor" })).resolves.toBeUndefined();
+  expect(mocks.schoolId).toHaveBeenCalledTimes(2);
+  expect(mocks.signUp).not.toHaveBeenCalled();
 });

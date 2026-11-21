@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { AccessibilitySettings } from "@/components/accessibility-settings";
 import { UserAvatar } from "@/components/user-avatar";
 import { useSignOut } from "@/hooks/use-sign-out";
 import { roleLabels } from "@/lib/navigation";
@@ -27,6 +28,8 @@ function usesAccountSheet() {
  */
 export function AccountMenu({ profile }: { profile: Profile }) {
   const [open, setOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef<HTMLDialogElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const sheetRef = useRef<HTMLDialogElement>(null);
@@ -70,6 +73,10 @@ export function AccountMenu({ profile }: { profile: Profile }) {
     };
   }, [open, isSheet]);
 
+  useEffect(() => {
+    if (settingsOpen) settingsRef.current?.showModal();
+  }, [settingsOpen]);
+
   const close = () => setOpen(false);
   const actions = <>
     <span className="bq-sheet-handle" aria-hidden="true" />
@@ -85,7 +92,8 @@ export function AccountMenu({ profile }: { profile: Profile }) {
       <span className="tag">{roleLabels[profile.role]}</span>
     </div>
     <Link ref={firstLinkRef} href="/profile" onClick={close}>Profile</Link>
-    <Link href="/account/accessibility" onClick={close}>Accessibility</Link>
+    {/* Opens over the current page, so closing it returns the user to where they were. */}
+    <button type="button" aria-haspopup="dialog" onClick={() => { close(); setSettingsOpen(true); }}>Accessibility</button>
     <button type="button" className="bq-account-signout" disabled={isSigningOut} onClick={() => void signOut()}>
       {isSigningOut ? "Signing out…" : "Sign out"}
     </button>
@@ -124,5 +132,11 @@ export function AccountMenu({ profile }: { profile: Profile }) {
           {actions}
         </dialog>
       : <div id={panelId} className="bq-account-actions" role="region" aria-label="Account">{actions}</div>)}
+    {settingsOpen && <dialog ref={settingsRef} className="bq-settings-dialog" aria-label="Accessibility settings"
+      onClose={() => { setSettingsOpen(false); triggerRef.current?.focus(); }}
+      // The backdrop and the space around the card belong to the dialog itself, so a tap there closes it.
+      onClick={(event) => { if (event.target === event.currentTarget) event.currentTarget.close(); }}>
+      <AccessibilitySettings ownerId={profile.id} onClose={() => settingsRef.current?.close()} />
+    </dialog>}
   </div>;
 }

@@ -14,6 +14,7 @@ import {
   FieldError,
   Notice,
   SearchField,
+  StatusChip,
   SelectField,
   useApi,
 } from "@/components/workspace/ui";
@@ -157,7 +158,10 @@ function FacultyActivities() {
     }
   }
 
-  const rows = data?.items || [];
+  const attention = searchParams.get("sort") === "attention";
+  const rows = [...(data?.items || [])];
+  if (attention) rows.sort((a,b) => (b.health?.stuck ?? 0) - (a.health?.stuck ?? 0) ||
+    (a.health?.pass_rate ?? 2) - (b.health?.pass_rate ?? 2) || (a.title || a.topic_concept).localeCompare(b.title || b.topic_concept));
   // Default to the language this class already uses; the instructor's own track only for an empty course.
   const createLanguage = draft.language ?? rows.find((row) => row.language)?.language ?? profile.enrolled_language;
 
@@ -197,7 +201,6 @@ function FacultyActivities() {
           {!createOpen ? <InstructorIcon name="plus" /> : null}{createOpen ? "Close create form" : "New activity"}
         </button>}
       />
-      <nav className="ic-activity-subnav" aria-label="Activity tools"><Link href={courseHref("/instructor/materials")}>Materials</Link><Link href={courseHref("/instructor/review")}>Review Queue</Link><Link href="/workshops">Workshops</Link><Link href="/instructor/preview">Student Preview</Link></nav>
 
       {notice ? <Notice tone={notice.tone} onDismiss={() => setNotice(null)}>{notice.text}</Notice> : null}
 
@@ -308,6 +311,8 @@ function FacultyActivities() {
 
       <div className="ic-activity-filters" role="region" aria-label="Activity filters">
         <SearchField value={search} onChange={setSearch} onSubmit={() => updateQuery({ q: search || null })} placeholder="Search activities" label="Search activities" />
+        <SelectField label="Sort" value={attention ? "attention" : ""} onChange={v => updateQuery({sort:v || null})}
+          options={[{value:"",label:"Default order"},{value:"attention",label:"Needs attention first"}]}/>
         <SelectField label="Type" value={type} onChange={(value) => updateQuery({ type: value || null })} options={[
           { value: "quiz", label: "Quiz" }, { value: "challenge", label: "Coding challenge" },
         ]} includeAll allLabel="All types" />
@@ -337,19 +342,24 @@ function FacultyActivities() {
               description={<>
                 {activity.title && activity.topic_concept ? <div>{activity.topic_concept}</div> : null}
                 <div>{meta}</div>
+                {activity.health && <div className="activity-health">{activity.health.passed} of {activity.health.attempted + activity.health.not_started} passed · <Link href={courseHref("/instructor/performance?activity=" + activity.activity_id + "&stuck=1")}>{activity.health.stuck} stuck</Link> · {activity.health.not_started} not started
+                  {activity.health.stuck > 0 && <> <StatusChip state="pending" label="Needs attention"/></>}</div>}
                 {activity.state === "scheduled" && activity.opens_at ? <div>Opens {formatManilaDateTime(activity.opens_at)}</div> : null}
               </>}
               indicators={<>
                 {activity.activity_type === "challenge" ? (
                   <span className={activity.judge0_verified ? "ic-judge-passed" : "ic-judge-pending"} role="img"
                     aria-label={activity.judge0_verified ? "Judge0 passed" : "Needs verification"}
-                    data-tooltip={activity.judge0_verified ? "Judge0 passed" : "Needs verification"}>
+                    data-tooltip={activity.judge0_verified
+                      ? "Judge0 passed: the reference solution passed the grading cases in this saved version."
+                      : "Needs verification: run the reference solution against the grading cases before publishing."}>
                     <InstructorIcon name={activity.judge0_verified ? "check" : "warning"} />
                   </span>
                 ) : null}
-                {activity.grading_locked ? <span role="img" aria-label="Grading locked" data-tooltip="Grading locked"><InstructorIcon name="lock" /></span> : null}
+                {activity.grading_locked ? <span role="img" aria-label="Grading locked"
+                  data-tooltip="Grading locked: students have attempted this activity. Create a new version to change grading content."><InstructorIcon name="lock" /></span> : null}
               </>}
-              action={<Link className="ic-button" href={href}>Edit</Link>}
+              action={mayAnalyze ? <Link className="ic-button" href={courseHref("/instructor/activities/" + activity.activity_id + "/analysis")}>Analysis</Link> : <Link className="ic-button" href={href}>Edit</Link>}
               menu={<details className="ic-row-menu" onKeyDown={(event) => {
                 if (event.key !== "Escape") return;
                 event.currentTarget.open = false;
@@ -357,7 +367,7 @@ function FacultyActivities() {
               }}>
                 <summary className="ic-button" aria-label={"More actions for " + (activity.title || activity.topic_concept)}>⋯</summary>
                 <div className="ic-menu-options">
-                  {mayAnalyze ? <Link className="ic-button" href={courseHref("/instructor/activities/" + activity.activity_id + "/analysis")}>Analysis</Link> : null}
+                  {mayAnalyze && <Link className="ic-button" href={href}>Edit</Link>}
                   <button type="button" className="ic-button" disabled={rowBusy !== null} onClick={() => void copyActivity(activity, "version")}>New version</button>
                   <button type="button" className="ic-button" disabled={rowBusy !== null} onClick={() => void copyActivity(activity, "duplicate")}>Duplicate</button>
                   <button type="button" className="ic-button" disabled title="Only administrators can archive activities at present">Archive</button>

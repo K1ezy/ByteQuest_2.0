@@ -17,7 +17,7 @@ import { getErrorMessage } from "@/lib/api";
 import type { Profile } from "@/lib/types";
 import { getAdminCourses, getFacultyCourses, type CourseSummary, type WorkspaceRole } from "@/lib/workspace";
 import { useShellProfile } from "@/components/app-shell";
-import { internalPath } from "@/lib/navigation";
+import { internalPath, withCourse } from "@/lib/navigation";
 
 interface WorkspaceContextValue {
   role: WorkspaceRole;
@@ -149,12 +149,7 @@ export function WorkspaceProvider({ role, children, shell: Shell }: {
   const courseForbidden = Boolean(requestedCourse && courses.length > 0 && !courses.some((course) => course.id === requestedCourse));
 
   const courseHref = useCallback(
-    (href: string) => {
-      if (role !== "faculty" || !courseId) return href;
-      const [path, hash] = href.split("#");
-      const separator = path.includes("?") ? "&" : "?";
-      return `${path}${separator}course=${courseId}${hash ? `#${hash}` : ""}`;
-    },
+    (href: string) => withCourse(href, role === "faculty" ? courseId : null),
     [courseId, role],
   );
 

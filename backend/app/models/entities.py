@@ -286,9 +286,16 @@ class Workshop(Base):
     name = Column(String(80), nullable=False)
     description = Column(String(500), nullable=True)
     language = Column(Enum(ProgrammingLang, name="programminglang"), nullable=False)
+    block = Column(String(24), nullable=True)
+    year_level = Column(Integer, CheckConstraint("year_level between 1 and 4"), nullable=True)
+    subject = Column(String(80), nullable=True)
+    room = Column(String(40), nullable=True)
     join_code = Column(String(8), unique=True, nullable=False, index=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    joining_enabled = Column(Boolean, nullable=False, server_default=text("true"))
+    archived_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"), onupdate=_utcnow)
 
 
 class WorkshopMember(Base):
@@ -308,6 +315,24 @@ class WorkshopActivity(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     workshop_id = Column(UUID(as_uuid=True), ForeignKey("workshops.id", ondelete="CASCADE"), nullable=False, index=True)
     activity_id = Column(UUID(as_uuid=True), ForeignKey("learning_activities.id", ondelete="CASCADE"), nullable=False, index=True)
+    topic = Column(String(80), nullable=True)
+    position = Column(Integer, nullable=False, server_default=text("0"))
+    added_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class WorkshopAnnouncement(Base):
+    __tablename__ = "workshop_announcements"
+    __table_args__ = (CheckConstraint("char_length(body) BETWEEN 1 AND 2000"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    workshop_id = Column(UUID(as_uuid=True), ForeignKey("workshops.id", ondelete="CASCADE"), nullable=False)
+    author_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True)
+    body = Column(Text, nullable=False)
+    pinned = Column(Boolean, nullable=False, server_default=text("false"))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"), onupdate=_utcnow)
+
+    Index("ix_workshop_announcements_timeline", workshop_id, created_at.desc())
 
 
 

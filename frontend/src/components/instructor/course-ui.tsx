@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useId, type ReactNode } from "react";
 import { weeklyChange } from "@/lib/instructor-dashboard";
 
+/* Page chrome for every instructor screen (headers, sections, rows, stats, inline states).
+   Forms, notices, dialogs and status chips come from components/workspace/ui.tsx. */
+
 const icons = {
   home: <><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h5v-7h4v7h5V9.5" /></>,
   code: <path d="m7 6-6 6 6 6m10-12 6 6-6 6M14 4l-4 16" />,
@@ -25,6 +28,7 @@ const icons = {
   calendar: <><rect x="4" y="5" width="16" height="16" rx="2" /><path d="M8 3v4m8-4v4M4 10h16" /></>,
   check: <path d="m5 12 4 4L19 6" />,
   lock: <><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 1 1 8 0v3m-4 5v2" /></>,
+  menu: <path d="M4 7h16M4 12h16M4 17h16" />,
 };
 
 export type InstructorIconName = keyof typeof icons;
@@ -33,8 +37,11 @@ export function InstructorIcon({ name }: { name: InstructorIconName }) {
   return <svg className="ic-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{icons[name]}</svg>;
 }
 
-export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
-  return <div className="ic-page-head"><div><h1>{title}</h1>{subtitle ? <p>{subtitle}</p> : null}</div>
+export function PageHeader({ title, subtitle, status, actions }: {
+  title: string; subtitle?: ReactNode; status?: ReactNode; actions?: ReactNode;
+}) {
+  return <div className="ic-page-head"><div><h1>{title}</h1>{subtitle ? <p>{subtitle}</p> : null}
+    {status ? <div className="ic-page-status">{status}</div> : null}</div>
     {actions ? <div className="ic-page-actions">{actions}</div> : null}
   </div>;
 }
@@ -46,8 +53,8 @@ export interface StatItem {
   change?: { current: number; previous: number | null };
 }
 
-export function StatStrip({ items }: { items: StatItem[] }) {
-  return <dl className="ic-stats" aria-label="Course statistics">
+export function StatStrip({ items, label = "Course statistics" }: { items: StatItem[]; label?: string }) {
+  return <dl className="ic-stats" aria-label={label}>
     {items.map(({ label, value, note, change }) => {
       const comparison = change && weeklyChange(change.current, change.previous);
       return <div className="ic-stat" key={label}>

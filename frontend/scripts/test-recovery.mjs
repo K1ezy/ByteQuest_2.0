@@ -116,12 +116,16 @@ console.log("✔ Invariant 3 Passed: Shared-computer sign-out purges all exam sn
 localMap.set("bytequest:draft:user:activity", "private code");
 localMap.set("sb-local-auth-token", "private session");
 localMap.set("unrelated-preference", "keep");
+localMap.set("bytequest:menu-side:student-a", "right");
+localMap.set("bytequest:menu-side:student-b", "left");
 storageMap.set("sb-local-auth-token", "private session");
 clearSharedComputerData();
 assert.strictEqual(localMap.has("bytequest:draft:user:activity"), false);
 assert.strictEqual(localMap.has("sb-local-auth-token"), false);
 assert.strictEqual(storageMap.size, 0);
 assert.strictEqual(localMap.get("unrelated-preference"), "keep");
+assert.strictEqual(localMap.get("bytequest:menu-side:student-a"), "right");
+assert.strictEqual(localMap.get("bytequest:menu-side:student-b"), "left");
 console.log("✔ Invariant 4 Passed: Shared-computer sign-out removes local Auth and draft data.");
 
 console.log("All 4 recovery hardening invariants verified successfully!");

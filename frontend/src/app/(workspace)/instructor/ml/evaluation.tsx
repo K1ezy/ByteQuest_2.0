@@ -2,16 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  EmptyState,
-  LoadingPanel,
   Notice,
   SelectField,
-  StatCard,
   Toolbar,
   useApi,
 } from "@/components/workspace/ui";
 import { formatDateTime } from "@/lib/workspace";
-import { Evaluation, OfflineReport, PartitionScore, modelName } from "./types";
+import { InsightLineChart } from "@/components/insights/line-chart";
+import { Section, InlineError, InlineEmpty, RowSkeleton, StatStrip } from "@/components/instructor/course-ui";
+import { READINESS_MESSAGES, Evaluation, OfflineReport, PartitionScore, modelName } from "./types";
 
 type Partition = "test" | "validation";
 
@@ -35,9 +34,6 @@ const METRIC_DEFINITIONS: { term: string; meaning: string }[] = [
   { term: "Brier score", meaning: "Average squared error of the probability itself. Lower is better." },
 ];
 
-const CURVE_COLORS: Record<string, string> = { logreg: "#2563eb", random_forest: "#16a34a" };
-const CURVE_DASH: Record<string, string> = { logreg: "", random_forest: "7 4" };
-
 function metric(value: number | null | undefined): string {
   return value === null || value === undefined ? "—" : value.toFixed(3);
 }
@@ -46,68 +42,26 @@ function CurveChart({
   label,
   xLabel,
   yLabel,
-  diagonal,
+  diagonal, baseline,
   series,
 }: {
   label: string;
   xLabel: string;
   yLabel: string;
   diagonal?: boolean;
+  baseline?: number;
   series: { key: string; x: number[]; y: number[] }[];
 }) {
-  const width = 320;
-  const height = 240;
-  const left = 44;
-  const right = 12;
-  const top = 12;
-  const bottom = 38;
-  const px = (value: number) => left + value * (width - left - right);
-  const py = (value: number) => top + (1 - value) * (height - top - bottom);
-  const drawable = series.filter((item) => item.x.length && item.x.length === item.y.length);
-  if (!drawable.length) return <p className="ws-muted">Curve data is unavailable for this partition.</p>;
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={label} style={{ width: "100%", height: "auto" }}>
-      {[0, 0.5, 1].map((tick) => (
-        <g key={tick}>
-          <line x1={left} x2={width - right} y1={py(tick)} y2={py(tick)} stroke="#e2e8f0" />
-          <text x={left - 6} y={py(tick) + 4} fontSize="10" fill="#64748b" textAnchor="end">
-            {tick}
-          </text>
-          <text x={px(tick)} y={height - 20} fontSize="10" fill="#64748b" textAnchor="middle">
-            {tick}
-          </text>
-        </g>
-      ))}
-      {diagonal ? (
-        <line x1={px(0)} y1={py(0)} x2={px(1)} y2={py(1)} stroke="#cbd5e1" strokeDasharray="3 3" />
-      ) : null}
-      {drawable.map((item) => (
-        <polyline
-          key={item.key}
-          points={item.x.map((value, index) => `${px(value)},${py(item.y[index])}`).join(" ")}
-          fill="none"
-          stroke={CURVE_COLORS[item.key] || "#7c3aed"}
-          strokeDasharray={CURVE_DASH[item.key] || ""}
-          strokeWidth="2"
-          strokeLinejoin="round"
-        />
-      ))}
-      <text x={(left + width - right) / 2} y={height - 4} fontSize="10" fill="#475569" textAnchor="middle">
-        {xLabel}
-      </text>
-      <text
-        x={12}
-        y={(top + height - bottom) / 2}
-        fontSize="10"
-        fill="#475569"
-        textAnchor="middle"
-        transform={`rotate(-90 12 ${(top + height - bottom) / 2})`}
-      >
-        {yLabel}
-      </text>
-    </svg>
-  );
+  const curves = series.filter(item => item.x.length && item.x.length === item.y.length);
+  if (!curves.length) return <p>Curve data is unavailable for this partition.</p>;
+  const rows = curves.flatMap(curve => {
+    const points = curve.x.map((x, i) => ({ x, [curve.key]: curve.y[i] }));
+    // Recall may be descending. Reverse the whole curve to preserve vertical steps at tied recall.
+    return curve.x[0] > curve.x[curve.x.length - 1] ? points.reverse() : points;
+  }).sort((a, b) => a.x - b.x);
+  const lines = curves.map(s => ({key:s.key,label:modelName(s.key),token:s.key === "logreg" ? "var(--chart-series)" : "var(--chart-series-2)",dash:s.key === "logreg" ? undefined : "7 4"}));
+  return <InsightLineChart rows={rows} series={lines} label={label} summary={yLabel + " by " + xLabel.toLowerCase() + " for the selected partition."}
+    xLabel={xLabel} domain={[0,1]} numericX connectGaps references={diagonal ? [{label:"Chance",diagonal:true}] : [{label:"Prevalence",y:baseline}]}/>;
 }
 
 function ConfusionMatrix({ name, score }: { name: string; score: PartitionScore }) {
@@ -231,10 +185,10 @@ function OfflineComparison({ report }: { report: OfflineReport | null }) {
   if (!report) {
     return (
       <>
-        <EmptyState title="No approved model report available">
+        <InlineEmpty><strong>No approved model report available</strong>{" "}
           No validated, approved model is active, so there is no offline comparison to show. The
           protocol that will be used is described below.
-        </EmptyState>
+        </InlineEmpty>
         <Methodology report={null} />
       </>
     );
@@ -351,10 +305,6 @@ function OfflineComparison({ report }: { report: OfflineReport | null }) {
       </div>
 
       <h3>ROC and precision-recall curves</h3>
-      <p className="ws-row-meta">
-        <span style={{ color: CURVE_COLORS.logreg }}>● Logistic regression (solid)</span> ·{" "}
-        <span style={{ color: CURVE_COLORS.random_forest }}>● Random forest (dashed)</span>
-      </p>
       <div className="ml-chart-grid">
         <div>
           <CurveChart
@@ -370,7 +320,7 @@ function OfflineComparison({ report }: { report: OfflineReport | null }) {
             label={`Precision-recall curve on the ${partition} partition`}
             xLabel="Recall"
             yLabel="Precision"
-            series={prSeries}
+            series={prSeries} baseline={report.partitions[partition]?.positive_rate}
           />
         </div>
       </div>
@@ -424,22 +374,22 @@ export default function ModelEvaluation({
 
   return (
     <>
-      {error ? <Notice tone="error">Model evaluation could not load. {error}</Notice> : null}
-      {loading && !data ? <LoadingPanel label="Loading model evaluation…" /> : null}
+      {error ? <InlineError onRetry={reload}/> : null}
+      {loading && !data ? <RowSkeleton/> : null}
       {data && observed ? (
         <>
-          <section aria-labelledby="ml-observed-title">
-            <h2 id="ml-observed-title">Observed outcomes in this course</h2>
+          {data.readiness && <p className="ws-muted">{data.readiness.forecasts_available ? "Forecast scoring is available." : READINESS_MESSAGES[data.readiness.status] || READINESS_MESSAGES.unavailable}</p>}
+          <Section title="Observed outcomes in this course">
             <p className="ws-muted">
               Saved predictions for this course that later had an observed outcome. The counting unit
               is {observed.unit}, not unique learners or independent experiments. Versions are never
               pooled.
             </p>
             {observed.versions.length === 0 ? (
-              <EmptyState title="No saved predictions in this course">
+              <InlineEmpty><strong>No saved predictions in this course</strong>{" "}
                 Predictions appear here once an approved model is active and consented learners
                 complete eligible activities.
-              </EmptyState>
+              </InlineEmpty>
             ) : (
               <>
                 <Toolbar label="Evaluation filters">
@@ -453,36 +403,13 @@ export default function ModelEvaluation({
                     }))}
                   />
                 </Toolbar>
-                <div className="ws-stat-grid" aria-label="Observed prediction summary">
-                  <StatCard
-                    label="Saved predictions"
-                    value={observed.total_predictions}
-                    hint={`Snapshots recorded for ${observed.selected_version}`}
-                    icon="▦"
-                  />
-                  <StatCard
-                    label="Awaiting outcomes"
-                    value={observed.awaiting_outcome}
-                    hint="Target activity not yet attempted"
-                    icon="◷"
-                  />
-                  <StatCard
-                    label="Labeled predictions"
-                    value={observed.labeled_predictions}
-                    hint="Counted in the accuracy below"
-                    icon="◉"
-                  />
-                  <StatCard
-                    label="Logistic regression accuracy"
-                    value={
-                      logreg?.accuracy_percent === null || logreg === undefined
-                        ? "—"
-                        : `${logreg.accuracy_percent}%`
-                    }
-                    hint={`Random forest: ${forest?.accuracy_percent === null || forest === undefined ? "—" : `${forest.accuracy_percent}%`}`}
-                    icon="↗"
-                  />
-                </div>
+                <StatStrip label="Model evaluation statistics" items={[
+                  {label:"Saved predictions", value:observed.total_predictions, note:observed.selected_version},
+                  {label:"Awaiting outcomes", value:observed.awaiting_outcome},
+                  {label:"Labeled predictions",value:observed.labeled_predictions},
+                  {label:"Logistic regression accuracy",value:logreg?.accuracy_percent == null ? "—" : logreg.accuracy_percent + "%",
+                   note:"Random forest: " + (forest?.accuracy_percent == null ? "—" : forest.accuracy_percent + "%")}
+                ]}/>
                 {observed.labeled_predictions === 0 ? (
                   <Notice tone="info">
                     No prediction in this course has an observed outcome yet, so no accuracy can be
@@ -491,17 +418,10 @@ export default function ModelEvaluation({
                 ) : null}
               </>
             )}
-          </section>
-
-          <section className="ws-panel" aria-labelledby="ml-offline-title">
-            <div className="ws-panel-head">
-              <div>
-                <p className="eyebrow-label">OFFLINE MODEL COMPARISON</p>
-                <h2 id="ml-offline-title">Approved training report</h2>
-              </div>
-            </div>
+          </Section>
+          <Section title="Approved training report">
             <OfflineComparison report={data.offline.report} />
-          </section>
+          </Section>
         </>
       ) : null}
     </>

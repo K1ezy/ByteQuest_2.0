@@ -127,6 +127,27 @@ export async function checkUsernameAvailability(username: string): Promise<boole
   return body.available;
 }
 
+/** True when no account holds this School ID yet; the signup trigger re-checks. */
+export async function checkSchoolIdAvailability(schoolId: string): Promise<boolean> {
+  if (!apiBaseUrl) throw new Error("Set NEXT_PUBLIC_API_URL in frontend/.env.local.");
+  let response: Response;
+  try {
+    // POST keeps the School ID out of URLs and server logs.
+    response = await fetch(`${apiBaseUrl}/profile/school-id-availability`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ school_id: schoolId }),
+    });
+  } catch {
+    throw new Error("ByteQuest could not check your School ID. Please try again.");
+  }
+  if (response.status === 429) throw new Error("Too many sign-up checks right now. Wait a minute, then try again.");
+  if (!response.ok) throw new Error("ByteQuest could not check your School ID. Please try again.");
+  const body = await response.json() as { available: boolean };
+  return body.available;
+}
+
 export function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }

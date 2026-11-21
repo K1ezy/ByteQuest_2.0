@@ -21,3 +21,10 @@ it.each([
     expect(screen.queryByRole("progressbar")).toBeNull();
   }
 });
+
+it("links recorded quest concepts and leaves the General fallback as text", () => {
+  render(<CodexEntry entry={{category:"logic_error",label:"Logic",tier:1,recoveries:2,next_tier_at:3,
+    topics:["Strings & files","General"],first_recovered_at:null}}/>);
+  expect(screen.getByRole("link",{name:"Practise Strings & files"}).getAttribute("href")).toBe("/quests?concept=Strings%20%26%20files");
+  expect(screen.queryByRole("link",{name:/General/})).toBeNull();
+});

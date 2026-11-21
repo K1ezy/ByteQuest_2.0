@@ -1,5 +1,6 @@
 "use client";
 
+import { workshopLanguages } from "@/components/workshops/workshop-ui";
 import { fromManilaDateTimeInput, formatManilaDateTime, toManilaDateTimeInput } from "@/lib/activity-date";
 
 import Link from "next/link";
@@ -9,6 +10,8 @@ import { ApiError, getErrorMessage } from "@/lib/api";
 import { safeReturnTo, useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
 import { StudentPreviewCard } from "@/components/workspace/student-preview";
 import { SaveConflict } from "@/components/instructor/save-conflict";
+import { InstructorHints } from "@/components/instructor-hints";
+import { PageHeader } from "@/components/instructor/course-ui";
 import {
   Button,
   ConfirmDialog,
@@ -16,7 +19,6 @@ import {
   FieldError,
   LoadingPanel,
   Notice,
-  PageHeading,
   StatusChip,
   useApi,
 } from "@/components/workspace/ui";
@@ -131,6 +133,7 @@ function ActivityEditor() {
   const [publishError, setPublishError] = useState("");
   const [previewSeen, setPreviewSeen] = useState(false);
   const focusGradingCases = useRef(false);
+  const loadedActivityId = useRef<string | null>(null);
 
   useEffect(() => {
     if (!data) return;
@@ -138,7 +141,9 @@ function ActivityEditor() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm(next);
     setBaseline(next);
-    setStep(0);
+    // Start at Details only for a newly opened activity; a save or verification keeps the current step.
+    if (loadedActivityId.current !== data.activity_id) setStep(0);
+    loadedActivityId.current = data.activity_id;
     setPreviewSeen(data.review_status === "published");
   }, [data]);
 
@@ -161,6 +166,8 @@ function ActivityEditor() {
   const locked = Boolean(data) && (data?.review_status === "published" || (data?.attempt_count || 0) > 0);
   const editable = Boolean(data) && data?.review_status === "draft";
 
+  // Students see an activity in their course when their track matches its language.
+  const audience = `Students in ${data?.course?.title ?? "this course"}${data?.language ? ` on the ${workshopLanguages[data.language]} track` : ""}`;
   const completion = useMemo(() => {
     if (!form) return [false, false, false, false];
     const details = form.title.trim().length >= 3 && form.topic.trim().length >= 2 && form.problem.trim().length >= 20;
@@ -168,7 +175,8 @@ function ActivityEditor() {
       data?.activity_type === "quiz"
         ? form.questions.length >= 3 && form.questions.every((question) => question.prompt.trim() && question.options.every((option) => option.text.trim()))
         : form.reference.trim().length > 0 && form.tests.length > 0;
-    const schedule = Boolean(form.opensAt || form.closesAt);
+    // The schedule is optional: empty opens on publish; it is incomplete only when it closes before it opens.
+    const schedule = !form.opensAt || !form.closesAt || form.opensAt < form.closesAt;
     return [details, content, schedule, previewSeen];
   }, [data?.activity_type, form, previewSeen]);
 
@@ -345,7 +353,7 @@ function ActivityEditor() {
   if (error && !data) {
     return (
       <section className="ws-panel" role="alert">
-        <PageHeading eyebrow="ACTIVITY EDITOR" title="Activity unavailable" description={friendlyLoadError(error)} />
+        <PageHeader title="Activity unavailable" subtitle={friendlyLoadError(error)} />
         <div className="ws-inline-actions">
           <Button variant="primary" onClick={reload}>Retry</Button>
           <Link className="button button-outline" href={returnTo}>Back to activities</Link>
@@ -363,10 +371,9 @@ function ActivityEditor() {
 
   return (
     <>
-      <PageHeading
-        eyebrow="ACTIVITY EDITOR"
+      <PageHeader
         title={data.title || form.title || "Untitled activity"}
-        description={
+        subtitle={
           <>
             {data.course?.title} · {quiz ? "Quiz / review lesson" : "Coding challenge"} · version {data.version_number} ·{" "}
             {activityStateLabel[data.state] || data.state}
@@ -593,12 +600,14 @@ function ActivityEditor() {
                     </Button>
                   ) : null}
                   {!quiz ? (
-                    <Button variant="outline" onClick={() => void runVerification()} disabled={busy !== "" || dirty}>
+                    <Button variant="outline" onClick={() => void runVerification()} disabled={busy !== "" || dirty}
+                      data-tooltip="Runs the reference solution against the grading cases in this saved version.">
                       {busy === "verify" ? "Checking Judge0…" : data.judge0_verified ? "Re-verify with Judge0" : "Verify with Judge0"}
                     </Button>
                   ) : null}
                 </div>
               </div>
+              {!quiz && dirty ? <p className="ws-muted">Save your edits first. Judge0 checks the saved version, not unsaved changes.</p> : null}
               <FieldError>{errors.tests}</FieldError>
               {form.tests.length === 0 ? <p className="ws-muted">No grading cases yet. A coding challenge needs at least one case to publish.</p> : null}
               <div className="ws-test-list">
@@ -639,6 +648,7 @@ function ActivityEditor() {
               {!data.judge0_verified ? (
                 <p className="ws-muted">Publishing stays locked until the saved reference solution passes Judge0.</p>
               ) : null}
+              <InstructorHints activityId={activityId} editable={editable} />
             </>
           )
         ) : null}
@@ -661,7 +671,7 @@ function ActivityEditor() {
                 {busy === "schedule" ? "Saving schedule…" : "Save schedule"}
               </Button>
               <span className="ws-muted">
-                Students see {form.opensAt ? `an opening time of ${formatManilaDateTime(fromManilaDateTimeInput(form.opensAt))}` : "immediate access"}; existing attempts are unaffected by schedule changes.
+                {audience} see it {form.opensAt ? `from ${formatManilaDateTime(fromManilaDateTimeInput(form.opensAt))}` : data.state === "draft" ? "as soon as it is published" : "now"}{form.closesAt ? ` until ${formatManilaDateTime(fromManilaDateTimeInput(form.closesAt))}` : ""}; existing attempts are unaffected by schedule changes.
               </span>
             </div>
           </div>
@@ -760,7 +770,7 @@ function ActivityEditor() {
         onConfirm={() => void confirmPublish()}
       >
         <p>
-          <strong>{form.title}</strong> will become available to students in {data.course?.title}
+          <strong>{form.title}</strong> will become available to {audience.charAt(0).toLowerCase() + audience.slice(1)}
           {form.opensAt ? ` from ${formatManilaDateTime(fromManilaDateTimeInput(form.opensAt))}` : " immediately"}
           {form.closesAt ? ` until ${formatManilaDateTime(fromManilaDateTimeInput(form.closesAt))}` : ""}. Existing attempts are not
           changed.

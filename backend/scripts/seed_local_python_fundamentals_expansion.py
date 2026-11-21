@@ -11,11 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
 import uuid
 from pathlib import Path
 
-from fastapi import HTTPException
 from sqlalchemy.engine import make_url
 
 
@@ -40,12 +38,7 @@ from app.api.workshops import (  # noqa: E402
     AddWorkshopActivities,
     add_workshop_activities,
 )
-from app.api.rag_instructor import (  # noqa: E402
-    ActivityReviewUpdate,
-    publish_learning_activity,
-    reverify_instructor_draft,
-    update_activity_review,
-)
+from app.services.activity_publishing import apply_publish_rules  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.models.entities import (  # noqa: E402
     ActivityKind,
@@ -58,7 +51,7 @@ from app.models.entities import (  # noqa: E402
     TestCase,
     UserRole,
 )
-from app.services.challenge_verification import challenge_is_verified  # noqa: E402
+from app.services.challenge_verification import challenge_is_verified, verify_saved_challenge  # noqa: E402
 from app.services.gamification.quiz_content import parse_quiz_questions  # noqa: E402
 
 
@@ -376,14 +369,8 @@ def seed_quiz(db, spec, owner, group) -> None:
         )
 
     if activity.review_status == ReviewState.draft:
-        if activity.reviewed_by is None:
-            update_activity_review(
-                activity.id,
-                ActivityReviewUpdate(reviewed=True),
-                owner,
-                db,
-            )
-        asyncio.run(publish_learning_activity(activity.id, owner, db))
+        apply_publish_rules(db, activity, owner)
+        db.commit()
     elif activity.review_status != ReviewState.published:
         raise SystemExit(f"Quiz is not reviewable: {spec['title']}")
 
@@ -449,34 +436,15 @@ def seed_challenge(db, spec, owner, group) -> None:
     if activity.review_status == ReviewState.draft:
         if not challenge_is_verified(activity):
             print(f"Verifying reference solution with Judge0: {spec['title']}")
-            for attempt in range(2):
-                try:
-                    result = asyncio.run(
-                        reverify_instructor_draft(activity.id, owner, db)
-                    )
-                    break
-                except HTTPException as exc:
-                    if exc.status_code == 429 and attempt == 0:
-                        detail = exc.detail if isinstance(exc.detail, dict) else {}
-                        wait = int(detail.get("retry_after_seconds", 60))
-                        print(f"Judge0 verification rate limited; waiting {wait}s...")
-                        time.sleep(wait)
-                        continue
-                    detail = exc.detail if isinstance(exc.detail, dict) else exc.detail
-                    raise SystemExit(
-                        f"Judge0 verification failed for {spec['title']}: {detail}"
-                    ) from exc
-            if not result.get("judge0_verified"):
+            checked = asyncio.run(verify_saved_challenge(db, activity))
+            db.commit()
+            if checked is None or not checked.judge0_verified:
                 raise SystemExit(
                     f"Judge0 could not verify {spec['title']}; the draft was left unpublished."
                 )
-        update_activity_review(
-            activity.id,
-            ActivityReviewUpdate(reviewed=True),
-            owner,
-            db,
-        )
-        asyncio.run(publish_learning_activity(activity.id, owner, db))
+            activity = checked
+        apply_publish_rules(db, activity, owner)
+        db.commit()
     elif (
         activity.review_status != ReviewState.published
         or not activity.judge0_verified

@@ -12,8 +12,28 @@ type TooltipState = {
 };
 
 const TRIGGER = "[data-tooltip], button[aria-label], a[aria-label]";
+const INTERACTIVE = 'a[href], button, input, select, textarea, summary, label, [contenteditable], [role="button"], [role="link"], [role="tab"]';
 const contains = (element: HTMLElement | null, target: EventTarget | null) =>
   target instanceof Node && Boolean(element?.contains(target));
+
+/**
+ * Explicit data-tooltip text is the help. Without it, only an icon-only control shows its
+ * accessible name as a visual label; a control with visible text needs no automatic tip.
+ */
+export function tooltipFor(target: HTMLElement): { text: string; describes: boolean } | null {
+  const name = target.getAttribute("aria-label")?.trim() || "";
+  const explicit = target.dataset.tooltip?.trim() || "";
+  if (explicit) return { text: explicit, describes: explicit !== name };
+  if (!name || hasVisibleText(target)) return null;
+  return { text: name, describes: false };
+}
+
+function hasVisibleText(node: Node): boolean {
+  return Array.from(node.childNodes).some((child) => child.nodeType === Node.TEXT_NODE
+    ? Boolean(child.textContent?.trim())
+    : child instanceof HTMLElement && child.getAttribute("aria-hidden") !== "true"
+      && !child.classList.contains("sr-only") && hasVisibleText(child));
+}
 
 export function AppTooltips() {
   const id = useId();
@@ -24,6 +44,7 @@ export function AppTooltips() {
     let hovered: HTMLElement | null = null;
     let focused: HTMLElement | null = null;
     let longPressed: HTMLElement | null = null;
+    let tapped: HTMLElement | null = null;
     let touch: { target: HTMLElement; x: number; y: number } | null = null;
     let showTimer: number | undefined;
     let hideTimer: number | undefined;
@@ -52,12 +73,16 @@ export function AppTooltips() {
     }
 
     function show(target: HTMLElement) {
-      const text = target.dataset.tooltip?.trim() || target.getAttribute("aria-label")?.trim();
-      if (!text || !target.isConnected) return;
+      const help = tooltipFor(target);
+      if (!help || !target.isConnected) return;
+      const { text } = help;
       if (active !== target) {
         unlink();
-        const describedBy = target.getAttribute("aria-describedby")?.trim();
-        target.setAttribute("aria-describedby", describedBy ? `${describedBy} ${id}` : id);
+        // A tip that repeats the accessible name stays visual, so it is not announced twice.
+        if (help.describes) {
+          const describedBy = target.getAttribute("aria-describedby")?.trim();
+          target.setAttribute("aria-describedby", describedBy ? `${describedBy} ${id}` : id);
+        }
         active = target;
       }
       const rect = target.getBoundingClientRect();
@@ -114,11 +139,21 @@ export function AppTooltips() {
     }
 
     function onPointerDown(event: PointerEvent) {
+      const target = findTarget(event.target);
+      const wasOpen = Boolean(target && active === target);
       hide();
       longPressed = null;
+      tapped = null;
       touch = null;
-      const target = findTarget(event.target);
       if (event.pointerType !== "touch" || !target) return;
+      // Touch: a tap opens help on plain text such as a chip. Long press peeks a button's
+      // label. Links, fields and editors keep their native long-press menu and selection.
+      const control = target.closest(INTERACTIVE);
+      if (!control) {
+        if (!wasOpen) tapped = target;
+        return;
+      }
+      if (!control.matches("button")) return;
       touch = { target, x: event.clientX, y: event.clientY };
       showTimer = window.setTimeout(() => {
         longPressed = target;
@@ -144,6 +179,8 @@ export function AppTooltips() {
         return;
       }
       hide();
+      if (tapped && contains(tapped, event.target)) show(tapped);
+      tapped = null;
     }
 
     function onContextMenu(event: MouseEvent) {

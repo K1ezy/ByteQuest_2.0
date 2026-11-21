@@ -245,6 +245,60 @@ else {
     }
 }
 
+Write-Host "`nBackend reuse and native listener discovery"
+& {
+    function netstat.exe {
+        $global:LASTEXITCODE = 0
+        '  TCP    127.0.0.1:8000    0.0.0.0:0   LISTENING    3301'
+        '  TCP    [::]:8000         [::]:0      LISTENING    3301'
+        '  TCP    [::1]:8001        [::]:0      LISTENING    3302'
+        '  TCP    10.210.245.210:8000 0.0.0.0:0 LISTENING    3400'
+        '  TCP    127.0.0.1:8002    127.0.0.1:9000 ESTABLISHED 3500'
+    }
+    function Get-NetTCPConnection { throw 'Native listing should be sufficient.' }
+    Assert-That 'both TCP families are included and relay-only and established sockets are ignored' {
+        $listeners = Get-ListenerPidMap
+        ((Get-PortListenerPids -ListenerPidMap $listeners -Port 8000) -join ',') -eq '3301' -and
+        ((Get-PortListenerPids -ListenerPidMap $listeners -Port 8001) -join ',') -eq '3302' -and
+        (Get-PortListenerPids -ListenerPidMap $listeners -Port 8002).Count -eq 0
+    }
+
+    function Get-ProcessDetailMap {
+        param($ProcessIds)
+        return @{
+            3301 = [pscustomobject]@{ Name = 'python.exe'; StartedUtcTicks = 100 }
+            3303 = [pscustomobject]@{ Name = 'pwsh.exe'; StartedUtcTicks = 200 }
+        }
+    }
+    function Get-CimInstance {
+        param($ClassName, $Filter)
+        if ($workerAlive -and $Filter -eq "ParentProcessId = 3303 AND Name = 'python.exe'") {
+            [pscustomobject]@{ ProcessId = 3310 }
+        }
+    }
+    $runtime = [pscustomobject]@{
+        ApiPort = 8000; ApiPid = 3301; ApiStartedUtcTicks = 100
+        SupervisorPid = 3303; SupervisorStartedUtcTicks = 200
+    }
+    $listenerMap = @{ 8000 = @(3301) }
+    $workerAlive = $true
+    Assert-That 'owned API and its live worker may be reused' {
+        Test-LocalBackendProcesses -State $runtime -ListenerPidMap $listenerMap
+    }
+    Assert-That 'a listener replacement at the same port is rejected' {
+        -not (Test-LocalBackendProcesses -State $runtime -ListenerPidMap @{ 8000 = @(3400) })
+    }
+    Assert-That 'an identical PID with a new launch time is rejected' {
+        $runtime.ApiStartedUtcTicks = 10
+        try { -not (Test-LocalBackendProcesses -State $runtime -ListenerPidMap $listenerMap) }
+        finally { $runtime.ApiStartedUtcTicks = 100 }
+    }
+    $workerAlive = $false
+    Assert-That 'a supervisor without a running worker is rejected' {
+        -not (Test-LocalBackendProcesses -State $runtime -ListenerPidMap $listenerMap)
+    }
+}
+
 Write-Host "`n[8] The frontend counts as ready only when its page scripts load"
 # Startup once opened every page stuck on "Loading...": an old `next start`
 # outlived a rebuild, so its HTML answered 200 but pointed at deleted chunks.

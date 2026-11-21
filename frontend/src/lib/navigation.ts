@@ -1,30 +1,62 @@
+import type { InstructorIconName } from "@/components/instructor/course-ui";
 import type { Profile } from "@/lib/types";
 
 export const roleLabels = { student: "Student", instructor: "Instructor", admin: "Administrator" };
 
 /**
+ * The instructor menu, grouped as the desktop sidebar shows it. Phones show the first
+ * tabs below plus a More sheet with every group, so each page has one name everywhere.
+ */
+export const instructorNavigation = [
+  { title: "Teach", links: [
+    ["Dashboard", "/instructor", "home"], ["Activities", "/instructor/activities", "code"],
+    ["Workshops", "/workshops", "users"], ["Review drafts", "/instructor/review", "check"],
+    ["Materials", "/instructor/materials", "file"],
+    ["Exams", "/instructor/exams", "clipboard"], ["Announcements", "/instructor/announcements", "bell"],
+  ] },
+  { title: "Students", links: [
+    ["Progress", "/instructor/performance", "users"],
+    ["Gradebook", "/instructor/performance#instructor-gradebook", "table"],
+  ] },
+  { title: "Insights", links: [
+    ["Gamification", "/instructor/gamification", "trophy"], ["Model evaluation", "/instructor/ml", "chart"],
+  ] },
+] as const satisfies readonly { title: string; links: readonly (readonly [string, string, InstructorIconName])[] }[];
+
+// An in-page anchor never marks the page; the dashboard matches only itself, other sections their sub-pages too.
+export const isCurrentInstructorPage = (pathname: string, href: string) =>
+  !href.includes("#") && (pathname === href || (href !== "/instructor" && belongsTo(pathname, href)));
+
+const instructorLinks: readonly (readonly [string, string, InstructorIconName])[] = instructorNavigation.flatMap(({ links }): readonly (readonly [string, string, InstructorIconName])[] => links);
+const instructorLabel = (href: string) => instructorLinks.find(([, path]) => path === href)?.[0] ?? href;
+
+/**
  * Each entry is [path, full label, short label]. The full label names the page in the
  * desktop sidebar; the short label fits the phone tab bar, where five tabs share the width.
  */
-export const primaryNavigation = {
+export const primaryNavigation: Record<Profile["role"], readonly (readonly [string, string, string])[]> = {
   student: [
     ["/dashboard", "Dashboard", "Home"], ["/quests", "Quest Map", "Quests"], ["/exams", "Exams", "Exams"],
     ["/workshops", "Workshops", "Workshops"], ["/leaderboard", "Leaderboard", "Ranks"],
   ],
-  instructor: [
-    ["/instructor", "My Courses", "Courses"], ["/instructor/activities", "Quest & Workshop Builder", "Builder"],
-    ["/instructor/performance", "Student Progress & Submissions", "Progress"], ["/instructor/gamification", "Gamification Insights", "Insights"],
-    ["/instructor/exams", "Exams", "Exams"],
-  ],
+  // Four tabs leave room for More, which opens the full instructor menu.
+  instructor: ["/instructor", "/instructor/activities", "/instructor/performance", "/instructor/exams"]
+    .map((href) => [href, instructorLabel(href), instructorLabel(href)] as const),
   admin: [
     ["/admin", "System Overview", "Overview"], ["/admin/courses", "Course & Instructor Management", "Courses"],
     ["/admin/accounts", "User & Role Management", "Users"], ["/admin/activities", "Content & Track Repository", "Content"],
     ["/admin/teaching", "Instructor Workspace", "Teaching"],
   ],
-} as const;
+};
 
 const studentOnly = /^\/(dashboard|quests|leaderboard|exams|arena|quiz|submissions|reviews)(?:\/|$)/;
 export const belongsTo = (path: string, root: string) => path === root || path.startsWith(root + "/");
+
+export function withCourse(href: string, courseId: string | null) {
+  if (!courseId) return href;
+  const [path, hash] = href.split("#");
+  return path + (path.includes("?") ? "&" : "?") + "course=" + encodeURIComponent(courseId) + (hash ? "#" + hash : "");
+}
 
 export function usesInstructorCourseShell(path: string) {
   // Student Preview renders the learner's own chrome, so it keeps the plain shell.
@@ -77,6 +109,7 @@ export function questRedirect(params: URLSearchParams, role?: Profile["role"]): 
 }
 
 export function pageLabel(path: string): string {
+  if (belongsTo(path, "/workshops")) return "Workshops";
   if (belongsTo(path, "/reviews")) return "Recall Quest";
   for (const entries of Object.values(primaryNavigation)) {
     for (const [href, label] of entries) if (href === path) return label;
@@ -88,7 +121,7 @@ export function pageLabel(path: string): string {
   if (belongsTo(path, "/arena")) return "Coding Arena";
   if (belongsTo(path, "/quiz")) return "Concept Check";
   if (belongsTo(path, "/exams")) return "Exam";
-  const labels: Record<string, string> = { ml: "Machine Learning", review: "Review Queue", research: "Research Participation", chat: "Chat Assistant", preview: "Student Preview", studio: "Authoring Studio", onboarding: "Learning Track", assignments: "Course Assignments" };
+  const labels: Record<string, string> = { ml: "Model evaluation", review: "Review drafts", research: "Research Participation", chat: "Chat Assistant", preview: "Student Preview", studio: "Authoring Studio", onboarding: "Learning Track", assignments: "Course Assignments" };
   if (belongsTo(path, "/submissions")) return "Submission Status";
   return labels[label] ?? (label.charAt(0).toUpperCase() + label.slice(1));
 }

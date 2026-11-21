@@ -6,7 +6,10 @@ param(
 
     # Re-run migrations and the seed even when nothing has changed.
     [Parameter()]
-    [switch]$ForceMigrate
+    [switch]$ForceMigrate,
+
+    [Parameter()]
+    [pscustomobject]$BackendRuntime
 )
 
 $ErrorActionPreference = "Stop"
@@ -588,15 +591,18 @@ $apiCandidates = @($apiCandidates | Select-Object -Unique)
 # so a candidate port with no listener is an empty result rather than the
 # @($null) that used to be used as a hashtable key.
 $apiPort = $null
+if ($BackendRuntime -and $BackendRuntime.ApiPort -in (8000..8010) -and
+    (Test-LocalBackendProcesses -State $BackendRuntime -ListenerPidMap $listenerPidMap)) {
+    $apiPort = [int]$BackendRuntime.ApiPort
+}
 foreach ($candidatePort in $apiCandidates) {
+    if ($null -ne $apiPort) { break }
     $mappedPort = Select-LocalApiPort -ListenerPidMap $listenerPidMap -CandidatePorts @($candidatePort)
     if ($null -eq $mappedPort) { continue }
-    if (Test-TcpPort -ComputerName '127.0.0.1' -Port $candidatePort -TimeoutMilliseconds 500) {
-        $servesByteQuest = (Test-HttpReady -Uri "http://127.0.0.1:$candidatePort/readyz" -TimeoutSeconds 2) -and
-            (@(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
-                Where-Object { $_.CommandLine -match "(?i)uvicorn\s+app\.main:app.*--port\s+$candidatePort(?:\s|$)" }).Count -gt 0)
-        if (-not $servesByteQuest) { continue }
-    }
+    # Select-LocalApiPort already inspected occupied ports. Probe only a port
+    # that looked free in case a listener appeared after the snapshot.
+    if ((Get-PortListenerPids -ListenerPidMap $listenerPidMap -Port $candidatePort).Count -eq 0 -and
+        (Test-TcpPort -ComputerName '127.0.0.1' -Port $candidatePort -TimeoutMilliseconds 300)) { continue }
     $apiPort = $candidatePort
     break
 }

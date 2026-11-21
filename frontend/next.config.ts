@@ -6,6 +6,11 @@ const nextConfig: NextConfig = {
   // The local dev UI is opened at 127.0.0.1:3000 while Next starts on
   // localhost, so its HMR/dev assets must be explicitly allowed.
   allowedDevOrigins: ["127.0.0.1", "localhost"],
+  logging: {
+    incomingRequests: {
+      ignore: [/\/workshops\/join\//i, /\/onboarding\?.*%2fworkshops%2fjoin%2f/i],
+    },
+  },
   async headers() {
     const headers = [
       { key: "X-Content-Type-Options", value: "nosniff" },
@@ -17,7 +22,10 @@ const nextConfig: NextConfig = {
     if (process.env.NODE_ENV === "production") {
       headers.push({ key: "Strict-Transport-Security", value: "max-age=31536000" });
     }
-    return [{ source: "/:path*", headers }];
+    return [
+      { source: "/:path*", headers },
+      { source: "/workshops/join/:code", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] },
+    ];
   },
   async redirects() {
     return [

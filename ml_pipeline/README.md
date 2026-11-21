@@ -30,15 +30,18 @@ names, account UUIDs, contact details, IP addresses, or source code.
 
 ## Export an attempt dataset
 
-When approved, export one joined attempt/activity row per attempt. Use the
-random research code (`bytequest_private.research_codes`, issued when a student
-accepts consent) as the group identifier, not `pseudonym_id`, which encodes the
-account id. Row identifiers are hashed with the code, so once the codes are
-destroyed at the end of the study (`backend/scripts/destroy_research_link.py`)
-the export cannot be joined back to accounts through ids. The training script rejects common
+When approved, export one joined attempt/activity row per attempt, and one row
+per hint reveal. Use the random research code
+(`bytequest_private.research_codes`, issued when a student accepts consent) as
+the group identifier, not `pseudonym_id`, which encodes the account id. Row
+identifiers are hashed with the code, so once the codes are destroyed at the
+end of the study (`backend/scripts/destroy_research_link.py`) the export cannot
+be joined back to accounts through ids. The training script rejects common
 identifying columns, email/UUID/numeric student identifiers, malformed rows,
 and non-chronological attempt sequences; these checks reduce accidental
-exposure but cannot prove that arbitrary identifiers are anonymous.
+exposure but cannot prove that arbitrary identifiers are anonymous. The hint
+export carries who, where and when only: never the hint text, its source or
+the request key.
 
 Both export queries below require the named SQL parameter
 `:current_consent_version`. Bind it to the currently active backend
@@ -65,15 +68,11 @@ SELECT
     aa.attempt_number,
     aa.created_at,
     la.language::text AS language,
-    la.topic_concept,
     la.activity_type::text AS activity_type,
-    la.difficulty_level,
     aa.is_successful,
     aa.score_percentage,
     aa.error_category,
-    aa.compiler_status_id,
-    aa.execution_time_ms,
-    aa.time_spent_seconds
+    aa.compiler_status_id
 FROM public.activity_attempts AS aa
 JOIN latest_consent AS consent ON consent.student_id = aa.student_id
     AND consent.choice = 'accepted'
@@ -84,53 +83,41 @@ WHERE aa.exam_attempt_id IS NULL AND la.course_id IS NOT NULL
 ORDER BY rc.code, aa.created_at, aa.attempt_number, aa.id;
 ```
 
-Export released overall exam results separately. An exam is associated with a
-course only when **all** its items belong to that course; mixed-course exams are
-excluded. Use the same research-code `student_id` values as the attempt export.
-Apply `20261111154648_usernames_ml_dashboard.sql` and
-`20261112000100_exam_attempt_release_time.sql` before exporting. The latter
-records a release time for each attempt; older retakes are backfilled with the
-latest known exam release time so historical features cannot become available
-too early.
+Export hint reveals with the same research codes and consent version:
 
 ```sql
 WITH latest_consent AS (
     SELECT DISTINCT ON (student_id) student_id, choice, document_version
     FROM public.research_consents
     ORDER BY student_id, event_order DESC
-), course_exams AS (
-    SELECT ei.exam_id, max(la.course_id::text)::uuid AS course_id
-    FROM public.exam_items AS ei
-    JOIN public.learning_activities AS la ON la.id = ei.activity_id
-    GROUP BY ei.exam_id
-    HAVING count(*) = count(la.course_id)
-       AND count(DISTINCT la.course_id) = 1
 )
-SELECT rc.code AS student_id,
-       ce.course_id::text AS course_id,
-       md5(rc.code || ':' || ea.id::text) AS exam_attempt_id,
-       ea.result_released_at AS released_at,
-       round((ea.score / ea.max_score * 100)::numeric, 2) AS score_percentage
-FROM public.exam_attempts AS ea
-JOIN public.exams AS e ON e.id = ea.exam_id
-JOIN course_exams AS ce ON ce.exam_id = e.id
-JOIN latest_consent AS consent ON consent.student_id = ea.student_id
+SELECT
+    md5(rc.code || ':' || hu.id::text) AS id,
+    rc.code AS student_id,
+    hu.activity_id::text AS activity_id,
+    la.course_id::text AS course_id,
+    la.language::text AS language,
+    hu.created_at
+FROM public.hint_uses AS hu
+JOIN latest_consent AS consent ON consent.student_id = hu.student_id
     AND consent.choice = 'accepted'
     AND consent.document_version = :current_consent_version
-JOIN bytequest_private.research_codes AS rc ON rc.student_id = ea.student_id
-WHERE ea.status = 'submitted'
-  AND ea.result_released_at IS NOT NULL
-  AND ea.submitted_at <= ea.result_released_at
-  AND ea.max_score > 0
-ORDER BY rc.code, ea.result_released_at, ea.id;
+JOIN bytequest_private.research_codes AS rc ON rc.student_id = hu.student_id
+JOIN public.learning_activities AS la ON la.id = hu.activity_id
+WHERE la.course_id IS NOT NULL
+ORDER BY rc.code, hu.created_at, hu.id;
 ```
 
-Save the approved, de-identified result as a CSV and train from the repository
-root only after approval:
+Released exam results are not model features. Student Progress still shows
+them to instructors.
+
+Save the approved, de-identified results as CSVs and train from the repository
+root only after approval. A hint CSV with headers and no rows is valid when no
+learner revealed a hint:
 
 ```powershell
 python -m pip install -r backend/requirements.txt
-python ml_pipeline/train_compare.py --data-csv .\ml_pipeline\data\attempts.csv --exams-csv .\ml_pipeline\data\exams.csv --research-approved
+python ml_pipeline/train_compare.py --data-csv .\ml_pipeline\data\attempts.csv --hints-csv .\ml_pipeline\data\hints.csv --research-approved
 ```
 
 The script includes cold-start rows and writes both pipelines, model metadata,
@@ -147,6 +134,14 @@ or replace earlier runs.
 Every run follows the protocol the thesis reports, and records it under
 `protocol` in `metrics_summary.json` so a reader never has to infer it:
 
+- **Prediction unit.** One row per learner and programming challenge at t0,
+  the learner's first graded submission on that challenge. The label is
+  whether that submission met the activity's pass mark. Retries never become
+  rows, and quizzes are history, never targets.
+- **Features.** The manuscript's ten features, in `FEATURE_NAMES` order, from
+  graded attempts and hint reveals in the same course and language strictly
+  before t0. Hints on the target challenge never count. A value that has no
+  history is left blank and filled by the training-partition median.
 - **Split.** Rows are partitioned 60/20/20 into train, validation and test by
   `student_id`, so no student's records span partitions. Students are dealt out
   from one seeded permutation stream (`--seed`, default 42), and candidate
@@ -173,7 +168,18 @@ Every run follows the protocol the thesis reports, and records it under
   the reported metrics.
 - **Saved artifacts.** The published pipelines are the ones fitted on the
   training partition, so the reported test metrics describe exactly the models
-  on disk rather than a later refit on all rows.
+  on disk rather than a later refit on all rows. Metadata `schema_version` is 3;
+  the backend refuses any other.
+- **Uncertainty.** `confidence_intervals` holds 95% percentile intervals for
+  every test metric from 1,000 seeded resamples of test learners. Resamples
+  with a single outcome class are skipped and counted.
+- **Adequacy.** `adequacy.met` is false unless the test partition holds at
+  least 6 learners and 15 rows of each outcome. Below that, results are
+  indicative only, and the CLI says so.
+- **Supplementary.** `supplementary.live_eligible` scores the same frozen
+  estimators on the test rows with at least `--min-history` (default 3)
+  distinct prior tasks, the rows a live forecast would cover. It informs no
+  decision.
 
 The backend loader checks for a separate explicit `active_model.json`, requires
 the selected version to be inside `artifacts/runs/`, validates approval and

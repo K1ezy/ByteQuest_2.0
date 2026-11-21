@@ -1,8 +1,11 @@
 "use client";
 
+import { MeterList } from "@/components/insights/ui";
 import Link from "next/link";
 import { useShellProfile } from "@/components/app-shell";
 import { FormEvent, useEffect, useState } from "react";
+import { ConfirmDialog } from "@/components/workspace/ui";
+import { formatManilaDateTime } from "@/lib/activity-date";
 import { apiRequest, getErrorMessage } from "@/lib/api";
 
 type ExamMode = "practice" | "restricted";
@@ -16,12 +19,26 @@ interface AttemptResult {
   attempt_number: number; status: string; score: number | null; max_score: number | null;
   results_released: boolean; xp_awarded: number | null;
 }
-interface ExamDetail { id: string; workshops: { id: string; name: string }[];
+interface ReleasedSummary {
+  assigned:number; submitted:number; average_percent:number;
+  score_bands:{label:string;count:number}[];
+  items:{id:string;label:string;attempted:number;passed:number}[];
+}
+interface ExamDetail { summary?:ReleasedSummary | null; id: string; workshops: { id: string; name: string }[];
   students: { id: string; alias: string; attempts: number; results?: AttemptResult[] }[] }
 
 function manilaIso(local: string): string { return new Date(`${local}:00+08:00`).toISOString(); }
 
-export default function InstructorExamsPage() {
+/** One readable step in the exam's life: draft, scheduled, open or closed, then where results stand. */
+export function examStage(exam: Exam, now = Date.now()): string {
+  const window = !exam.published ? "Draft" : now < Date.parse(exam.opens_at) ? "Scheduled"
+    : now < Date.parse(exam.closes_at) ? "Open" : "Closed";
+  const results = !exam.published ? "" : exam.results_released
+    ? (exam.has_unreleased_results ? " · New results held" : " · Results released") : " · Results held";
+  return window + results;
+}
+
+export default function InstructorExamsPage({ defaultWorkshopId }: { defaultWorkshopId?: string } = {}) {
   const { role } = useShellProfile();
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [exams, setExams] = useState<Exam[]>([]);
@@ -30,7 +47,7 @@ export default function InstructorExamsPage() {
   const [open, setOpen] = useState("");
   const [close, setClose] = useState("");
   const [duration, setDuration] = useState(45);
-  const [workshopIds, setWorkshopIds] = useState<string[]>([]);
+  const [workshopIds, setWorkshopIds] = useState<string[]>(defaultWorkshopId ? [defaultWorkshopId] : []);
   const [activityIds, setActivityIds] = useState<string[]>([]);
   const [points, setPoints] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
@@ -40,6 +57,7 @@ export default function InstructorExamsPage() {
   const [retakeOpen, setRetakeOpen] = useState("");
   const [retakeClose, setRetakeClose] = useState("");
   const [retakeDuration, setRetakeDuration] = useState(45);
+  const [releaseTarget, setReleaseTarget] = useState<Exam | null>(null);
   async function load() {
     const [source, existing] = await Promise.all([
       apiRequest<Catalog>("/exams/instructor/catalog"), apiRequest<Exam[]>("/exams/instructor")]);
@@ -56,7 +74,7 @@ export default function InstructorExamsPage() {
   const eligibleActivities = modeActivities.filter((activity) => activity.language === selectedLanguage);
   const eligibleActivityIds = new Set(eligibleActivities.map((activity) => activity.id));
   const selectedActivityIds = activityIds.filter((id) => eligibleActivityIds.has(id));
-  const activitiesHref = role === "admin" ? "/admin/teaching/studio" : "/instructor/activities";
+  const activitiesHref = role === "admin" ? "/admin/activities" : "/instructor/activities";
   function toggle(id: string, selected: string[], setter: (value: string[]) => void) {
     setter(selected.includes(id) ? selected.filter((item) => item !== id) : [...selected, id]);
   }
@@ -126,13 +144,27 @@ export default function InstructorExamsPage() {
     } catch (cause) { setError(getErrorMessage(cause)); }
     finally { setBusy(false); }
   }
-  return <div className="page-shell pilot-dashboard"><p className="eyebrow-label">Instructor studio</p>
-    <h1>Exams</h1><p className="pilot-lead">Assign workshops and schedule in Asia/Manila. Publishing freezes the exam content.</p>
-    <Link href={role === "admin" ? "/admin/teaching" : "/instructor"}>Back to workspace</Link>
+  const examList = <section className="pilot-card" aria-labelledby="exam-list-title"><div className="row"><h2 id="exam-list-title">Your exams</h2>
+      <button className="button button-outline" disabled={busy} onClick={() => void refreshExams()}>Refresh exams</button>
+    </div>
+      {exams.map((exam) => <div className="row" key={exam.id}><div><strong>{exam.title}</strong>
+        <p>{examStage(exam)}</p>
+        <p className="ws-row-meta">Opens {formatManilaDateTime(exam.opens_at)} · Closes {formatManilaDateTime(exam.closes_at)} (Asia/Manila)</p></div>
+        <div className="pilot-actions">{!exam.published && <button className="button button-outline" disabled={busy} onClick={() => void act(exam.id,"publish")}>Publish</button>}
+          {exam.published && (!exam.results_released || exam.has_unreleased_results) && <button className="button button-outline" disabled={busy} onClick={() => setReleaseTarget(exam)}>Release results</button>}
+          <button className="button button-outline" disabled={busy} onClick={() => void manage(exam.id)}>Results and retakes</button>
+        </div></div>)}
+      {exams.length === 0 && <p>No exams created yet.</p>}
+    </section>;
+
+  return <div className="page-shell pilot-dashboard instructor-exams"><p className="eyebrow-label">Timed assessments · Asia/Manila</p>
+    <h1>Exams</h1><p className="pilot-lead">Create an exam for your workshops, then publish, grade and release results here. Publishing freezes the exam content.</p>
     {error && <p className="notice error" role="alert">{error}</p>}
     {message && <p className="notice" role="status">{message}</p>}
+    {examList}
     {!catalog && !error && <p role="status">Loading instructor catalog…</p>}
-    {catalog && <form onSubmit={(event) => void create(event)} className="pilot-card">
+    {catalog && <form onSubmit={(event) => void create(event)} className="pilot-card" aria-labelledby="exam-new-title">
+      <h2 id="exam-new-title">New exam</h2>
       <div className="field"><label htmlFor="exam-title">Exam title</label><input id="exam-title" required minLength={3} maxLength={255}
         value={title} onChange={(event) => setTitle(event.target.value)} /></div>
       <div className="field"><label htmlFor="exam-mode">Exam type</label>
@@ -175,24 +207,19 @@ export default function InstructorExamsPage() {
       <button className="button button-primary" type="submit" disabled={busy || eligibleWorkshops.length === 0 || selectedActivityIds.length === 0}>
         {busy ? "Working…" : "Create and publish exam"}</button>
     </form>}
-    <section className="pilot-card"><div className="row"><h2>Your exams</h2>
-      <button className="button button-outline" disabled={busy} onClick={() => void refreshExams()}>Refresh exams</button>
-    </div>
-      {exams.map((exam) => <div className="row" key={exam.id}><div><strong>{exam.title}</strong><p>{exam.published ? "Published" : "Draft"} · {exam.results_released ? (exam.has_unreleased_results ? "New results held" : "Results released") : "Results held"}</p></div>
-        <div className="pilot-actions">{!exam.published && <button className="button button-outline" disabled={busy} onClick={() => void act(exam.id,"publish")}>Publish</button>}
-          {exam.published && (!exam.results_released || exam.has_unreleased_results) && <button className="button button-outline" disabled={busy} onClick={() => void act(exam.id,"release")}>Release results</button>}
-          <button className="button button-outline" disabled={busy} onClick={() => void manage(exam.id)}>Results and retakes</button>
-        </div></div>)}
-      {exams.length === 0 && <p>No exams created yet.</p>}
-    </section>
     {detail && <section className="pilot-card"><h2>Results and retakes</h2>
       <p>Review each attempt and grant individual retakes using Asia/Manila time.</p>
-      <div className="pilot-dashboard-grid"><label>Opens <input type="datetime-local" value={retakeOpen}
+      <div className="pilot-dashboard-grid"><label>Retake opens · Manila time <input type="datetime-local" value={retakeOpen}
         onChange={(event) => setRetakeOpen(event.target.value)} /></label>
-        <label>Closes <input type="datetime-local" value={retakeClose}
+        <label>Retake closes · Manila time <input type="datetime-local" value={retakeClose}
           onChange={(event) => setRetakeClose(event.target.value)} /></label></div>
       <label>Minutes per student <input type="number" min={1} max={240} value={retakeDuration}
         onChange={(event) => setRetakeDuration(Number(event.target.value))} /></label>
+      {detail.summary && <section><h3>Released class results</h3>
+        <p>{detail.summary.submitted} of {detail.summary.assigned} assigned learners submitted · Average {detail.summary.average_percent}%</p>
+        <MeterList label="Released score distribution" rows={detail.summary.score_bands.map(b => ({ name:b.label, value:b.count, total:detail.summary!.submitted, figure:String(b.count) }))}/>
+        <MeterList label="Exam item pass counts" rows={detail.summary.items.map(i => ({ id:i.id,name:i.label,value:i.passed,total:i.attempted,figure:i.passed + " of " + i.attempted + " passed" }))}/>
+      </section>}
       {detail.students.map((student) => <div className="row" key={student.id}>
         <div>
           <span>{student.alias} · {student.attempts} {student.attempts === 1 ? "attempt" : "attempts"}</span>
@@ -218,5 +245,11 @@ export default function InstructorExamsPage() {
       </div>)}
       {detail.students.length === 0 && <p>No students have joined the assigned workshops.</p>}
     </section>}
+    <ConfirmDialog open={releaseTarget !== null} title="Release results?" confirmLabel="Release results" busy={busy}
+      onConfirm={() => { const target = releaseTarget; setReleaseTarget(null); if (target) void act(target.id, "release"); }}
+      onCancel={() => setReleaseTarget(null)}>
+      <p>Students who submitted <strong>{releaseTarget?.title}</strong> will see their scores and the points for each task.
+        Results graded later stay held until you release them again.</p>
+    </ConfirmDialog>
   </div>;
 }

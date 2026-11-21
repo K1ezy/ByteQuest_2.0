@@ -1,12 +1,12 @@
 "use client";
 
+import { CourseHealth } from "@/components/admin/course-health";
 import Link from "next/link";
 import { useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
 import {
   Button,
   EmptyState,
   LoadingPanel,
-  Notice,
   PageHeading,
   StatCard,
   StatusChip,
@@ -45,21 +45,15 @@ function AdminDashboardPage() {
   if (!data) return null;
 
   const healthy = data.counts.service_status === "healthy";
+  // The one service summary on this page; per-service detail lives in Monitoring.
+  const attention = data.services.filter((service) => service.status !== "healthy" && service.status !== "off");
 
   return (
     <>
-      <div className="ws-inline-actions"><Link href="/admin/configuration">Configuration</Link><Link href="/admin/monitoring">Monitoring</Link></div>
       <PageHeading
         eyebrow="ADMINISTRATION"
         title="System Overview"
         description="A clear view of accounts, processing jobs, activity availability and platform health."
-        status={
-          <StatusChip
-            state={data.overall}
-            label={`Services: ${serviceStateLabel[data.overall] || data.overall}`}
-            tone={data.overall === "healthy" ? "good" : data.overall === "failed" ? "bad" : "wait"}
-          />
-        }
         actions={<Button variant="outline" onClick={reload}>Refresh</Button>}
       />
 
@@ -91,12 +85,15 @@ function AdminDashboardPage() {
         <StatCard
           label="Service health"
           value={healthy ? "Healthy" : serviceStateLabel[data.overall] || data.overall}
-          hint={`${data.counts.healthy_services} of ${data.counts.total_services} services healthy →`}
+          hint={attention.length
+            ? `${attention.map((service) => `${service.label}: ${serviceStateLabel[service.status] || service.status}`).join(" · ")} · Open monitoring →`
+            : `${data.counts.healthy_services} of ${data.counts.total_services} services healthy →`}
           icon="◈"
           tone={healthy ? "good" : data.overall === "failed" ? "bad" : "wait"}
           href="/admin/monitoring"
         />
       </div>
+      <CourseHealth/>
 
       <div className="ws-columns">
         <section className="ws-panel" aria-labelledby="admin-queue-title">
@@ -139,32 +136,6 @@ function AdminDashboardPage() {
         </section>
 
         <div className="ws-stack">
-          <section className="ws-panel" aria-labelledby="health-title">
-            <div className="ws-panel-head">
-              <div>
-                <p className="eyebrow-label">PLATFORM</p>
-                <h2 id="health-title">Service health</h2>
-              </div>
-              <Link className="ws-text-link" href="/admin/monitoring">Open monitoring →</Link>
-            </div>
-            <ul className="ws-health-list">
-              {data.services.map((service) => (
-                <li key={service.service}>
-                  <div>
-                    <strong>{service.label}</strong>
-                    <span className="ws-row-meta">{service.detail}</span>
-                    <span className="ws-row-meta">Checked {formatDateTime(service.last_checked_at)}</span>
-                  </div>
-                  <StatusChip
-                    state={service.status}
-                    label={serviceStateLabel[service.status]}
-                    tone={service.status === "healthy" ? "good" : service.status === "failed" ? "bad" : service.status === "off" ? "muted" : "wait"}
-                  />
-                </li>
-              ))}
-            </ul>
-          </section>
-
           <section className="ws-panel" aria-labelledby="admin-recent-title">
             <div className="ws-panel-head">
               <div>
@@ -207,16 +178,6 @@ function AdminDashboardPage() {
         </div>
       </div>
 
-      {data.counts.failed_jobs > 0 ? (
-        <Notice tone="error">
-          {data.counts.failed_jobs} processing job{data.counts.failed_jobs === 1 ? " has" : "s have"} failed.{" "}
-          <Link href="/admin/monitoring?status=failed">Inspect the cause and retry eligible jobs →</Link>
-        </Notice>
-      ) : (
-        <Notice tone="success">
-          All processing jobs are healthy. <Link href="/admin/monitoring">View monitoring →</Link>
-        </Notice>
-      )}
     </>
   );
 }

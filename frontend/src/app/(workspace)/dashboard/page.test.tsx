@@ -28,7 +28,7 @@ it("shows track progress, XP to the next level, and collapses long attempt histo
     completed: 5, total: 9, xp: 340, level: 2, pending_job_id: null, due_exam: null, notices: [],
   } : {
     total_attempts: 7, attempts: Array.from({ length: 7 }, (_, index) => attempt(index + 1)),
-    badges: [{ code: "first", name: "First Steps", description: "Finish a quest." }],
+    badges: [{ code: "first", name: "First Steps", description: "Finish a quest." }, {code:"old",name:"Earlier award",description:"old"}],
   }));
 
   render(<Page />);
@@ -36,6 +36,10 @@ it("shows track progress, XP to the next level, and collapses long attempt histo
   expect(await screen.findByText("4 activities left to finish the PYTHON track.")).toBeTruthy();
   expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/^Good (morning|afternoon|evening), Kieser!$/);
   expect(screen.getByRole("progressbar", { name: "Quest completion" }).getAttribute("aria-valuenow")).toBe("56");
+  expect(screen.getByRole("heading",{name:"Badges · 2"})).toBeTruthy();
+  expect(screen.getByText("First Steps")).toBeTruthy();
+  expect(screen.queryByText("Earlier award")).toBeNull();
+  expect(screen.getByRole("link",{name:"See all badges"}).getAttribute("href")).toBe("/profile?tab=activity#badges");
   expect(screen.getByText("160 XP to Level 3")).toBeTruthy();
   expect(screen.getByRole("link", { name: /Continue quest/ }).getAttribute("href")).toBe("/arena/next");
 

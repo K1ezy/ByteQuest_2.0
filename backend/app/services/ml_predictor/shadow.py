@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from datetime import datetime
 
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -42,14 +42,13 @@ def _rollback_quietly(db: Session) -> None:
 
 
 def prior_graded_task_count(db: Session, student: Profile, target: LearningActivity, source: ActivityAttempt | datetime) -> int:
-    """Count distinct eligible activities before the next-task prediction."""
+    """Count distinct graded tasks in the target's course and language before the prediction."""
     return (
         db.query(ActivityAttempt.activity_id)
         .join(LearningActivity, ActivityAttempt.activity_id == LearningActivity.id)
         .filter(
             ActivityAttempt.student_id == student.id,
             LearningActivity.language == target.language,
-            func.lower(func.trim(LearningActivity.topic_concept)) == str(target.topic_concept).strip().casefold(),
             ActivityAttempt.created_at <= (source.created_at if isinstance(source, ActivityAttempt) else source),
             ActivityAttempt.exam_attempt_id.is_(None),
             LearningActivity.course_id == target.course_id,
@@ -140,6 +139,15 @@ def record_shadow_prediction(
         ):
             return False
 
+        # Models predict a learner's first submission on a challenge, so a
+        # challenge already submitted is never scored again as a retry.
+        if db.query(ActivityAttempt.id).filter(
+            ActivityAttempt.student_id == student.id,
+            ActivityAttempt.activity_id == target_activity.id,
+            ActivityAttempt.exam_attempt_id.is_(None),
+        ).first() is not None:
+            return False
+
         # The source attempt has already committed and is prior to the target.
         # Count distinct graded activities, rather than retries of one activity.
         source_time = source_attempt or as_of
@@ -176,7 +184,10 @@ def record_shadow_prediction(
             source_attempt_id=source_attempt.id if source_attempt else None,
             source_exam_attempt_id=source_exam_attempt.id if source_exam_attempt else None,
             target_activity_id=target_activity.id,
-            features_snapshot_json=prediction.features,
+            # JSONB has no NaN; a blank (no-history) feature is stored as null.
+            features_snapshot_json={
+                name: None if math.isnan(value) else value for name, value in prediction.features.items()
+            },
             logreg_prob=prediction.logreg_probability,
             logreg_pred=prediction.logreg_prediction,
             rf_prob=prediction.rf_probability,

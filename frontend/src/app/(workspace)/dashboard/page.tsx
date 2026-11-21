@@ -122,6 +122,10 @@ function DashboardContent({ profile }: { profile: Profile }) {
     : remaining === 0 ? `You've completed every published activity on the ${track} track.`
     : `${remaining} ${remaining === 1 ? "activity" : "activities"} left to finish the ${track} track.`;
 
+  const announcementList = <StudentAnnouncements items={announcements?.items ?? []} now={now} onEmpty={() => heading.current?.focus()} />;
+
+  // Phone order follows priority: an open exam, grading in progress, the next activity,
+  // then class news, review and history. Rewards stay in the side column.
   return (
     <div className="page-shell pilot-dashboard dashboard-hub">
       {error && data && <p className="notice" role="status">The local ByteQuest service is unavailable. Showing your last loaded progress.</p>}
@@ -139,8 +143,7 @@ function DashboardContent({ profile }: { profile: Profile }) {
         </button>}
       </header>
 
-      <StudentAnnouncements items={announcements?.items ?? []} now={now} onEmpty={() => heading.current?.focus()} />
-
+      {!data && announcementList}
       {loading && <div className="pilot-dashboard-grid dashboard-skeleton" role="status" aria-label="Loading your dashboard">
         <div className="dashboard-main-column">
           <div className="ws-skeleton dashboard-skeleton-hero" />
@@ -169,22 +172,18 @@ function DashboardContent({ profile }: { profile: Profile }) {
         </section>
       )}
 
-      {data && data.notices?.length > 0 && (
-        <section className="dashboard-notices dashboard-reveal" aria-labelledby="notices-title">
-          <h2 id="notices-title" className="dashboard-kicker">Notices</h2>
-          <ul>
-            {data.notices.map((notice) => <li key={notice.id}>
-              <strong>{notice.subject}</strong>
-              <p>{notice.body}</p>
-            </li>)}
-          </ul>
+      {data?.pending_job_id && (
+        <section className="pilot-card dashboard-pending dashboard-reveal" aria-labelledby="pending-title">
+          <p className="dashboard-kicker"><span className="dashboard-live-dot" aria-hidden="true" />Submission in progress</p>
+          <h2 id="pending-title">Grading in progress</h2>
+          <p>Check the result when grading finishes.</p>
+          <Link className="button button-outline small" href={`/submissions/${data.pending_job_id}`}>View submission status</Link>
         </section>
       )}
 
       {data && (
         <div className="pilot-dashboard-grid">
           <div className="dashboard-main-column">
-            {profile.role === "student" ? <MemoryCheck userId={profile.id} /> : null}
             <section className="pilot-card pilot-priority dashboard-next dashboard-reveal" style={vars({ "--reveal-step": 1 })} aria-labelledby="continue-title">
               <div className="dashboard-next-meta">
                 <p className="eyebrow-label">Recommended next</p>
@@ -201,14 +200,19 @@ function DashboardContent({ profile }: { profile: Profile }) {
               </div>
             </section>
 
-            {data.pending_job_id && (
-              <section className="pilot-card dashboard-pending dashboard-reveal" aria-labelledby="pending-title">
-                <p className="dashboard-kicker"><span className="dashboard-live-dot" aria-hidden="true" />Submission in progress</p>
-                <h2 id="pending-title">Grading in progress</h2>
-                <p>Check the result when grading finishes.</p>
-                <Link href={`/submissions/${data.pending_job_id}`}>View submission status</Link>
+            {announcementList}
+            {data.notices?.length > 0 && (
+              <section className="dashboard-notices dashboard-reveal" aria-labelledby="notices-title">
+                <h2 id="notices-title" className="dashboard-kicker">Notices</h2>
+                <ul>
+                  {data.notices.map((notice) => <li key={notice.id}>
+                    <strong>{notice.subject}</strong>
+                    <p>{notice.body}</p>
+                  </li>)}
+                </ul>
               </section>
             )}
+            {profile.role === "student" ? <MemoryCheck userId={profile.id} /> : null}
 
             <section className="pilot-card dashboard-history dashboard-reveal" style={vars({ "--reveal-step": 2 })} aria-labelledby="history-title">
               <div className="dashboard-section-heading">
@@ -281,12 +285,8 @@ function DashboardContent({ profile }: { profile: Profile }) {
 
               <h3 className="dashboard-subheading">{progress ? `Badges · ${progress.badges.length}` : "Badges"}</h3>
               {!progress ? <p className="dashboard-muted">Badge details unavailable.</p>
-                : progress.badges.length ? <ul className="dashboard-badge-list">
-                  {progress.badges.map((badge) => <li key={badge.code || badge.name}>
-                    <span className="dashboard-badge-icon" aria-hidden="true">✦</span>
-                    <span><strong>{badge.name}</strong>{badge.description && <small>{badge.description}</small>}</span>
-                  </li>)}
-                </ul> : <p className="dashboard-muted">Complete quests to earn badges.</p>}
+                : progress.badges.length ? <p>Latest badge · <strong>{progress.badges[0].name}</strong></p> : <p className="dashboard-muted">Complete quests to earn badges.</p>}
+              <Link className="dashboard-text-link" href="/profile?tab=activity#badges">See all badges</Link>
               <Link className="dashboard-text-link" href="/leaderboard">View leaderboard <span aria-hidden="true">→</span></Link>
             </section>
           </aside>

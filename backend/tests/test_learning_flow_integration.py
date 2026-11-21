@@ -34,6 +34,8 @@ from app.api import chat as chat_api
 from app.api import chat_history as chat_history_api
 from app.api import exams as exams_api
 from app.api import rag_instructor
+from app.services.activity_publishing import apply_publish_rules
+from app.services.challenge_verification import verify_saved_challenge
 from app.api import reviews as reviews_api
 from app.core import quotas
 from app.core.config import settings
@@ -52,7 +54,7 @@ from app.models.entities import (
     UserRole,
     Exam, ExamAttempt, ExamRetakeGrant, SubmissionJob, ResearchConsent,
     Badge, ChallengeHint, ConceptReview, HintUse, PlatformSetting, StudentBadge,
-    DocumentChunk, InstructionalDocument,
+    DocumentChunk, InstructionalDocument, Workshop, WorkshopAnnouncement,
 )
 from app.services.ai_rag import llm, retrieval
 from app.services.ai_rag.gemini_client import GeminiConfigurationError
@@ -421,39 +423,38 @@ def test_grading_worker_official_path_does_not_require_the_api_app(flow):
     assert body["result"]["evaluation"]["is_successful"] is True
 
 
+def _review_and_publish(new_session, activity_id: uuid.UUID, instructor_id: uuid.UUID) -> None:
+    """Verify (challenges) and publish through the shared rules every publish path uses."""
+    with new_session() as db:
+        activity = db.get(LearningActivity, activity_id)
+        if activity.activity_type == ActivityKind.challenge:
+            activity = anyio.run(verify_saved_challenge, db, activity)
+            assert activity is not None and activity.judge0_verified
+        apply_publish_rules(db, activity, db.get(Profile, instructor_id))
+        db.commit()
+
+
 def test_instructor_gate_and_student_submission_contract(flow):
     client, new_session, users = flow
     with new_session() as db:
         activity_id = _challenge(db, users["instructor"])
-    path = f"/api/v1/instructor/activities/{activity_id}"
     instructor = _token(users["instructor"])
     student = _token(users["student"])
     other_track = _token(users["other_track"])
 
-    invalid_form = client.post("/api/v1/instructor/documents/upload", headers=instructor,
-        data={"title": "Class notes", "language_tag": "python", "unexpected": "value"},
-        files={"file": ("notes.pdf", b"%PDF-test", "application/pdf")})
-    assert invalid_form.status_code == 422
-
-    assert client.patch(f"{path}/publish", headers=instructor).status_code == 409
-    assert client.patch(f"{path}/review", json={"reviewed": True}, headers=instructor).status_code == 409
-    assert client.post(f"{path}/verify", headers=student).status_code == 403
-
-    failed_verification = client.post(f"{path}/verify", headers=instructor)
-    assert failed_verification.status_code == 200, failed_verification.text
-    assert failed_verification.json()["judge0_verified"] is False
-    assert client.patch(f"{path}/review", json={"reviewed": True}, headers=instructor).status_code == 409
-
+    with new_session() as db:
+        activity = db.get(LearningActivity, activity_id)
+        with pytest.raises(HTTPException) as unverified:
+            apply_publish_rules(db, activity, db.get(Profile, users["instructor"]))
+        assert unverified.value.detail["code"] == "not_verified"
+        db.rollback()
+        failed = anyio.run(verify_saved_challenge, db, db.get(LearningActivity, activity_id))
+        assert failed is not None and failed.judge0_verified is False
+        db.commit()
     with new_session() as db:
         db.get(LearningActivity, activity_id).reference_solution_code = "PRINT_INPUT"
         db.commit()
-    verified = client.post(f"{path}/verify", headers=instructor)
-    assert verified.status_code == 200, verified.text
-    assert verified.json()["judge0_verified"] is True
-    assert client.patch(f"{path}/review", json={"reviewed": True}, headers=instructor).status_code == 200
-    published = client.patch(f"{path}/publish", headers=instructor)
-    assert published.status_code == 200, published.text
-    assert published.json()["review_status"] == "published"
+    _review_and_publish(new_session, activity_id, users["instructor"])
 
     with new_session() as db:
         record = db.get(LearningActivity, activity_id)
@@ -568,16 +569,13 @@ def test_quest_join_quiz_and_progress_survive_new_client(flow):
     client, new_session, users = flow
     with new_session() as db:
         activity_id = _quiz(db, users["instructor"])
-    path = f"/api/v1/instructor/activities/{activity_id}"
     instructor = _token(users["instructor"])
     student = _token(users["student"])
     other_track = _token(users["other_track"])
     initial_dashboard = client.get("/api/v1/pilot/dashboard", headers=student)
     assert initial_dashboard.status_code == 200
 
-    assert client.patch(f"{path}/publish", headers=instructor).status_code == 409
-    assert client.patch(f"{path}/review", json={"reviewed": True}, headers=instructor).status_code == 200
-    assert client.patch(f"{path}/publish", headers=instructor).status_code == 200
+    _review_and_publish(new_session, activity_id, users["instructor"])
 
     created = client.post("/api/v1/workshops", headers=instructor, json={
         "name": "Regression group", "language": "python", "activity_ids": [str(activity_id)],
@@ -642,14 +640,8 @@ def test_python_quiz_and_challenge_update_dashboard_together(flow):
         quiz_id = _quiz(db, users["instructor"])
         challenge_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
 
-    quiz_path = f"/api/v1/instructor/activities/{quiz_id}"
-    challenge_path = f"/api/v1/instructor/activities/{challenge_id}"
-    assert client.patch(f"{quiz_path}/review", json={"reviewed": True}, headers=instructor).status_code == 200
-    assert client.patch(f"{quiz_path}/publish", headers=instructor).status_code == 200
-    verified = client.post(f"{challenge_path}/verify", headers=instructor)
-    assert verified.status_code == 200 and verified.json()["judge0_verified"] is True
-    assert client.patch(f"{challenge_path}/review", json={"reviewed": True}, headers=instructor).status_code == 200
-    assert client.patch(f"{challenge_path}/publish", headers=instructor).status_code == 200
+    _review_and_publish(new_session, quiz_id, users["instructor"])
+    _review_and_publish(new_session, challenge_id, users["instructor"])
 
     group = client.post("/api/v1/workshops", headers=instructor, json={
         "name": "Python journey", "language": "python",
@@ -899,9 +891,9 @@ def test_exam_snapshot_autosave_and_result_embargo(flow, monkeypatch):
     group = group_response.json()
     other_instructor = _token(users["other_instructor"])
     admin = _token(users["admin"])
-    assert client.get(f"/api/v1/pilot/instructor/workshops/{group['id']}/students",
+    assert client.get(f"/api/v1/workshops/{group['id']}/progress",
         headers=other_instructor).status_code == 404
-    assert client.get(f"/api/v1/pilot/instructor/workshops/{group['id']}/students",
+    assert client.get(f"/api/v1/workshops/{group['id']}/progress",
         headers=admin).status_code == 200
     assert client.post("/api/v1/workshops/join", headers=student,
         json={"code": group["join_code"]}).status_code == 200
@@ -1043,8 +1035,8 @@ def test_exam_snapshot_autosave_and_result_embargo(flow, monkeypatch):
     assert all(item["results_released"] for item in rereleased_profile["exam_history"])
 
 
-def test_studio_publish_retires_the_previous_version(flow):
-    """The Studio and the workspace publish through one rule set: a new version replaces the old one."""
+def test_publish_retires_the_previous_version(flow):
+    """Every publish path shares one rule set: a new version replaces the old one."""
     client, new_session, users = flow
     with new_session() as db:
         original_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
@@ -1052,38 +1044,13 @@ def test_studio_publish_retires_the_previous_version(flow):
         original.review_status = ReviewState.published
         original.judge0_verified = True
         version_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
-        version = db.get(LearningActivity, version_id)
-        version.version_of = original_id
-        version.reviewed_by = users["instructor"]
+        db.get(LearningActivity, version_id).version_of = original_id
         db.commit()
 
-    verified = client.post(f"/api/v1/instructor/activities/{version_id}/verify",
-                           headers=_token(users["instructor"]))
-    assert verified.status_code == 200, verified.text
-    assert verified.json()["judge0_verified"] is True
-    published = client.patch(f"/api/v1/instructor/activities/{version_id}/publish",
-                              headers=_token(users["instructor"]))
-
-    assert published.status_code == 200, published.text
+    _review_and_publish(new_session, version_id, users["instructor"])
     with new_session() as db:
         assert db.get(LearningActivity, version_id).review_status == ReviewState.published
         assert db.get(LearningActivity, original_id).archived_at is not None, "students would see both versions"
-
-
-def test_studio_upload_obeys_the_admin_upload_limit(flow):
-    """Admins set one PDF size limit; the Studio upload path must not keep its own."""
-    client, new_session, users = flow
-    with new_session() as db:
-        db.execute(text("update public.platform_settings set value = '1'::jsonb where key = 'pdf_upload_max_mb'"))
-        db.commit()
-    oversized = b"%PDF-1.4" + bytes(10) + b"0" * (1024 * 1024 + 512 * 1024)
-
-    response = client.post("/api/v1/instructor/documents/upload", headers=_token(users["instructor"]),
-        data={"title": "Loops lesson", "language_tag": "python"},
-        files={"file": ("loops.pdf", oversized, "application/pdf")})
-
-    assert response.status_code == 413, response.text
-    assert response.json()["detail"]["code"] == "file_too_large"
 
 
 def test_class_snapshot_counts_mastery_and_a_true_average(flow):
@@ -3212,3 +3179,373 @@ def test_progress_recap_compares_manila_periods_and_usual_pace(flow, monkeypatch
     assert all(row["current"] == row["previous"] == 0 and row["usual"] is None for row in quiet["metrics"])
     assert client.get("/api/v1/quests/progress-recap?days=5", headers=student).status_code == 422
     assert client.get("/api/v1/quests/progress-recap", headers=_token(users["instructor"])).status_code == 403
+
+
+def test_workshop_details_membership_and_archive(flow):
+    client, new_session, users = flow
+    owner, student, staff, admin = (
+        _token(users[role]) for role in ("instructor", "student", "other_instructor", "admin")
+    )
+    base = "/api/v1/workshops"
+    created = client.post(base, headers=owner, json={"name": "Python practice", "language": "python"})
+    assert created.status_code == 201, created.text
+    workshop = created.json()
+    path = f"{base}/{workshop['id']}"
+    code = workshop["join_code"]
+    assert workshop["owned_by_me"] and workshop["is_owner"]
+    assert workshop["owner_name"] and workshop["joining_enabled"] and not workshop["archived"]
+    assert client.get(path).status_code == 401
+    for headers in (staff, student):
+        assert client.get(path, headers=headers).status_code == 404
+        assert client.get(f"{path}/people", headers=headers).status_code == 404
+        assert client.patch(path, headers=headers, json={"name": "Foreign edit"}).status_code == 404
+        assert client.post(f"{path}/code", headers=headers).status_code == 404
+        assert client.post(f"{path}/archive", headers=headers).status_code == 404
+        assert client.post(f"{path}/restore", headers=headers).status_code == 404
+        assert client.delete(f"{path}/members/{users['student']}", headers=headers).status_code == 404
+    assert client.get(path, headers=admin).json()["join_code"] == code
+    assert client.patch(path, headers=admin, json={"name": "Python lab", "joining_enabled": False}).json()["name"] == "Python lab"
+    join = client.post(f"{base}/join", headers=student, json={"code": code})
+    assert (join.status_code, join.json()["detail"]) == (409, "This workshop isn't accepting new members.")
+    assert client.patch(path, headers=owner, json={"joining_enabled": True, "description": "Lab notes"}).json()["description"] == "Lab notes"
+    assert client.patch(path, headers=owner, json={"language": "java"}).status_code == 422
+    assert client.patch(path, headers=owner, json={"name": None}).status_code == 422
+    assert client.post(f"{path}/archive", headers=owner, json={"extra": True}).status_code == 422
+    assert client.post(f"{path}/code", headers=owner, json={"extra": True}).status_code == 422
+
+    join = client.post(f"{base}/join", headers=student, json={"code": code[:4].lower() + "-" + code[4:].lower()})
+    assert join.status_code == 200
+    assert join.json()["join_code"] is None
+    assert client.get(path, headers=student).status_code == 200
+    assert client.patch(path, headers=student, json={"name": "Member edit"}).status_code == 404
+    with new_session() as db:
+        learner = db.get(Profile, users["student"])
+        learner.display_name = "Workshop learner"
+        learner.school_id = "26-98765"
+        learner.block_section = "A"
+        db.commit()
+    staff_student = client.get(f"{path}/people", headers=owner).json()["students"][0]
+    assert staff_student["id"] == str(users["student"])
+    assert staff_student["school_id"] == "26-98765"
+    assert staff_student["display_name"] == "Workshop learner"
+    assert staff_student["block_section"] == "A"
+    assert client.get(f"{path}/people", headers=admin).json()["students"] == [staff_student]
+    assert client.get(f"{path}/people", headers=student).json()["students"] == [{"username": staff_student["username"]}]
+
+    assert client.post(f"{path}/archive", headers=owner).json()["archived"]
+    assert client.get(base, headers=student).json() == []
+    assert [row["id"] for row in client.get(f"{base}?archived=true", headers=student).json()] == [workshop["id"]]
+    assert client.get(path, headers=student).json()["archived"]
+    assert client.post(f"{base}/join", headers=student, json={"code": code}).json()["detail"] == "This workshop isn't accepting new members."
+    assert client.delete(f"{path}/membership", headers=student).status_code == 409
+    assert client.delete(f"{path}/members/{users['student']}", headers=owner).status_code == 409
+    assert client.post(f"{path}/code", headers=owner).status_code == 409
+    assert client.patch(path, headers=owner, json={"name": "Archived edit"}).status_code == 409
+    assert not client.post(f"{path}/restore", headers=admin).json()["archived"]
+    assert client.delete(f"{path}/members/{users['student']}", headers=owner).status_code == 204
+    assert client.get(path, headers=student).status_code == 404
+    assert client.post(f"{base}/join", headers=student, json={"code": code}).status_code == 200
+    assert client.delete(f"{path}/membership", headers=student).status_code == 204
+
+
+def test_workshop_classroom_details_are_optional_editable_and_visible_to_members(flow):
+    client, _, users = flow
+    owner, student = (_token(users[role]) for role in ("instructor", "student"))
+    base = "/api/v1/workshops"
+    details = {"block": "3CS-A", "year_level": 3, "subject": "Programming 101", "room": "501"}
+    created = client.post(base, headers=owner, json={"name": "Python workshop", "language": "python", **details})
+    assert created.status_code == 201, created.text
+    workshop = created.json()
+    assert {key: workshop[key] for key in details} == details
+    path = f"{base}/{workshop['id']}"
+
+    assert client.post(f"{base}/join", headers=student, json={"code": workshop["join_code"]}).status_code == 200
+    visible = client.get(path, headers=student).json()
+    assert {key: visible[key] for key in details} == details
+    assert client.patch(path, headers=student, json={"room": "502"}).status_code == 404
+    assert client.patch(path, headers=owner, json={"year_level": 5}).status_code == 422
+
+    updated = client.patch(path, headers=owner, json={"room": "  Lab 2  ", "block": "  ", "year_level": None})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["room"] == "Lab 2"
+    assert updated.json()["block"] is None
+    assert updated.json()["year_level"] is None
+    assert updated.json()["subject"] == "Programming 101"
+
+    bare = client.post(base, headers=owner, json={"name": "Open practice", "language": "python"})
+    assert bare.status_code == 201, bare.text
+    assert all(bare.json()[key] is None for key in details)
+
+
+def test_workshop_create_and_reset_retry_active_and_retired_codes(flow, monkeypatch):
+    from app.api import workshops
+
+    client, _, users = flow
+    owner, student = (_token(users[role]) for role in ("instructor", "student"))
+    base = "/api/v1/workshops"
+    original = client.post(base, headers=owner, json={"name": "First workshop", "language": "python"}).json()
+    codes = iter([original["join_code"], "ZZZZ7892"])
+    monkeypatch.setattr(workshops, "_new_code", lambda: next(codes))
+    second = client.post(base, headers=owner, json={"name": "Second workshop", "language": "python"})
+    assert second.status_code == 201, second.text
+    codes = iter([original["join_code"], second.json()["join_code"], "YYYY7892"])
+    reset = client.post(f"{base}/{original['id']}/code", headers=owner)
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["join_code"] == "YYYY7892"
+    assert client.post(f"{base}/join", headers=student, json={"code": original["join_code"]}).status_code == 404
+    assert client.post(f"{base}/join", headers=student, json={"code": "yyyy-7892"}).status_code == 200
+
+    codes = iter([original["join_code"], "TTTT7892"])
+    third = client.post(base, headers=owner, json={"name": "Third workshop", "language": "python"})
+    assert third.status_code == 201, third.text
+    assert third.json()["join_code"] == "TTTT7892"
+
+    codes = iter([original["join_code"], "RRRR7892"])
+    second_reset = client.post(f"{base}/{second.json()['id']}/code", headers=owner)
+    assert second_reset.status_code == 200, second_reset.text
+    assert second_reset.json()["join_code"] == "RRRR7892"
+    assert client.post(f"{base}/join", headers=student, json={"code": original["join_code"]}).status_code == 404
+
+
+def test_workshop_code_remains_reserved_after_workshop_deletion(flow, monkeypatch):
+    from app.api import workshops
+
+    client, new_session, users = flow
+    owner = _token(users["instructor"])
+    base = "/api/v1/workshops"
+    created = client.post(base, headers=owner, json={"name": "Temporary workshop", "language": "python"})
+    assert created.status_code == 201, created.text
+    original = created.json()
+    with new_session() as db:
+        db.delete(db.get(Workshop, uuid.UUID(original["id"])))
+        db.commit()
+
+    codes = iter([original["join_code"], "SSSS7892"])
+    monkeypatch.setattr(workshops, "_new_code", lambda: next(codes))
+    created = client.post(base, headers=owner, json={"name": "Replacement workshop", "language": "python"})
+    assert created.status_code == 201, created.text
+    assert created.json()["join_code"] == "SSSS7892"
+
+
+def test_workshop_activity_updates_are_ordered_and_observe_archive_and_scope(flow):
+    client, new_session, users = flow
+    owner, staff = (_token(users[role]) for role in ("instructor", "other_instructor"))
+    with new_session() as db:
+        ids = [_quiz(db, users["instructor"]) for _ in range(3)]
+        for activity_id in ids:
+            db.get(LearningActivity, activity_id).review_status = ReviewState.published
+        db.commit()
+    first, second, third = map(str, ids)
+    root = "/api/v1/workshops"
+    workshop = client.post(root, headers=owner, json={
+        "name": "Activity workshop", "language": "python", "activity_ids": [first, second],
+    }).json()
+    path = f"{root}/{workshop['id']}"
+    add_path = f"{path}/activities"
+    added = client.post(add_path, headers=owner, json={"activity_ids": [third, third], "topic": "Loops"})
+    assert added.json()["activity_ids"] == [first, second, third]
+    endpoint = f"{add_path}/{third}"
+    assert client.patch(endpoint, headers=staff, json={"position": 0}).status_code == 404
+    assert client.delete(endpoint, headers=staff).status_code == 404
+    assert client.patch(endpoint, headers=owner, json={"position": -1}).status_code == 422
+    assert client.patch(endpoint, headers=owner, json={"due_at": None}).status_code == 422
+    reordered = client.patch(endpoint, headers=owner, json={"position": 0, "topic": "Functions"}).json()
+    assert reordered["activity_ids"] == [third, first, second]
+    assert reordered["activities"][0]["topic"] == "Functions"
+    assert reordered["activities"][0]["added_at"]
+    assert client.post(f"{path}/archive", headers=owner).status_code == 200
+    assert client.patch(endpoint, headers=owner, json={"topic": None}).status_code == 409
+    assert client.delete(endpoint, headers=owner).status_code == 409
+    assert client.post(add_path, headers=owner, json={"activity_ids": [third]}).status_code == 409
+    assert client.post(f"{path}/restore", headers=owner).status_code == 200
+    assert client.delete(endpoint, headers=owner).json()["activity_ids"] == [first, second]
+
+
+def test_workshop_exam_guard_only_blocks_the_assigned_workshop_and_active_attempt(flow):
+    from app.models.entities import ExamAssignment
+
+    client, new_session, users = flow
+    attempt_id, _ = _started_quiz_exam(client, new_session, users)
+    owner, student = (_token(users[role]) for role in ("instructor", "student"))
+    with new_session() as db:
+        attempt = db.get(ExamAttempt, uuid.UUID(attempt_id))
+        assignment = db.query(ExamAssignment).filter_by(exam_id=attempt.exam_id).one()
+        workshop_id = assignment.workshop_id
+    path = f"/api/v1/workshops/{workshop_id}"
+    assert client.delete(f"{path}/membership", headers=student).status_code == 409
+    assert client.delete(f"{path}/members/{users['student']}", headers=owner).status_code == 409
+    other = client.post("/api/v1/workshops", headers=owner, json={"name": "Separate", "language": "python"}).json()
+    assert client.post("/api/v1/workshops/join", headers=student, json={"code": other["join_code"]}).status_code == 200
+    assert client.delete(f"/api/v1/workshops/{other['id']}/membership", headers=student).status_code == 204
+    with new_session() as db:
+        attempt = db.get(ExamAttempt, uuid.UUID(attempt_id))
+        attempt.status = "grading"
+        attempt.submitted_at = datetime.now(timezone.utc)
+        db.commit()
+    assert client.delete(f"{path}/membership", headers=student).status_code == 204
+    with new_session() as db:
+        assert db.get(ExamAttempt, uuid.UUID(attempt_id)).submitted_at is not None
+
+
+def test_workshop_activity_catalog_and_details_use_workshop_scope(flow):
+    client, new_session, users = flow
+    owner, student, staff = (_token(users[role]) for role in ("instructor", "student", "other_instructor"))
+    with new_session() as db:
+        shared, available, draft = [_quiz(db, users["instructor"]) for _ in range(3)]
+        activity = db.get(LearningActivity, shared)
+        activity.review_status = ReviewState.published
+        activity.opens_at = datetime.now(timezone.utc) + timedelta(days=1)
+        db.get(LearningActivity, available).review_status = ReviewState.published
+        db.commit()
+    base = "/api/v1/workshops"
+    created = client.post(base, headers=owner, json={
+        "name": "Scheduled practice", "language": "python", "activity_ids": [str(shared)],
+    }).json()
+    path = f"{base}/{created['id']}/activities"
+    assert client.get(path, headers=student).status_code == 404
+    catalog = client.get(f"{path}/catalog", headers=owner).json()
+    option_ids = {row["id"] for row in catalog}
+    assert str(available) in option_ids
+    assert str(shared) not in option_ids and str(draft) not in option_ids
+    assert client.get(f"{path}/catalog", headers=staff).status_code == 404
+    assert client.post(f"{base}/join", headers=student, json={"code": created["join_code"]}).status_code == 200
+    assert client.get(f"{path}/catalog", headers=student).status_code == 404
+    data = client.get(path, headers=student).json()[0]
+    assert data["id"] == str(shared)
+    assert data["opens_at"] and not data["can_open"]
+    assert data["problem_statement"] is None and data["starter_code"] is None
+
+
+def test_workshop_announcements_permissions_validation_and_pinning(flow):
+    client, new_session, users = flow
+    owner, student, staff, admin = (_token(users[role]) for role in ("instructor", "student", "other_instructor", "admin"))
+    base = "/api/v1/workshops"
+    workshop = client.post(base, headers=owner, json={"name": "Python board", "language": "python"}).json()
+    path = f"{base}/{workshop['id']}"
+    board = f"{path}/announcements"
+    assert client.get(board, headers=staff).status_code == 404
+    assert client.post(f"{base}/join", headers=student, json={"code": workshop["join_code"]}).status_code == 200
+    assert client.post(board, headers=student, json={"body": "Student post"}).status_code == 404
+    assert client.post(board, headers=admin, json={"body": "Admin post"}).status_code == 403
+    for invalid in ({"body": "   "}, {"body": "a" * 2001}, {"body": "Post", "author_id": str(users["student"])}):
+        assert client.post(board, headers=owner, json=invalid).status_code == 422
+    first = client.post(board, headers=owner, json={"body": "Read chapter three."})
+    assert first.status_code == 201, first.text
+    second = client.post(board, headers=owner, json={"body": "Next week's challenge."})
+    assert second.status_code == 201, second.text
+    first_id = first.json()["id"]
+    second_id = second.json()["id"]
+    # Both HTTP calls share the fixture transaction, so PostgreSQL's now() gives them the same timestamp.
+    with new_session() as db:
+        earlier = db.get(WorkshopAnnouncement, uuid.UUID(first_id))
+        later = db.get(WorkshopAnnouncement, uuid.UUID(second_id))
+        earlier.created_at = later.created_at - timedelta(seconds=1)
+        db.commit()
+    item = f"{board}/{first_id}"
+    assert client.get(board, headers=student).json()[0]["id"] == second_id
+    assert client.patch(item, headers=student, json={"pinned": True}).status_code == 404
+    assert client.delete(item, headers=student).status_code == 404
+    assert client.patch(item, headers=admin, json={"pinned": True}).json()["pinned"]
+    assert client.patch(item, headers=owner, json={"body": "Read chapter four."}).json()["body"] == "Read chapter four."
+    assert client.get(board, headers=student).json()[0]["id"] == first_id
+    assert client.post(f"{path}/archive", headers=owner).status_code == 200
+    assert len(client.get(board, headers=student).json()) == 2
+    assert client.post(board, headers=owner, json={"body": "Archived"}).status_code == 409
+    assert client.patch(item, headers=owner, json={"pinned": False}).status_code == 409
+    assert client.delete(item, headers=owner).status_code == 409
+    assert client.post(f"{path}/restore", headers=owner).status_code == 200
+    assert client.delete(item, headers=owner).status_code == 204
+    assert len(client.get(board, headers=student).json()) == 1
+
+
+def test_workshop_upcoming_uses_activity_schedule_and_visible_exam_windows(flow):
+    from app.models.entities import ExamAssignment
+
+    client, new_session, users = flow
+    owner, student = (_token(users[role]) for role in ("instructor", "student"))
+    base = "/api/v1/workshops"
+    workshop = client.post(base, headers=owner, json={"name": "Upcoming work", "language": "python"}).json()
+    path = f"{base}/{workshop['id']}"
+    now = datetime.now(timezone.utc)
+    with new_session() as db:
+        activity_ids = []
+        for days in (2, 8, -1):
+            activity_id = _quiz(db, users["instructor"])
+            activity_ids.append(activity_id)
+            activity = db.get(LearningActivity, activity_id)
+            activity.review_status = ReviewState.published
+            activity.closes_at = now + timedelta(days=days)
+        course = Course(code=uuid.uuid4().hex[:24], title="Restricted exam course")
+        db.add(course)
+        db.flush()
+        exam_ids = {}
+        for title in ("Published exam", "Draft exam", "Restricted exam", "Later exam"):
+            exam = Exam(
+                title=title, created_by=users["instructor"], duration_minutes=30,
+                opens_at=now + timedelta(days=8 if title == "Later exam" else 1),
+                closes_at=now + timedelta(days=10 if title == "Later exam" else 3),
+                published_at=None if title == "Draft exam" else now,
+                restricted_course_id=course.id if title == "Restricted exam" else None,
+            )
+            db.add(exam)
+            db.flush()
+            db.add(ExamAssignment(exam_id=exam.id, workshop_id=uuid.UUID(workshop["id"])))
+            exam_ids[title] = str(exam.id)
+        db.commit()
+    assert client.post(f"{path}/activities", headers=owner, json={"activity_ids": list(map(str, activity_ids))}).status_code == 200
+    assert client.post(f"{base}/join", headers=student, json={"code": workshop["join_code"]}).status_code == 200
+    assert client.get(path, headers=student).json()["next_closes_at"]
+    upcoming = client.get(f"{path}/upcoming", headers=student)
+    assert upcoming.status_code == 200, upcoming.text
+    assert [row["id"] for row in upcoming.json()] == [str(activity_ids[0]), exam_ids["Published exam"]]
+    assert upcoming.json()[1]["opens_at"] and upcoming.json()[1]["kind"] == "exam"
+    assert {row["id"] for row in client.get(f"{path}/upcoming", headers=owner).json()} == {
+        str(activity_ids[0]), exam_ids["Published exam"], exam_ids["Restricted exam"],
+    }
+
+
+def test_workshop_progress_is_read_only_practice_and_current_members_only(flow):
+    client, new_session, users = flow
+    owner, student, staff, admin = (_token(users[role]) for role in ("instructor", "student", "other_instructor", "admin"))
+    base = "/api/v1/workshops"
+    with new_session() as db:
+        activity_ids = [_quiz(db, users["instructor"]) for _ in range(3)]
+        for activity_id in activity_ids:
+            db.get(LearningActivity, activity_id).review_status = ReviewState.published
+        now = datetime.now(timezone.utc)
+        exam = Exam(created_by=users["instructor"], title="Separate exam", opens_at=now,
+                    closes_at=now + timedelta(hours=1), duration_minutes=30)
+        db.add(exam)
+        db.flush()
+        attempt = ExamAttempt(exam_id=exam.id, student_id=users["student"], attempt_number=1,
+                              status="active", started_at=now, due_at=now + timedelta(minutes=30))
+        db.add(attempt)
+        db.flush()
+        for i, activity_id in enumerate(activity_ids):
+            db.add(ActivityAttempt(
+                student_id=users["student"], activity_id=activity_id, attempt_number=1,
+                is_successful=i != 1, exam_attempt_id=attempt.id if i == 2 else None,
+            ))
+        db.commit()
+
+    ids = list(map(str, activity_ids))
+    workshop = client.post(base, headers=owner, json={
+        "name": "Progress practice", "language": "python", "activity_ids": ids,
+    }).json()
+    path = f"{base}/{workshop['id']}"
+    assert client.post(f"{base}/join", headers=student, json={"code": workshop["join_code"]}).status_code == 200
+    assert client.get(f"{path}/progress", headers=student).status_code == 404
+    assert client.get(f"{path}/progress", headers=staff).status_code == 404
+    response = client.get(f"{path}/progress", headers=owner)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert [activity["id"] for activity in data["activities"]] == ids
+    assert len(data["students"]) == 1
+    assert data["students"][0]["states"] == dict(zip(ids, ("solved", "attempted", "not_started")))
+    assert data["students"][0]["completion_percent"] == 33
+    assert client.get(f"{path}/progress", headers=admin).json() == data
+    assert client.post(f"{path}/archive", headers=owner).status_code == 200
+    assert client.get(f"{path}/progress", headers=owner).json() == data
+    assert client.post(f"{path}/restore", headers=owner).status_code == 200
+    assert client.delete(f"{path}/membership", headers=student).status_code == 204
+    assert client.get(f"{path}/progress", headers=owner).json()["students"] == []

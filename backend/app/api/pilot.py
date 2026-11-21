@@ -16,9 +16,7 @@ from app.core.security import get_current_user, require_instructor
 from app.models.entities import (
     ActivityAttempt, ActivityDraft, ActivityKind, ChallengeHint, HintUse,
     LearningActivity, Profile, ResearchConsent, ReviewState, SubmissionJob, UserRole,
-    WorkshopMember,
     NotificationOutbox,
-    Workshop, WorkshopActivity,
     Course, CourseAnnouncement, _utcnow,
 )
 from app.services.ai_rag.error_explainer import explain_code_error
@@ -26,12 +24,11 @@ from app.services.ai_rag.retrieval import passages_block, tutoring_document_ids,
 from app.services.ai_rag.solution_guard import WITHHELD_HINT, reveals_solution
 from app.services.ai_rag.gemini_client import GEMINI_DISABLED
 from app.services.gamification.sequencer import determine_track_recommendation
-from app.services.course_access import active_membership_course_ids
+from app.services.course_access import active_membership_course_ids, may_manage_instructional_content
 from app.services.attempt_visibility import (
     activity_is_closed,
     learner_visible_attempt_clause,
     student_visible_activity_clause,
-    workshop_shareable_activity_clause,
 )
 from app.api.exams import next_due_exam, require_practice_help_available
 
@@ -128,27 +125,6 @@ def dashboard(user: Profile = Depends(get_current_user), db: Session = Depends(g
     }
 
 
-@router.get("/instructor/workshops/{workshop_id}/students")
-def workshop_students(workshop_id: uuid.UUID, user: Profile = Depends(require_instructor), db: Session = Depends(get_db)):
-    workshop = db.get(Workshop, workshop_id)
-    if workshop is None:
-        raise HTTPException(404, "Workshop not found.")
-    if workshop.created_by != user.id and user.role != UserRole.admin:
-        raise HTTPException(404, "Workshop not found.")
-    activity_ids = [row[0] for row in db.query(WorkshopActivity.activity_id).join(
-        LearningActivity, LearningActivity.id == WorkshopActivity.activity_id
-    ).filter(WorkshopActivity.workshop_id == workshop_id, workshop_shareable_activity_clause(workshop.created_by)).all()]
-    members = db.query(Profile).join(WorkshopMember, WorkshopMember.profile_id == Profile.id).filter(
-        WorkshopMember.workshop_id == workshop_id, Profile.role == UserRole.student).order_by(Profile.pseudonym_id).all()
-    counts = dict(db.query(ActivityAttempt.student_id, func.count(func.distinct(ActivityAttempt.activity_id))).filter(
-        ActivityAttempt.student_id.in_([m.id for m in members]),
-        ActivityAttempt.activity_id.in_(activity_ids), ActivityAttempt.is_successful.is_(True)
-    ).group_by(ActivityAttempt.student_id).all()) if members and activity_ids else {}
-    return {"workshop_id": workshop_id, "total_activities": len(activity_ids),
-            "students": [{"alias": m.username, "completed": counts.get(m.id, 0),
-                          "level": m.current_level} for m in members]}
-
-
 @router.get("/drafts/{activity_id}")
 def get_draft(activity_id: uuid.UUID, user: Profile = Depends(get_current_user), db: Session = Depends(get_db)):
     student_only(user)
@@ -188,7 +164,7 @@ def instructor_hints(activity_id: uuid.UUID, user: Profile = Depends(require_ins
     activity = db.get(LearningActivity, activity_id)
     if activity is None or activity.activity_type != ActivityKind.challenge:
         raise HTTPException(404, "Challenge not found.")
-    if activity.created_by != user.id and user.role != UserRole.admin:
+    if user.role != UserRole.instructor or not may_manage_instructional_content(db, user, activity.course_id, activity.created_by):
         raise HTTPException(404, "Challenge not found.")
     hints = db.query(ChallengeHint).filter(ChallengeHint.activity_id == activity_id).order_by(ChallengeHint.slot).all()
     return [{"id": h.id, "slot": h.slot, "body": h.body} for h in hints]
@@ -199,7 +175,7 @@ def put_hint(activity_id: uuid.UUID, body: InstructorHint, user: Profile = Depen
     activity = db.get(LearningActivity, activity_id)
     if activity is None or activity.activity_type != ActivityKind.challenge:
         raise HTTPException(404, "Challenge not found.")
-    if activity.created_by != user.id and user.role != UserRole.admin:
+    if user.role != UserRole.instructor or not may_manage_instructional_content(db, user, activity.course_id, activity.created_by):
         raise HTTPException(404, "Challenge not found.")
     if activity.review_status == ReviewState.published:
         raise HTTPException(409, "Published hints cannot be changed.")

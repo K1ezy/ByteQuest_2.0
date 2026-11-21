@@ -264,9 +264,67 @@ def enrollment_counts(db: Session, course_ids: Sequence[uuid.UUID]) -> dict[str,
     return result
 
 
-def class_snapshot(db: Session, course_id: uuid.UUID) -> dict:
+STUCK_ATTEMPTS = 3
+SCORE_BANDS = ("0–19%", "20–39%", "40–59%", "60–79%", "80–100%")
+
+def score_band_index(score: float) -> int:
+    return max(0, min(len(SCORE_BANDS) - 1, int(score // 20)))
+
+def practice_cells(db: Session, activity_ids, student_ids) -> dict:
+    cells: dict[uuid.UUID, dict[str, dict]] = {sid: {} for sid in student_ids}
+    if activity_ids and student_ids:
+        rows = (
+            db.query(
+                ActivityAttempt.student_id,
+                ActivityAttempt.activity_id,
+                func.count(ActivityAttempt.id),
+                func.max(ActivityAttempt.score_percentage),
+                func.bool_or(ActivityAttempt.is_successful),
+            )
+            .filter(
+                ActivityAttempt.activity_id.in_(activity_ids),
+                ActivityAttempt.student_id.in_(list(cells)),
+                practice_attempt_clause(),
+            )
+            .group_by(ActivityAttempt.student_id, ActivityAttempt.activity_id)
+            .all()
+        )
+        for student_id, activity_id, attempts, best, passed in rows:
+            cells[student_id][str(activity_id)] = {
+                "attempts": int(attempts),
+                "best_score": round(float(best or 0.0), 1),
+                "passed": bool(passed),
+                "stuck": not passed and attempts >= STUCK_ATTEMPTS,
+            }
+    return cells
+
+
+def activity_health(cells, activity_ids) -> dict:
+    health = {aid: {"attempted": 0, "passed": 0, "stuck": 0, "not_started": len(cells), "pass_rate": None}
+              for aid in activity_ids}
+    for learner in cells.values():
+        for key, cell in learner.items():
+            row = health[uuid.UUID(key)]
+            row["attempted"] += 1
+            row["not_started"] -= 1
+            row["passed"] += int(cell["passed"])
+            row["stuck"] += int(cell["stuck"])
+    for row in health.values():
+        if row["attempted"]:
+            row["pass_rate"] = row["passed"] / row["attempted"]
+    return health
+
+
+def class_snapshot(db: Session, course_id: uuid.UUID, *, as_of: datetime | None = None) -> dict:
     students = enrolled_students(db, course_id)
     activity_ids = published_activity_ids(db, [course_id])
+    latest_activity = (
+        db.query(LearningActivity)
+        .filter(LearningActivity.id.in_(activity_ids))
+        .order_by(LearningActivity.published_at.desc().nullslast(), LearningActivity.created_at.desc())
+        .first()
+    ) if activity_ids else None
+    latest_title = (latest_activity.title or latest_activity.topic_concept) if latest_activity else None
     if not activity_ids or not students:
         return {
             "active_learners": len(students),
@@ -275,6 +333,8 @@ def class_snapshot(db: Session, course_id: uuid.UUID) -> dict:
             "average_score": None,
             "need_follow_up": len(students),
             "active_7d": 0,
+            "inactive_7d": 0,
+            "latest_activity_title": latest_title,
             "attempts_7d": 0,
         }
     # Same definitions as the Performance page: "mastered" needs a passing attempt;
@@ -298,12 +358,6 @@ def class_snapshot(db: Session, course_id: uuid.UUID) -> dict:
         (sum(completions) / max(len(completions), 1)) / len(activity_ids) * 100
     )
 
-    latest_activity = (
-        db.query(LearningActivity)
-        .filter(LearningActivity.id.in_(activity_ids))
-        .order_by(LearningActivity.published_at.desc().nullslast(), LearningActivity.created_at.desc())
-        .first()
-    )
     average_score = None
     if latest_activity is not None:
         # Each student's latest score, passing or not: averaging only passes hid
@@ -325,7 +379,7 @@ def class_snapshot(db: Session, course_id: uuid.UUID) -> dict:
         .filter(
             ActivityAttempt.activity_id.in_(activity_ids),
             ActivityAttempt.student_id.in_([student.id for student in students]),
-            ActivityAttempt.created_at >= datetime.now(timezone.utc) - timedelta(days=7),
+            ActivityAttempt.created_at >= (as_of or datetime.now(timezone.utc)) - timedelta(days=7),
             practice_attempt_clause(),
         )
         .one()
@@ -337,6 +391,8 @@ def class_snapshot(db: Session, course_id: uuid.UUID) -> dict:
         "average_score": round(float(average_score), 1) if average_score is not None else None,
         "need_follow_up": need_follow_up,
         "active_7d": int(active_7d),
+        "inactive_7d": len(students) - need_follow_up - int(active_7d),
+        "latest_activity_title": latest_title,
         "attempts_7d": int(attempts_7d),
     }
 

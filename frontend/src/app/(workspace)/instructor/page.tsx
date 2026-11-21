@@ -1,8 +1,10 @@
 "use client";
 
+import { metrics } from "@/lib/insight-metrics";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { MeasureDefinitions } from "@/components/insights/ui";
 import { AnnounceButton } from "@/components/instructor/course-announcements";
 import {
   DataRow, InlineEmpty, InlineError, InstructorIcon, PageHeader, RowSkeleton, Section, StatSkeleton, StatStrip, StatusBadge,
@@ -68,6 +70,7 @@ function Dashboard({ courseId }: { courseId: string }) {
   const { title, subtitle } = dashboardHeading(now, queueTotal);
   const newActivity = courseHref("/instructor/activities?create=1");
   const upcoming = upcomingActivities(activities.data?.items ?? [], now);
+  const inactive = overview.data?.class_snapshot.inactive_7d ?? 0;
   const notStarted = overview.data?.class_snapshot.need_follow_up ?? 0;
   const stuckTopics = (insight.data?.topics ?? []).filter((row) => row.students_stuck > 0)
     .sort((a, b) => b.students_stuck - a.students_stuck || a.topic.localeCompare(b.topic)).slice(0, notStarted ? 3 : 4);
@@ -82,7 +85,7 @@ function Dashboard({ courseId }: { courseId: string }) {
     if (retryId) return;
     setRetryId(id);
     try {
-      const result = await retryMaterial(id);
+      const result = await retryMaterial("faculty", id);
       toast.show(result.message, result.material.state === "ready" ? "success" : "error");
       loadQueue();
       await refreshCourses();
@@ -101,12 +104,13 @@ function Dashboard({ courseId }: { courseId: string }) {
     {overview.error ? <InlineError onRetry={overview.reload} /> : overview.data ? (
       <StatStrip items={[
         { label: "Enrolled", value: overview.data.counts.active_learners, note: "In this course" },
-        { label: "Active, 7 days", value: overview.data.class_snapshot.active_7d, note: "of " + overview.data.counts.active_learners + " enrolled" },
-        { label: "Average mastery", value: overview.data.counts.class_progress_percent + "%",
-          note: overview.data.class_snapshot.published_activities + (overview.data.class_snapshot.published_activities === 1 ? " published activity" : " published activities") },
+        { label: metrics.active_7d.label, value: overview.data.class_snapshot.active_7d, note: "of " + overview.data.counts.active_learners + " enrolled" },
+        { label: metrics.activities_passed.label, value: overview.data.counts.class_progress_percent + "%",
+          note: "avg of " + overview.data.class_snapshot.published_activities + (overview.data.class_snapshot.published_activities === 1 ? " published activity" : " published activities") },
         { label: "Submissions, 7 days", value: overview.data.class_snapshot.attempts_7d, note: "Attempts on published activities" },
       ]} />
     ) : <StatSkeleton />}
+    {overview.data ? <MeasureDefinitions names={["active_7d", "activities_passed", "stuck"]} /> : null}
 
     <div className="ic-columns">
       <Section title="Needs your attention" id="instructor-attention" className="ic-area-attention"
@@ -118,7 +122,7 @@ function Dashboard({ courseId }: { courseId: string }) {
       </Section>
       <aside className="ic-area-rail">
         <Section title="Students to check" id="instructor-students">
-          {insight.error || overview.error ? <InlineError onRetry={() => { insight.reload(); overview.reload(); }} /> : !insight.data || !overview.data ? <RowSkeleton /> : stuckTopics.length || notStarted ? (
+          {insight.error || overview.error ? <InlineError onRetry={() => { insight.reload(); overview.reload(); }} /> : !insight.data || !overview.data ? <RowSkeleton /> : stuckTopics.length || notStarted || inactive ? (
             <ul className="ic-list">
               {stuckTopics.map((row) => {
                 const evidence = [...row.categories].filter((item) => item.failed_tries > 0).sort((a, b) => b.failed_tries - a.failed_tries)[0];
@@ -127,6 +131,7 @@ function Dashboard({ courseId }: { courseId: string }) {
                   href={courseHref("/instructor/gamification" + queryString({ topic: row.topic }) + "#instructor-debugging")}
                   description={description} lead={<span className="ic-warning-icon"><InstructorIcon name="warning" /></span>} chevron />;
               })}
+              {inactive ? <DataRow title={inactive + " inactive for 7+ days"} href={courseHref("/instructor/performance?inactive=1#instructor-roster")} description={metrics.inactive_7d.definition} chevron/> : null}
               {notStarted ? <DataRow title={notStarted + (notStarted === 1 ? " hasn't started" : " haven't started")}
                 href={courseHref("/instructor/performance?notStarted=1#instructor-roster")}
                 description="No attempts on any activity" lead={<InstructorIcon name="pause" />} chevron /> : null}

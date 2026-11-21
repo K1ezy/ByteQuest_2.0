@@ -6,13 +6,14 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { apiRequest, ApiError, getErrorMessage } from "@/lib/api";
 import { getSupabase } from "@/lib/supabase";
 import { subscribeToProfileUpdates } from "@/lib/profile-events";
-import { belongsTo, canOpenPath, pageLabel, primaryNavigation, questRedirect, roleLabels, usesInstructorCourseShell } from "@/lib/navigation";
+import { belongsTo, canOpenPath, pageLabel, primaryNavigation, questRedirect, roleLabels, usesInstructorCourseShell, withCourse } from "@/lib/navigation";
 import type { Profile } from "@/lib/types";
 import { destinationFor } from "@/components/home-redirect";
 import { AccountMenu } from "@/components/account-menu";
 import { ChatShell } from "@/components/chat/chat-shell";
 import { LegacyQuestRedirect } from "@/components/legacy-quest-redirect";
 import { AppNavIcon } from "@/components/workspace/app-nav-icon";
+import { DockableNavigation } from "@/components/workspace/dockable-navigation";
 
 const ProfileContext = createContext<Profile | null>(null);
 
@@ -117,40 +118,59 @@ function useScrollResetOnRouteChange(pathname: string) {
 
 function isActiveDestination(pathname: string, href: string, index: number) {
   return (index === 0 ? pathname === href : belongsTo(pathname, href))
-    || (href === "/instructor/activities" && ["/instructor/materials", "/instructor/review", "/instructor/preview", "/workshops"].some((section) => belongsTo(pathname, section)))
+    || (href === "/instructor/activities" && ["/instructor/materials", "/instructor/review", "/instructor/preview"].some((section) => belongsTo(pathname, section)))
     || (href === "/instructor/performance" && belongsTo(pathname, "/instructor/ml"))
     || (href === "/admin" && ["/admin/configuration", "/admin/monitoring"].some((section) => belongsTo(pathname, section)))
     || (href === "/admin/courses" && belongsTo(pathname, "/admin/assignments"))
     || (href === "/admin/activities" && belongsTo(pathname, "/admin/materials"))
-    || (href === "/admin/teaching" && pathname === "/workshops")
+    || (href === "/admin/teaching" && belongsTo(pathname, "/workshops"))
     || (href === "/quests" && ["/arena", "/quiz", "/submissions", "/reviews"].some((section) => belongsTo(pathname, section)));
 }
 
 export function AppShell({ profile, children }: { profile: Profile; children: ReactNode }) {
   const pathname = usePathname();
   const params = useSearchParams();
-  const hasInstructorCourseShell = profile.role === "instructor" && usesInstructorCourseShell(pathname);
-  const title = hasInstructorCourseShell && pathname === "/instructor" ? "Dashboard" : pageLabel(pathname);
+  const hasInstructorShell = profile.role === "instructor" && (usesInstructorCourseShell(pathname) || belongsTo(pathname, "/workshops"));
+  const title = hasInstructorShell && pathname === "/instructor" ? "Dashboard" : pageLabel(pathname);
   const titleKey = pathname + "?" + params.toString();
   const focusExit = profile.role === "student" && /^\/(arena|quiz|exams)\/[^/]+$/.exec(pathname);
   const currentCourse = params.get("course");
+  // A challenge or quiz returns to the page it was opened from (with its filters);
+  // submission status belongs to the attempt, so it never becomes the origin.
+  // shortcut: a reload on a focus page falls back to Quest Map; persist per tab if that matters.
+  const [origin, setOrigin] = useState("/quests");
+  const here = pathname + (params.size ? "?" + params.toString() : "");
+  if (profile.role === "student" && !focusExit && !belongsTo(pathname, "/submissions") && origin !== here) setOrigin(here);
+  const exit = focusExit && focusExit[1] === "exams" ? { href: "/exams", label: "Exams" }
+    : { href: origin, label: pageLabel(origin.split(/[?#]/)[0]) };
   useScrollResetOnRouteChange(pathname);
   useEffect(() => {
     document.title = title + " · ByteQuest";
   }, [title]);
 
-  if (hasInstructorCourseShell) return children;
+  if (hasInstructorShell) return children;
+
+  const courseHref = (href: string) => withCourse(href, profile.role === "instructor" && href !== "/workshops" ? currentCourse : null);
+  const destinations = profile.role === "instructor"
+    ? [...primaryNavigation.instructor, ["/workshops", "Workshops", "Workshops"] as const]
+    : primaryNavigation[profile.role];
+  const primaryLinks = destinations.map(([href, label, shortLabel], index) =>
+    <Link key={href} href={courseHref(href)} aria-current={isActiveDestination(pathname, href, index) ? "page" : undefined}>
+      <AppNavIcon href={href} />
+      <span className="bq-nav-label">{label}</span>
+      <span className="bq-nav-short">{shortLabel}</span>
+    </Link>);
 
   /* Layout: one slim top bar (brand, chat, account) and the primary destinations.
-     Wide screens show the destinations as a sidebar; phones show the same links as a
-     bottom tab bar, so every main page is one tap away and within thumb reach.
-     Focus pages (a challenge, quiz or exam) hide the tab bar and offer one way back. */
+     Wide screens show the destinations as a sidebar; phones and tablets show the same
+     links as a rail on the left or right edge, whichever the user chose, so every main
+     page is one tap away. Focus pages (a challenge, quiz or exam) hide the navigation
+     and offer one way back. */
   return <div className={focusExit ? "bq-app-shell bq-focus-shell" : "bq-app-shell bq-has-tabbar"}>
     <header className="bq-app-topbar">
       {focusExit ? <>
-        <Link className="button button-outline bq-back-link" href={focusExit[1] === "exams" ? "/exams" : "/quests"}
-          aria-label={focusExit[1] === "exams" ? "Back to Exams" : "Back to Quest Map"}>
-          <span aria-hidden="true">←</span> <span className="bq-back-prefix">Back to </span>{focusExit[1] === "exams" ? "Exams" : "Quest Map"}
+        <Link className="button button-outline bq-back-link" href={exit.href} aria-label={"Back to " + exit.label}>
+          <span aria-hidden="true">←</span> <span className="bq-back-prefix">Back to </span>{exit.label}
         </Link>
         <span className="bq-app-location">{title}</span>
       </> : <>
@@ -165,17 +185,9 @@ export function AppShell({ profile, children }: { profile: Profile; children: Re
       </div>
     </header>
     <div className="bq-app-columns">
-      {!focusExit && <nav id="app-navigation" className="bq-app-nav" aria-label={roleLabels[profile.role] + " navigation"}>
-        {primaryNavigation[profile.role].map(([href, label, shortLabel], index) => {
-          const active = isActiveDestination(pathname, href, index);
-          const suffix = profile.role === "instructor" && currentCourse ? "?course=" + encodeURIComponent(currentCourse) : "";
-          return <Link key={href} href={href + suffix} aria-current={active ? "page" : undefined}>
-            <AppNavIcon href={href} />
-            <span className="bq-nav-label">{label}</span>
-            <span className="bq-nav-short">{shortLabel}</span>
-          </Link>;
-        })}
-      </nav>}
+      {!focusExit && <DockableNavigation key={profile.id + titleKey} ownerId={profile.id}>
+        <nav id="app-navigation" className="bq-app-nav" aria-label={roleLabels[profile.role] + " navigation"}>{primaryLinks}</nav>
+      </DockableNavigation>}
       <main id="main-content" className="bq-app-content" tabIndex={-1}>{children}</main>
     </div>
     <span className="bq-route-status" aria-live="polite" aria-atomic="true">{title}</span>

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -16,17 +15,15 @@ from app.core.database import get_db
 from app.models.entities import ActivityAttempt, ActivityKind, LearningActivity, Profile, ProgrammingLang, ReviewState, TestCase
 from app.services.audit import record_audit
 from app.services.activity_publishing import apply_publish_rules
-from app.services.challenge_verification import challenge_validation_fingerprint, record_challenge_verification
+from app.services.challenge_verification import verify_saved_challenge
 from app.services.attempt_visibility import guard_solution_reopen
 from app.services.course_access import resolve_workspace_course
-from app.services.judge0.client import TestCaseInput, judge0_client
 from app.services.workspace_common import activity_detail, activity_state, as_aware, iso, student_preview
-from app.services.workspace_queries import activity_attempt_counts, activity_status_counts, filter_activities, scoped_activities
+from app.services.workspace_queries import activity_health, practice_cells, enrolled_students, activity_attempt_counts, activity_status_counts, filter_activities, scoped_activities
 from app.api.faculty.common import faculty_user, _aware, _schedule_label, _course_brief, _activity_response, _activity_brief, _load_activity, _course_for_activity, _save_activity_revision, version_conflict
 from app.api.faculty.drafts import TestCasePayload, _validate_quiz_payload, _apply_test_cases
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Activities
@@ -43,10 +40,12 @@ def list_activity_workspace(
     course = resolve_workspace_course(db, user, course_id, allow_admin=False)
     activities = scoped_activities(db, [course.id])
     rows = filter_activities(activities, status=status_filter, activity_type=type_filter, search=search)
+    published = [item.id for item in rows if item.review_status == ReviewState.published and item.archived_at is None]
+    health = activity_health(practice_cells(db, published, [s.id for s in enrolled_students(db, course.id)]), published)
     attempts = activity_attempt_counts(db, [item.id for item in rows])
     return {
         "course": _course_brief(course),
-        "items": [_activity_brief(item, course, attempts.get(item.id, 0)) for item in rows],
+        "items": [{**_activity_brief(item, course, attempts.get(item.id, 0)), "health": health.get(item.id)} for item in rows],
         "total": len(rows),
         "counts": activity_status_counts(activities),
         "filters": {"statuses": ["all", "draft", "scheduled", "open", "closed", "archived"]},
@@ -341,39 +340,13 @@ async def verify_activity(activity_id: uuid.UUID, user: Profile = Depends(facult
                 "message": "Add the reference solution and at least one grading case before verifying.",
             },
         )
-    test_inputs = [
-        TestCaseInput(
-            test_case_id=str(case.id),
-            order_index=case.order_index,
-            stdin=case.stdin,
-            expected_stdout=case.expected_stdout,
-            time_limit_ms=case.time_limit_ms,
-            memory_limit_kb=case.memory_limit_kb,
-            is_hidden=case.is_hidden,
-            weight=case.weight,
-        )
-        for case in sorted(activity.test_cases, key=lambda item: item.order_index)
-    ]
-    fingerprint = challenge_validation_fingerprint(activity)
-    version = activity.content_version
-    language = activity.language
-    reference_solution = activity.reference_solution_code
-    db.rollback()
-    verified, log = await _verify_snapshot(
-        activity_id=activity_id,
-        language=language,
-        reference_solution_code=reference_solution,
-        test_cases=test_inputs,
-    )
-    db.refresh(activity, with_for_update=True)
-    if (
-        activity.review_status != ReviewState.draft
-        or activity.content_version != version
-        or challenge_validation_fingerprint(activity) != fingerprint
-    ):
+    checked = await verify_saved_challenge(db, activity)
+    if checked is None:
         raise version_conflict()
+    activity = checked
+    verified = bool(activity.judge0_verified)
+    log = activity.judge0_verification_log or {}
     _course_for_activity(db, user, activity)
-    record_challenge_verification(activity, verified, log, fingerprint)
     record_audit(
         db,
         actor=user,
@@ -394,18 +367,6 @@ async def verify_activity(activity_id: uuid.UUID, user: Profile = Depends(facult
             else f"Verification did not pass: {log.get('error') or log.get('reason') or 'check the reference solution and grading cases'}"
         ),
     }
-
-
-async def _verify_snapshot(*, activity_id: uuid.UUID, language, reference_solution_code: str, test_cases) -> tuple[bool, dict]:
-    try:
-        return await judge0_client.verify_reference_solution(
-            language=language,
-            reference_solution_code=reference_solution_code,
-            test_cases=test_cases,
-        )
-    except Exception:
-        logger.warning("Judge0 verification could not be completed for activity %s.", activity_id)
-        return False, {"verified": False, "error": "Judge0 verification could not be completed."}
 
 
 @router.post("/activities/{activity_id}/schedule")

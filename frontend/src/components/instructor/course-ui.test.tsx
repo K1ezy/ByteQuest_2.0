@@ -1,9 +1,11 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { DataRow, InlineEmpty, InlineError, PageHeader, Section, StatStrip, StatusBadge } from "./course-ui";
-import { CourseSwitcher, InstructorCourseShell } from "./course-shell";
+import type { Profile } from "@/lib/types";
+import { CourseSwitcher, InstructorCourseShell, InstructorShell } from "./course-shell";
 
-vi.mock("next/navigation", () => ({ usePathname: () => "/instructor" }));
+const location = vi.hoisted(() => ({ pathname: "/instructor" }));
+vi.mock("next/navigation", () => ({ usePathname: () => location.pathname }));
 vi.mock("@/components/account-menu", () => ({ AccountMenu: () => <button>Account</button> }));
 vi.mock("@/components/chat/chat-shell", () => ({ ChatShell: () => <button>Chat assistant</button> }));
 vi.mock("@/components/workspace/workspace-provider", () => ({ useWorkspace: () => ({
@@ -11,7 +13,7 @@ vi.mock("@/components/workspace/workspace-provider", () => ({ useWorkspace: () =
   courseHref: (href: string) => href, setCourse: vi.fn(), profile: {},
 }) }));
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); location.pathname = "/instructor"; });
 
 it("renders the heading, one stat strip, and independent row actions in reading order", () => {
   const retry = vi.fn();
@@ -56,12 +58,43 @@ it("switches courses through a labeled control and restores focus", () => {
   expect(document.activeElement).toBe(trigger);
 });
 
-it("groups desktop navigation while preserving the phone destinations", () => {
+it("uses the instructor navigation for a workshop without course context", () => {
+  location.pathname = "/workshops/example/people";
+  const profile = { id: "instructor", role: "instructor" } as Profile;
+  render(<InstructorShell profile={profile} scope={<span>Workshop scope</span>}><h1>People</h1></InstructorShell>);
+
+  expect(screen.getByText("Workshop scope")).toBeTruthy();
+  expect(screen.queryByLabelText("Choose course")).toBeNull();
+  expect(screen.getByRole("link", { name: "Recent course activity" })).toBeTruthy();
+  const nav = within(screen.getByRole("navigation", { name: "Instructor" }));
+  expect(nav.getByRole("link", { name: "Workshops" }).getAttribute("aria-current")).toBe("page");
+  expect(nav.getByRole("link", { name: "Activities" }).getAttribute("href")).toBe("/instructor/activities");
+  expect(screen.getAllByRole("main")).toHaveLength(1);
+});
+
+it("names each page the same on desktop and phone, and reaches every page from More", () => {
   render(<InstructorCourseShell><p>Dashboard contents</p></InstructorCourseShell>);
+  const pages = [
+    "Dashboard", "Activities", "Workshops", "Review drafts", "Materials", "Exams", "Announcements", "Progress", "Gradebook", "Gamification", "Model evaluation",
+  ];
   const desktop = within(screen.getByRole("navigation", { name: "Instructor" }));
-  expect(desktop.getAllByRole("link").map((link) => link.textContent)).toEqual([
-    "Dashboard", "Activities", "Review drafts", "Materials", "Exams", "Announcements", "Progress", "Gradebook", "Gamification", "Machine learning",
-  ]);
+  expect(desktop.getAllByRole("link").map((link) => link.textContent)).toEqual(pages);
   expect(desktop.getByRole("link", { name: "Dashboard" }).getAttribute("aria-current")).toBe("page");
-  expect(within(screen.getByRole("navigation", { name: "Instructor navigation" })).getAllByRole("link")).toHaveLength(5);
+  expect(desktop.getByRole("link", { name: "Workshops" }).getAttribute("href")).toBe("/workshops");
+  const phone = within(screen.getByRole("navigation", { name: "Instructor navigation" }));
+  expect(phone.getAllByRole("link").map((link) => link.textContent)).toEqual(["Dashboard", "Activities", "Progress", "Exams"]);
+  // jsdom doesn't implement native modal dialogs.
+  const { showModal, close } = HTMLDialogElement.prototype;
+  HTMLDialogElement.prototype.showModal = function showModal() { this.open = true; };
+  HTMLDialogElement.prototype.close = function close() { this.open = false; };
+  try {
+    fireEvent.click(phone.getByRole("button", { name: "More" }));
+    const more = within(screen.getByRole("navigation", { name: "All instructor pages" }));
+    expect(more.getAllByRole("link").map((link) => link.textContent)).toEqual(pages);
+    fireEvent.click(more.getByRole("link", { name: "Materials" }));
+    expect(screen.queryByRole("navigation", { name: "All instructor pages" })).toBeNull();
+    expect(document.activeElement).toBe(phone.getByRole("button", { name: "More" }));
+  } finally {
+    Object.assign(HTMLDialogElement.prototype, { showModal, close });
+  }
 });

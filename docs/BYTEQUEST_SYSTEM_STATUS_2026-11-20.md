@@ -1,5 +1,7 @@
 # ByteQuest 2.0 system status and weekly change log
 
+See the [21 November system snapshot](BYTEQUEST_SYSTEM_STATUS_2026-11-21.md) for later work and the development PC's runtime.
+
 - **Snapshot** 20 November 2026, Asia/Manila
 - **Window** 13–20 November 2026
 - **Source** Weekly update on `fix/ml-pr-auc-student-disjoint-split`, compared with baseline `3bee7ca`. The snapshot covers the source, tests, and migrations verified locally on 20 November.

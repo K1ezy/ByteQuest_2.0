@@ -56,6 +56,7 @@ vi.mock("@/lib/workspace", async (importOriginal) => {
 import ProfilePage from "./page";
 import { ApiError } from "@/lib/api";
 
+vi.mock("@/components/insights/plot", () => ({ default: () => null }));
 const profile = {
   id: "student-id",
   pseudonym_id: "student_verify",
@@ -261,19 +262,16 @@ it("uses the activity URL for progress details and preserves embargoed exam data
   expect(screen.getByText("1 of 3")).toBeTruthy();
   expect(screen.getByText(/Try one before opening a hint/)).toBeTruthy();
   expect(screen.getAllByText(/Awaiting release/).length).toBeGreaterThan(0);
-  const zeroBar = screen.getByRole("progressbar", { name: "Quizzes" });
-  expect(zeroBar.getAttribute("aria-valuenow")).toBe("0");
-  expect((zeroBar.firstElementChild as HTMLElement).style.width).toBe("0%");
+  expect(screen.getByRole("img", { name: "Quizzes: 0%" })).toBeTruthy();
 });
-
-it("falls back to Overview for an unknown tab and exposes role-aware navigation", async () => {
-  mocks.searchParams = new URLSearchParams("tab=unknown");
+it("opens Progress for the old overview link and exposes role-aware navigation", async () => {
+  mocks.searchParams = new URLSearchParams("tab=overview");
   render(<ProfilePage />);
 
-  expect((await screen.findByRole("link", { name: "Overview" })).getAttribute("aria-current")).toBe("page");
+  expect((await screen.findByRole("link", { name: "Progress" })).getAttribute("aria-current")).toBe("page");
   expect(screen.getByRole("link", { name: "Progress" }).getAttribute("href")).toBe("/profile?tab=activity");
   expect(screen.getByRole("link", { name: "Account" }).getAttribute("href")).toBe("/profile?tab=account");
-  expect(screen.getByRole("heading", { name: "Your progress at a glance" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Overview" })).toBeNull();
 });
 
 it("provides private account controls and student research consent without analytics dependency", async () => {
@@ -345,7 +343,7 @@ it("labels faculty and admin activity views without gamifying them", async () =>
   mocks.getMyAnalytics.mockResolvedValueOnce({ role: "admin", admin: adminAnalytics });
   render(<ProfilePage />);
   expect((await screen.findByRole("link", { name: "Stewardship" })).getAttribute("aria-current")).toBe("page");
-  expect(screen.getByText(/platform-wide audit view/i)).toBeTruthy();
+  expect(screen.getByText("Accounts by role")).toBeTruthy();
 });
 
 it("shows faculty attention counts and the single highest-priority action", async () => {
@@ -354,9 +352,8 @@ it("shows faculty attention counts and the single highest-priority action", asyn
   mocks.getMyAnalytics.mockResolvedValueOnce({ role: "instructor", instructor: instructorAnalytics });
   render(<ProfilePage />);
 
-  expect(await screen.findByRole("heading", { name: "Work waiting in your courses" })).toBeTruthy();
-  const draftsCard = screen.getByText("Drafts awaiting review").closest("a");
-  expect(draftsCard?.getAttribute("href")).toBe("/instructor/review?status=open");
+  expect(await screen.findByText("Courses")).toBeTruthy();
+  expect(screen.queryByText("Work waiting in your courses")).toBeNull();
   // The personal timeline is labelled as a record, never a productivity target.
   expect(screen.getByText("Published Loops quiz")).toBeTruthy();
   expect(screen.getByText(/record, not a target/i)).toBeTruthy();
@@ -370,8 +367,8 @@ it("separates the admin personal timeline from the platform-wide audit", async (
 
   expect(await screen.findByRole("heading", { name: "Your recent administration" })).toBeTruthy();
   expect(screen.getByText("I created an account")).toBeTruthy();
-  expect(screen.getByText("Someone else created a course")).toBeTruthy();
-  expect(screen.getByRole("heading", { name: "Operational work waiting" })).toBeTruthy();
+  expect(screen.queryByText("Someone else created a course")).toBeNull();
+  expect(screen.queryByText("Operational work waiting")).toBeNull();
 });
 
 it("renders role sections when the payload omits the newer fields", async () => {
@@ -384,5 +381,20 @@ it("renders role sections when the payload omits the newer fields", async () => 
   });
   render(<ProfilePage />);
   expect(await screen.findByRole("heading", { name: "Teaching activity" })).toBeTruthy();
-  expect(screen.getByText("Nothing is waiting on you right now.")).toBeTruthy();
+  expect(screen.getByText("Your reviews, uploads and publishing will appear here.")).toBeTruthy();
+});
+
+it("links recorded topics, shows badge descriptions and provides a score trend table", async () => {
+  mocks.getMyAnalytics.mockResolvedValueOnce({ ...analytics, student:{...analytics.student,
+    by_topic:["Strings & files","General"].map(topic => ({topic,attempts:1,average_score:40})),
+    score_trend:[{title:"Intro",created_at:"2026-11-05T00:00:00Z",score_percentage:40},{title:"Practice",created_at:"2026-11-06T00:00:00Z",score_percentage:85}],
+    badges:[{code:"first",name:"First steps",description:"Finish one quest.",xp_bonus:5,icon_url:"/badge.svg"}],
+  }});
+  render(<ProfilePage/>);
+  expect((await screen.findByRole("link",{name:"Practise Strings & files"})).getAttribute("href")).toBe("/quests?concept=Strings%20%26%20files");
+  expect(screen.queryByRole("link",{name:"Practise General"})).toBeNull();
+  expect(screen.getByText("Finish one quest.")).toBeTruthy();
+  expect(screen.getByRole("img",{name:/From 40% to 85% across 2 attempts/})).toBeTruthy();
+  fireEvent.click(screen.getByText("View as table"));
+  expect(screen.getByRole("table",{name:"Recent score trend"})).toBeTruthy();
 });

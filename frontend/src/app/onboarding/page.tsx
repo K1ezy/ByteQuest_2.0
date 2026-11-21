@@ -10,7 +10,7 @@ import { destinationFor } from "@/components/home-redirect";
 import { authReturnTo, roleLabels } from "@/lib/navigation";
 import { apiRequest, getAuthErrorMessage, getErrorMessage } from "@/lib/api";
 import { clearSharedComputerData, getSupabase } from "@/lib/supabase";
-import { signUpStudent } from "@/lib/student-signup";
+import { checkStudentSignup, signUpStudent } from "@/lib/student-signup";
 import { formatStudentSchoolId, STUDENT_SCHOOL_ID_ERROR, STUDENT_SCHOOL_ID_PATTERN } from "@/lib/school-id";
 import { usePasswordReset } from "@/hooks/use-password-reset";
 import type { Profile, ProgrammingLanguage } from "@/lib/types";
@@ -32,7 +32,7 @@ function SchoolIdInput({ value, onChange, student = false }: { value: string; on
           if (next !== null) onChange(next);
         }} />
       {student && <p id="auth-school-id-help" className="auth-field-help">
-        Use your school-issued ID, for example 26-00001, and the email on your school roster.
+        Use the School ID you received when you enrolled, for example 26-00001.
       </p>}
     </div>
   );
@@ -73,8 +73,7 @@ function PasswordInput({ label, id, ...props }: PasswordInputProps) {
           }}
           aria-pressed={showPassword}
           aria-label={showPassword ? "Hide password" : "Show password"}
-          data-tooltip={showPassword ? "Hide the password characters." : "Show the password characters."}
-          className="auth-password-toggle absolute right-1.5 flex h-9 w-9 min-h-[36px] min-w-[36px] items-center justify-center rounded-lg text-slate-500 transition hover:text-slate-800"
+          className="auth-password-toggle absolute flex items-center justify-center text-slate-500 transition hover:text-slate-800"
         >
           {showPassword ? (
             /* Eye Off SVG */
@@ -268,11 +267,35 @@ function OnboardingContent() {
     }
   }, [authMode]);
 
+  const registration = {
+    schoolId, yearLevel: Number(signupYear), blockSection,
+    ...(registrationRole === "student" ? {} : { role: registrationRole }),
+  };
+
   const handleAuthSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (authMode === "signup") changeAuthMode("agreement");
+    if (authMode === "signup") void continueToAgreement();
     if (authMode === "signin") void authenticate(false);
   };
+
+  // A taken or unapproved School ID, or a taken username, is reported here instead of after the Terms.
+  async function continueToAgreement() {
+    if (authPending.current) return;
+    authPending.current = true;
+    setStatusMessage(null);
+    setIsError(false);
+    setBusy(true);
+    try {
+      await checkStudentSignup(email, password, username, registration);
+      changeAuthMode("agreement");
+    } catch (error) {
+      setIsError(true);
+      setStatusMessage(getAuthErrorMessage(error));
+    } finally {
+      authPending.current = false;
+      setBusy(false);
+    }
+  }
 
   async function authenticate(createAccount: boolean) {
     if (authPending.current) return;
@@ -287,10 +310,7 @@ function OnboardingContent() {
       const trimmedEmail = email.trim();
       const result =
         createAccount
-          ? await signUpStudent(trimmedEmail, password, username, {
-            schoolId, yearLevel: Number(signupYear), blockSection,
-            ...(registrationRole === "student" ? {} : { role: registrationRole }),
-          })
+          ? await signUpStudent(trimmedEmail, password, username, registration)
           : await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
 
       if (result.error) throw result.error;

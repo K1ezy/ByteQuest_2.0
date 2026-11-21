@@ -11,9 +11,10 @@ import uuid
 from typing import Iterable
 
 from fastapi import HTTPException, status
+from sqlalchemy import exists, or_
 from sqlalchemy.orm import Session
 
-from app.models.entities import Course, CourseMember, Profile, UserRole
+from app.models.entities import Course, CourseMember, Exam, Profile, UserRole
 
 
 def is_admin(user: Profile) -> bool:
@@ -61,6 +62,16 @@ def active_membership_course_ids(db: Session, profile_id: uuid.UUID, member_role
         .all()
     )
     return [row[0] for row in rows]
+
+
+def student_exam_course_clause(student_id: uuid.UUID):
+    """A restricted exam also requires enrollment in its course."""
+    return or_(Exam.restricted_course_id.is_(None), exists().where(
+        CourseMember.course_id == Exam.restricted_course_id,
+        CourseMember.profile_id == student_id,
+        CourseMember.member_role == "student",
+        CourseMember.status == "active",
+    ))
 
 
 def default_instructor_course_id(db: Session, profile_id: uuid.UUID) -> uuid.UUID | None:

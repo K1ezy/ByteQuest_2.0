@@ -26,6 +26,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...original, apiRequest: mocks.apiRequest };
 });
 
+vi.mock("@/components/insights/plot", () => ({default: () => null}));
 import Page from "./page";
 
 function score(partition: string, accuracy: number) {
@@ -204,8 +205,8 @@ it("renders confusion matrices and both curves", () => {
   render(<Page />);
   expect(screen.getAllByText("Actually passed").length).toBe(2);
   expect(screen.getAllByText("40").length).toBeGreaterThan(0);
-  expect(screen.getByLabelText("ROC curve on the test partition")).toBeTruthy();
-  expect(screen.getByLabelText("Precision-recall curve on the test partition")).toBeTruthy();
+  expect(screen.getByRole("img", {name:/^ROC curve on the test partition/})).toBeTruthy();
+  expect(screen.getByRole("img", {name:/^Precision-recall curve on the test partition/})).toBeTruthy();
 });
 
 it("explains the metrics and says a lower Brier score is better", () => {

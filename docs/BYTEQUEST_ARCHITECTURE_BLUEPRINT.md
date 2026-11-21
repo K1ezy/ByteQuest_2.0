@@ -1,5 +1,7 @@
 # ByteQuest 2.0 architecture review and local completion blueprint
 
+The [21 November system snapshot](BYTEQUEST_SYSTEM_STATUS_2026-11-21.md) maps the current chat reservation, shared Materials and course authoring, mobile navigation and Insights implementations. The findings below describe the 18 November review and its acceptance criteria.
+
 **Reviewed 18 November 2026, Asia/Manila.** The review covers the working tree based on `3bee7ca`, including local changes to code, tests, and migrations. Use this file to decide what to build next and what evidence closes each item. It covers the student, instructor, and admin workspaces, grading, exams, AI, curriculum, data, research, and local operations.
 
 **Start with [BQ-01](#bq-01--award-completion-xp-at-the-first-eligible-event).** A held exam pass can suppress a later coding practice award. For a quiz, the learner can earn practice XP and then receive XP for the same completion when the exam is released. Both behaviors were reproduced with synthetic records against local Postgres. Follow with [BQ-02](#bq-02--give-submission-jobs-one-owner-per-claim), where a simulated late worker failure moved a completed job back to `queued` after another worker had reclaimed it.

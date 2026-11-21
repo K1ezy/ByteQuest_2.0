@@ -1,6 +1,6 @@
 ## Current system status
 
-For weekly changes, feature coverage, readiness estimates, or UI/UX priorities, read [ByteQuest system status and weekly change log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md).
+For feature coverage, local runtime, Git state and release evidence, read the [21 November PC and checkout snapshot](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md).
 
 ## graphify
 

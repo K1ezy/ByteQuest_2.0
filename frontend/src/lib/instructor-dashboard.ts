@@ -73,5 +73,12 @@ export function recentActivity(entry: AuditEntry) {
   if (entry.action === "material.processing_failed" && namedItem) return { actor, verb: "couldn't process", item: namedItem, day };
   const summary = entry.summary.replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, "a record");
   const sentence = summary.match(/^(Assigned|Confirmed|Created|Updated|Removed|Published|Archived|Restored|Scheduled) (.+)$/);
-  return { actor, verb: sentence ? sentence[1].toLowerCase() : "recorded", item: sentence?.[2] ?? summary, day };
+  if (sentence) return { actor, verb: sentence[1].toLowerCase(), item: sentence[2], day };
+  // "Course announcement created." reads as "created a course announcement".
+  const trailing = summary.match(/^(.+?) (created|updated|removed|deleted|published|archived|restored|scheduled)\.?$/i);
+  if (trailing) {
+    const thing = trailing[1].charAt(0).toLowerCase() + trailing[1].slice(1);
+    return { actor, verb: trailing[2].toLowerCase(), item: (/^[aeiou]/i.test(thing) ? "an " : "a ") + thing, day };
+  }
+  return { actor, verb: "recorded", item: summary, day };
 }

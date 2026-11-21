@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, apiRequest, getErrorMessage } from "@/lib/api";
 import { resolveAuthenticatedUserId } from "@/lib/supabase";
+import { ConfirmDialog } from "@/components/workspace/ui";
+import { formatManilaDateTime } from "@/lib/activity-date";
 import type { Attempt, ExamItem } from "./exam-model";
 import { useExamAnswerSync } from "./use-exam-answer-sync";
 
@@ -24,6 +26,12 @@ interface ExamInfo {
   server_now?: string;
 }
 
+/** A quiz task counts as answered once any question has a choice; code once it has text. */
+function hasAnswer(task: ExamItem, value: unknown): boolean {
+  if (task.kind === "quiz") return Boolean(value) && Object.keys((value as Record<string, string>) || {}).length > 0;
+  return typeof value === "string" && Boolean(value.trim());
+}
+
 export default function ExamPage() {
   const { id: examId } = useParams<{ id: string }>();
 
@@ -35,6 +43,7 @@ export default function ExamPage() {
   const [busy, setBusy] = useState(false);
   const [sampleMessage, setSampleMessage] = useState("");
   const [topError, setTopError] = useState("");
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
 
   const onSessionLost = useCallback(() => setHydrationState("unauthenticated"), []);
   // Saving, autosave, conflicts, the deadline and submission live in this hook.
@@ -237,28 +246,28 @@ export default function ExamPage() {
           role="alert"
           className="pilot-card"
           style={{
-            border: "2px solid #e49a5b",
-            backgroundColor: "#fffcf7",
+            border: "2px solid var(--orange)",
+            backgroundColor: "var(--warning-soft)",
             padding: "24px",
           }}
         >
           <p
             style={{
               fontFamily: "var(--font-mono, monospace)",
-              fontSize: "12px",
+              fontSize: "0.75rem",
               fontWeight: 700,
               textTransform: "uppercase",
               letterSpacing: "0.08em",
-              color: "#92400e",
+              color: "var(--warning-ink)",
               margin: "0 0 6px 0",
             }}
           >
             Session Verification Required
           </p>
-          <h1 style={{ fontSize: "1.3rem", fontWeight: 800, color: "#162322", margin: "0 0 10px 0" }}>
+          <h1 style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--ink)", margin: "0 0 10px 0" }}>
             Sign in to resume your exam attempt
           </h1>
-          <p style={{ fontSize: "14px", lineHeight: 1.6, color: "#4a5d58", margin: "0 0 20px 0" }}>
+          <p style={{ fontSize: "0.875rem", lineHeight: 1.6, color: "var(--muted)", margin: "0 0 20px 0" }}>
             Your login session expired or could not be verified. Any unsaved answers in this
             browser tab have been preserved—sign in within this same tab to recover and sync your
             work before the exam timer ends.
@@ -280,7 +289,7 @@ export default function ExamPage() {
   if (hydrationState === "hydrating") {
     return (
       <section className="page-shell pilot-dashboard" style={{ marginTop: "40px" }}>
-        <p role="status" style={{ fontSize: "14px", fontWeight: 600, color: "#4a5d58" }}>
+        <p role="status" style={{ fontSize: "0.875rem", fontWeight: 600, color: "var(--muted)" }}>
           Verifying account session and syncing exam attempt…
         </p>
       </section>
@@ -295,15 +304,15 @@ export default function ExamPage() {
           role="alert"
           className="pilot-card"
           style={{
-            border: "2px solid #a33e37",
-            backgroundColor: "#fffdfd",
+            border: "2px solid var(--danger)",
+            backgroundColor: "var(--danger-soft)",
             padding: "24px",
           }}
         >
-          <h1 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#a33e37", margin: "0 0 8px 0" }}>
+          <h1 style={{ fontSize: "1.2rem", fontWeight: 800, color: "var(--danger)", margin: "0 0 8px 0" }}>
             Unable to load exam attempt
           </h1>
-          <p style={{ fontSize: "14px", lineHeight: 1.6, color: "#4a5d58", margin: 0 }}>
+          <p style={{ fontSize: "0.875rem", lineHeight: 1.6, color: "var(--muted)", margin: 0 }}>
             Any unsynced answers in this tab remain untouched. Check your network connection
             and reload this page.
           </p>
@@ -345,8 +354,12 @@ export default function ExamPage() {
             One attempt · {info.duration_minutes} minutes · no hints.
           </p>
           <p>
+            Closes <time dateTime={info.closes_at}>{formatManilaDateTime(info.closes_at)}</time> (Asia/Manila).
+            Your time ends at the duration or at closing, whichever comes first.
+          </p>
+          <p>
             The timer continues if you disconnect. Your latest saved answers are
-            submitted when time expires.
+            submitted when time expires. Your instructor releases results after the exam closes.
           </p>
           {info.can_start ? (
             <button
@@ -385,16 +398,16 @@ export default function ExamPage() {
                     fontWeight: 800,
                     backgroundColor:
                       remainingSeconds !== null && remainingSeconds <= 120
-                        ? "#fdf2f2"
-                        : "#f0f7f1",
+                        ? "var(--danger-soft)"
+                        : "var(--emerald-50)",
                     color:
                       remainingSeconds !== null && remainingSeconds <= 120
-                        ? "#a33e37"
-                        : "#047857",
+                        ? "var(--danger)"
+                        : "var(--emerald-700)",
                     border:
                       remainingSeconds !== null && remainingSeconds <= 120
-                        ? "2px solid #a33e37"
-                        : "2px solid #047857",
+                        ? "2px solid var(--danger)"
+                        : "2px solid var(--emerald-700)",
                   }}
                 >
                   Time left: {mins}:{String(secs).padStart(2, "0")}
@@ -406,7 +419,7 @@ export default function ExamPage() {
                 type="button"
                 className="button button-primary"
                 disabled={isReadOnly || isSubmittingExam}
-                onClick={() => void handleManualSubmitExam()}
+                onClick={() => setConfirmSubmit(true)}
                 data-tooltip="Submit your saved answers for grading and finish this attempt."
               >
                 {isSubmittingExam ? "Confirming & submitting…" : "Submit exam"}
@@ -423,25 +436,25 @@ export default function ExamPage() {
                 borderRadius: "12px",
                 border:
                   syncState === "saved"
-                    ? "1px solid #a7d3b8"
+                    ? "1px solid var(--emerald-200)"
                     : syncState === "saving"
-                    ? "1px solid #c7d9cb"
+                    ? "1px solid var(--line-strong)"
                     : syncState === "unsaved_local"
-                    ? "1px solid #f6c870"
+                    ? "1px solid var(--warning-line)"
                     : syncState === "conflict"
-                    ? "2px solid #f09590"
-                    : "1px solid #c7d9cb",
+                    ? "2px solid var(--danger)"
+                    : "1px solid var(--line-strong)",
                 backgroundColor:
                   syncState === "saved"
-                    ? "#f0f7f1"
+                    ? "var(--emerald-50)"
                     : syncState === "saving"
-                    ? "#fafbfa"
+                    ? "var(--surface)"
                     : syncState === "unsaved_local"
-                    ? "#fefbf2"
+                    ? "var(--warning-soft)"
                     : syncState === "conflict"
-                    ? "#fff5f5"
-                    : "#f5f7f2",
-                fontSize: "14px",
+                    ? "var(--danger-soft)"
+                    : "var(--paper)",
+                fontSize: "0.875rem",
               }}
             >
               <div
@@ -470,14 +483,14 @@ export default function ExamPage() {
                       display: "inline-block",
                       backgroundColor:
                         syncState === "saved"
-                          ? "#047857"
+                          ? "var(--emerald-700)"
                           : syncState === "saving"
-                          ? "#e49a5b"
+                          ? "var(--orange)"
                           : syncState === "unsaved_local"
-                          ? "#b46b1a"
+                          ? "var(--warning-ink)"
                           : syncState === "conflict"
-                          ? "#a33e37"
-                          : "#63756f",
+                          ? "var(--danger)"
+                          : "var(--muted-soft)",
                     }}
                   />
                   <span role="status" aria-atomic="true">
@@ -497,7 +510,7 @@ export default function ExamPage() {
                   <strong
                     style={{
                       fontFamily: "var(--font-mono, monospace)",
-                      color: "#162322",
+                      color: "var(--ink)",
                     }}
                   >
                     {lastConfirmedSaveTime || "None yet"}
@@ -509,8 +522,8 @@ export default function ExamPage() {
                 <p
                   style={{
                     margin: "4px 0 0",
-                    fontSize: "13px",
-                    color: "#8a5814",
+                    fontSize: "0.8125rem",
+                    color: "var(--warning-ink)",
                     lineHeight: 1.4,
                   }}
                 >
@@ -528,10 +541,10 @@ export default function ExamPage() {
                   marginTop: "12px",
                   padding: "10px 14px",
                   borderRadius: "8px",
-                  border: "1px solid #f09590",
-                  backgroundColor: "#fff5f5",
-                  color: "#a33e37",
-                  fontSize: "14px",
+                  border: "1px solid var(--danger)",
+                  backgroundColor: "var(--danger-soft)",
+                  color: "var(--danger)",
+                  fontSize: "0.875rem",
                   fontWeight: 600,
                 }}
               >
@@ -548,18 +561,18 @@ export default function ExamPage() {
               aria-labelledby="conflict-heading"
               className="pilot-card"
               style={{
-                border: "2px solid #a33e37",
-                backgroundColor: "#fffdfd",
+                border: "2px solid var(--danger)",
+                backgroundColor: "var(--danger-soft)",
                 outline: "none",
               }}
             >
               <h2
                 id="conflict-heading"
-                style={{ color: "#a33e37", margin: "0 0 8px 0" }}
+                style={{ color: "var(--danger)", margin: "0 0 8px 0" }}
               >
                 Resolve answer conflict
               </h2>
-              <p style={{ margin: "0 0 16px 0", color: "#4a5d58", fontSize: "14px" }}>
+              <p style={{ margin: "0 0 16px 0", color: "var(--muted)", fontSize: "0.875rem" }}>
                 Another tab saved revision #{conflictData.serverRevision}
                 {conflictData.serverSavedAt
                   ? ` at ${conflictData.serverSavedAt}`
@@ -579,10 +592,10 @@ export default function ExamPage() {
                 {/* Local Copy */}
                 <div
                   style={{
-                    border: "1px solid #f6c870",
+                    border: "1px solid var(--warning-line)",
                     borderRadius: "10px",
                     padding: "14px",
-                    backgroundColor: "#fffcf5",
+                    backgroundColor: "var(--warning-soft)",
                   }}
                 >
                   <div
@@ -593,15 +606,15 @@ export default function ExamPage() {
                       marginBottom: "8px",
                     }}
                   >
-                    <strong style={{ color: "#8a5814", fontSize: "14px" }}>
+                    <strong style={{ color: "var(--warning-ink)", fontSize: "0.875rem" }}>
                       This device’s unsaved answers
                     </strong>
                     <span
                       style={{
-                        fontSize: "11px",
+                        fontSize: "0.6875rem",
                         fontWeight: 700,
-                        backgroundColor: "#fef3c7",
-                        color: "#92400e",
+                        backgroundColor: "var(--warning-soft)",
+                        color: "var(--warning-ink)",
                         padding: "2px 6px",
                         borderRadius: "4px",
                       }}
@@ -614,11 +627,11 @@ export default function ExamPage() {
                     style={{
                       maxHeight: "180px",
                       overflow: "auto",
-                      background: "#162322",
-                      color: "#d1fae5",
+                      background: "var(--ink)",
+                      color: "var(--emerald-100)",
                       padding: "10px",
                       borderRadius: "6px",
-                      fontSize: "12px",
+                      fontSize: "0.75rem",
                       fontFamily: "var(--font-mono, monospace)",
                     }}
                   >
@@ -649,10 +662,10 @@ export default function ExamPage() {
                 {/* Server Copy */}
                 <div
                   style={{
-                    border: "1px solid #c7d9cb",
+                    border: "1px solid var(--line-strong)",
                     borderRadius: "10px",
                     padding: "14px",
-                    backgroundColor: "#f9fbfa",
+                    backgroundColor: "var(--surface)",
                   }}
                 >
                   <div
@@ -663,15 +676,15 @@ export default function ExamPage() {
                       marginBottom: "8px",
                     }}
                   >
-                    <strong style={{ color: "#162322", fontSize: "14px" }}>
+                    <strong style={{ color: "var(--ink)", fontSize: "0.875rem" }}>
                       Account’s saved answers (Rev #{conflictData.serverRevision})
                     </strong>
                     <span
                       style={{
-                        fontSize: "11px",
+                        fontSize: "0.6875rem",
                         fontWeight: 700,
-                        backgroundColor: "#d1fae5",
-                        color: "#047857",
+                        backgroundColor: "var(--emerald-100)",
+                        color: "var(--emerald-700)",
                         padding: "2px 6px",
                         borderRadius: "4px",
                       }}
@@ -684,11 +697,11 @@ export default function ExamPage() {
                     style={{
                       maxHeight: "180px",
                       overflow: "auto",
-                      background: "#162322",
-                      color: "#e2e8f0",
+                      background: "var(--ink)",
+                      color: "var(--slate-200)",
                       padding: "10px",
                       borderRadius: "6px",
-                      fontSize: "12px",
+                      fontSize: "0.75rem",
                       fontFamily: "var(--font-mono, monospace)",
                     }}
                   >
@@ -709,8 +722,8 @@ export default function ExamPage() {
                       marginTop: "12px",
                       width: "100%",
                       backgroundColor: "#fff",
-                      borderColor: "#c7d9cb",
-                      color: "#162322",
+                      borderColor: "var(--line-strong)",
+                      color: "var(--ink)",
                     }}
                     onClick={handleResolveKeepServer}
                   >
@@ -726,12 +739,12 @@ export default function ExamPage() {
             <div>
               {currentItem && (
                 <section className="pilot-card" aria-labelledby="exam-item-title">
-                  <p style={{ color: "#4a5d58", fontSize: "13px", margin: "0 0 6px" }}>
+                  <p style={{ color: "var(--muted)", fontSize: "0.8125rem", margin: "0 0 6px" }}>
                     Task {activeIndex + 1} of {attempt.items.length} ·{" "}
                     {currentItem.points} points
                   </p>
                   <h2 id="exam-item-title">{currentItem.title}</h2>
-                  <p style={{ lineHeight: 1.6, color: "#162322" }}>
+                  <p style={{ lineHeight: 1.6, color: "var(--ink)" }}>
                     {currentItem.problem_statement}
                   </p>
 
@@ -786,7 +799,7 @@ export default function ExamPage() {
                         style={{
                           display: "block",
                           fontWeight: 700,
-                          fontSize: "14px",
+                          fontSize: "0.875rem",
                           marginBottom: "6px",
                         }}
                       >
@@ -826,10 +839,10 @@ export default function ExamPage() {
                         <p
                           key={idx}
                           style={{
-                            background: "#f5f7f2",
+                            background: "var(--paper)",
                             padding: "8px 12px",
                             borderRadius: "6px",
-                            border: "1px solid #dbe3db",
+                            border: "1px solid var(--line)",
                           }}
                         >
                           <code>Input: {s.stdin || "(none)"}</code>
@@ -855,7 +868,7 @@ export default function ExamPage() {
                           style={{
                             marginTop: "8px",
                             fontWeight: 600,
-                            color: "#047857",
+                            color: "var(--emerald-700)",
                           }}
                         >
                           {sampleMessage}
@@ -891,15 +904,7 @@ export default function ExamPage() {
               <h2>Tasks</h2>
               <div role="group" aria-label="Exam tasks">
                 {attempt.items.map((task, index) => {
-                  const isAnswered =
-                    task.kind === "quiz"
-                      ? answers[task.id] &&
-                        Object.keys(
-                          (answers[task.id] as Record<string, string>) || {}
-                        ).length > 0
-                      : typeof answers[task.id] === "string" &&
-                        Boolean((answers[task.id] as string).trim());
-
+                  const isAnswered = hasAnswer(task, answers[task.id]);
                   return (
                     <button
                       type="button"
@@ -909,7 +914,7 @@ export default function ExamPage() {
                       onClick={() => setActiveIndex(index)}
                       style={{
                         borderColor:
-                          index === activeIndex ? "#047857" : undefined,
+                          index === activeIndex ? "var(--emerald-700)" : undefined,
                       }}
                     >
                       {index + 1}. {task.title} ·{" "}
@@ -924,7 +929,7 @@ export default function ExamPage() {
                   type="button"
                   className="button button-primary"
                   disabled={isReadOnly || isSubmittingExam}
-                  onClick={() => void handleManualSubmitExam()}
+                  onClick={() => setConfirmSubmit(true)}
                   style={{
                     width: "100%",
                   }}
@@ -949,17 +954,19 @@ export default function ExamPage() {
               : attempt.status === "failed" ? "Grading needs attention" : "Time expired"}
           </h2>
 
-          {syncState === "expired_submitted" && (
+          {/* "Time ended" only when it did: the server auto-submitted, or the deadline fired in this tab.
+              An attempt the learner submitted and later reopens shows no deadline banner. */}
+          {syncState === "expired_submitted" && (attempt.status === "auto_submitted" || deadlineAttemptId === attempt.id) && (
             <div
               role="alert"
               style={{
                 marginBottom: "16px",
                 padding: "12px 16px",
                 borderRadius: "8px",
-                backgroundColor: "#f5f7f2",
-                border: "1px solid #c7d9cb",
+                backgroundColor: "var(--paper)",
+                border: "1px solid var(--line-strong)",
                 fontWeight: 700,
-                color: "#162322",
+                color: "var(--ink)",
               }}
             >
               {attempt.status === "auto_submitted"
@@ -987,7 +994,7 @@ export default function ExamPage() {
                   style={{
                     marginBottom: "16px",
                     padding: "12px",
-                    border: "1px solid #dbe3db",
+                    border: "1px solid var(--line)",
                     borderRadius: "8px",
                   }}
                 >
@@ -1000,7 +1007,9 @@ export default function ExamPage() {
             </>
           )}
 
-          {info?.can_start && (
+          {/* Exam info loaded before this attempt started still says "can start"; only info that
+              already knows this attempt can describe a granted retake. */}
+          {info?.can_start && info.latest_attempt_id === attempt.id && (
             <div style={{ marginTop: "16px" }}>
               <button
                 type="button"
@@ -1013,11 +1022,30 @@ export default function ExamPage() {
             </div>
           )}
 
-          <div style={{ marginTop: "16px" }}>
-            <Link href="/dashboard">Return to dashboard</Link>
+          <div className="pilot-actions" style={{ marginTop: "16px" }}>
+            <Link className="button button-outline" href="/exams">All exams</Link>
+            <Link className="button button-quiet" href="/dashboard">Dashboard</Link>
           </div>
         </section>
       )}
+
+      {/* Submitting is final, so a tap on a phone first shows what is still unanswered. */}
+      {attempt && attempt.status === "active" ? (() => {
+        const unanswered = attempt.items.filter((task) => !hasAnswer(task, answers[task.id])).length;
+        return <ConfirmDialog
+          open={confirmSubmit}
+          title="Submit exam?"
+          confirmLabel="Submit exam"
+          busy={isSubmittingExam}
+          onConfirm={() => { setConfirmSubmit(false); void handleManualSubmitExam(); }}
+          onCancel={() => setConfirmSubmit(false)}
+        >
+          <p>{unanswered === 0
+            ? `All ${attempt.items.length} tasks have an answer.`
+            : `${unanswered} of ${attempt.items.length} ${attempt.items.length === 1 ? "task has" : "tasks have"} no answer yet.`}{" "}
+            ByteQuest saves your latest answers first. After you submit, you can’t change them.</p>
+        </ConfirmDialog>;
+      })() : null}
     </div>
   );
 }

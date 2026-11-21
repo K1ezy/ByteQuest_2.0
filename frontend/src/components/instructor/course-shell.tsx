@@ -2,32 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Fragment, useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AccountMenu } from "@/components/account-menu";
 import { ChatShell } from "@/components/chat/chat-shell";
 import { AppNavIcon } from "@/components/workspace/app-nav-icon";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
-import { belongsTo, primaryNavigation } from "@/lib/navigation";
-import { InstructorIcon, type InstructorIconName } from "./course-ui";
-
-const groups = [
-  { title: "Teach", links: [
-    ["Dashboard", "/instructor", "home"], ["Activities", "/instructor/activities", "code"],
-    ["Review drafts", "/instructor/review", "check"], ["Materials", "/instructor/materials", "file"],
-    ["Exams", "/instructor/exams", "clipboard"], ["Announcements", "/instructor/announcements", "bell"],
-  ] },
-  { title: "Students", links: [
-    ["Progress", "/instructor/performance", "users"],
-    ["Gradebook", "/instructor/performance#instructor-gradebook", "table"],
-  ] },
-  { title: "Insights", links: [
-    ["Gamification", "/instructor/gamification", "trophy"], ["Machine learning", "/instructor/ml", "chart"],
-  ] },
-] as const satisfies readonly { title: string; links: readonly (readonly [string, string, InstructorIconName])[] }[];
-
-// An in-page anchor never marks the page; the dashboard matches only itself, other sections their sub-pages too.
-const isCurrent = (pathname: string, href: string) =>
-  !href.includes("#") && (pathname === href || (href !== "/instructor" && belongsTo(pathname, href)));
+import { isCurrentInstructorPage, primaryNavigation } from "@/lib/navigation";
+import type { Profile } from "@/lib/types";
+import { InstructorIcon } from "./course-ui";
+import { CourseNavigationLinks } from "./course-navigation-links";
+import { DockableNavigation } from "@/components/workspace/dockable-navigation";
 
 export function CourseSwitcher({ courses, selected, onSelect }: {
   courses: { id: string; title: string }[]; selected: string | null; onSelect: (id: string) => void;
@@ -63,34 +47,77 @@ export function CourseSwitcher({ courses, selected, onSelect }: {
   </details>;
 }
 
-export function InstructorCourseShell({ children }: { children: ReactNode }) {
+/** Phone-only: the full instructor menu in a bottom sheet, so no page is unreachable on a phone. */
+function MoreNavigation({ pathname, courseHref }: { pathname: string; courseHref: (href: string) => string }) {
+  const [open, setOpen] = useState(false);
+  const sheet = useRef<HTMLDialogElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const primary = primaryNavigation.instructor.map(([href]) => href);
+  const elsewhere = !primary.some((href) => isCurrentInstructorPage(pathname, href));
+  useEffect(() => {
+    const dialog = sheet.current;
+    if (!open || !dialog) return;
+    dialog.showModal();
+    const button = trigger.current;
+    return () => { dialog.close(); button?.focus(); };
+  }, [open]);
+  return <>
+    <button ref={trigger} type="button" className="ic-more-trigger" aria-haspopup="dialog" aria-expanded={open}
+      aria-current={elsewhere ? "page" : undefined} onClick={() => setOpen(true)}>
+      <span className="bq-nav-icon" aria-hidden="true"><InstructorIcon name="menu" /></span>More
+    </button>
+    {open ? <dialog ref={sheet} className="bq-account-sheet ic-more-sheet" aria-label="Instructor menu"
+      onCancel={(event) => { event.preventDefault(); setOpen(false); }}
+      onClick={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+      <span className="bq-sheet-handle" aria-hidden="true" />
+      <nav className="ic-sidebar" aria-label="All instructor pages">
+        <CourseNavigationLinks pathname={pathname} courseHref={courseHref} onNavigate={() => setOpen(false)} />
+      </nav>
+      <button type="button" className="ic-button" onClick={() => setOpen(false)}>Close</button>
+    </dialog> : null}
+  </>;
+}
+
+const workspaceHref = (href: string) => href;
+
+export function InstructorShell({ children, profile, scope, courseHref = workspaceHref }: {
+  children: ReactNode;
+  profile: Profile;
+  scope: ReactNode;
+  courseHref?: (href: string) => string;
+}) {
   const pathname = usePathname();
-  const { courseHref, courseId, courses, setCourse, profile } = useWorkspace();
+  const links = <CourseNavigationLinks pathname={pathname} courseHref={courseHref} />;
   return <div className="ic-shell">
     <header className="ic-topbar bq-app-topbar">
       <Link className="ic-brand" href={courseHref("/instructor")}>ByteQuest</Link>
-      <CourseSwitcher courses={courses} selected={courseId} onSelect={setCourse} />
+      {scope}
       <span className="ic-spacer" />
       <ChatShell />
       <Link className="ic-button ic-icon-button" href={courseHref("/instructor#instructor-recent")}
-        aria-label="Notifications" data-tooltip="Recent course activity"><InstructorIcon name="bell" /></Link>
+        aria-label="Recent course activity"><InstructorIcon name="bell" /></Link>
       <AccountMenu key={pathname} profile={profile} />
     </header>
     <div className="ic-grid">
-      <nav className="ic-sidebar" aria-label="Instructor">
-        {groups.map(({ title, links }) => <Fragment key={title}>
-          <p className="ic-nav-group">{title}</p>
-          {links.map(([label, href, icon]) => <Link key={label} href={courseHref(href)} aria-current={isCurrent(pathname, href) ? "page" : undefined}>
-            <InstructorIcon name={icon} />{label}
+      <DockableNavigation key={profile.id + pathname} ownerId={profile.id}>
+        <nav className="ic-sidebar" aria-label="Instructor">{links}</nav>
+        <nav className="ic-mobile-nav" id="app-navigation" aria-label="Instructor navigation">
+          {primaryNavigation.instructor.map(([href, , label]) => <Link key={href} href={courseHref(href)}
+            aria-current={isCurrentInstructorPage(pathname, href) ? "page" : undefined}>
+            <AppNavIcon href={href} />{label}
           </Link>)}
-        </Fragment>)}
-      </nav>
+          <MoreNavigation pathname={pathname} courseHref={courseHref} />
+        </nav>
+      </DockableNavigation>
       <main id="main-content" className="ic-body" tabIndex={-1}>{children}</main>
     </div>
-    <nav className="ic-mobile-nav" id="app-navigation" aria-label="Instructor navigation">
-      {primaryNavigation.instructor.map(([href, , label]) => <Link key={href} href={courseHref(href)} aria-current={pathname === href ? "page" : undefined}>
-        <AppNavIcon href={href} />{label}
-      </Link>)}
-    </nav>
   </div>;
+}
+
+export function InstructorCourseShell({ children }: { children: ReactNode }) {
+  const { courseHref, courseId, courses, setCourse, profile } = useWorkspace();
+  return <InstructorShell profile={profile} courseHref={courseHref}
+    scope={<CourseSwitcher courses={courses} selected={courseId} onSelect={setCourse} />}>
+    {children}
+  </InstructorShell>;
 }

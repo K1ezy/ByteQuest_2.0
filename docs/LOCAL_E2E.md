@@ -1,5 +1,7 @@
 # ByteQuest local end-to-end flow
 
+For the development PC's checked ports, running services and verification, see the [21 November system snapshot](BYTEQUEST_SYSTEM_STATUS_2026-11-21.md).
+
 This setup uses local Supabase and the private Ubuntu VM on D: running Judge0 Extra CE 1.13.1. It writes local Supabase settings to ignored `backend/.env.local` and `frontend/.env.local`; frontend configuration contains only the local Supabase anon key. The setup preserves the configured Judge0 URL/token and optional backend AI key. It does not write to the configured cloud database or start a second local Judge0 stack.
 
 `infra/docker-compose.yml` is a later VPS template and requires the explicit `vps` profile. It is not part of this local setup.
@@ -13,6 +15,8 @@ Run `PREPARE-BYTEQUEST-OFFLINE.bat` once while connected and plugged in, then us
 The launcher does not reset the local database, delete virtual disks, or modify VM checkpoints. It requests Windows administrator access for Hyper-V. The prepared host-only link works without a physical network adapter; the legacy VM IP discovery remains available during preparation. If Judge0 needs its containers started inside Ubuntu, SSH may prompt for the VM password. The password and Judge0 token are not printed. The launcher checks the database through `/readyz`, verifies all three Judge0 runtimes, and reports failure details in `logs/startup-diagnostics.log`, `logs/api.err.log`, `logs/frontend.err.log`, or `logs/submission-worker.err.log`.
 
 Keep Docker Desktop and the Judge0 VM running while using ByteQuest. FastAPI, the grading worker, and the production Next.js server run in the background with logs under `logs/`. For frontend development, run the launcher with `-Development`; this uses `next dev` and Uvicorn reload. Supabase can be stopped later with `supabase stop` from the repository root.
+
+After a successful production launch, subsequent runs can reuse the same FastAPI and grading worker processes if they are still running and their source and local settings match. Startup still checks the database, Judge0 and the browser assets. Changed frontend source can trigger a production rebuild, and backend changes restart the API and worker so the site serves the new code.
 
 The batch files require PowerShell 7, Node.js 20.9 or newer with npm, Supabase CLI v2, Docker Desktop, and Python 3.11. Preparation installs missing application packages but does not install those system prerequisites. The prepared browser graphics preference is Power saving, which affects the default Edge or Chrome browser outside ByteQuest too; restart the browser to apply it. If port 3000 is occupied by another application, stop that application and rerun the launcher.
 
@@ -47,6 +51,14 @@ The batch files require PowerShell 7, Node.js 20.9 or newer with npm, Supabase C
 
 7. Open `http://localhost:3000/onboarding` to create a local student account and select its language track. This manual URL preserves a saved browser session; the BAT launcher adds its one-time startup marker to show authentication on launch. Supabase local email confirmation is disabled; the launcher keeps Mailpit running, so password-reset emails (and confirmation emails, if a local override enables them) can be opened at `http://127.0.0.1:15434`.
 
+## Open ByteQuest on a phone over ZeroTier
+
+1. Join the PC and phone to the same authorized ZeroTier network. Start ByteQuest on the PC and keep it awake.
+2. On the PC, run [OPEN-ON-PHONE-ZEROTIER.bat](../OPEN-ON-PHONE-ZEROTIER.bat) for the configured network. For a different network, pass its ID to [start-zerotier-relay.ps1](../infra/start-zerotier-relay.ps1) with `-NetworkId`.
+3. Open the URL printed by the launcher in the phone's browser. Sign in and open **Account → Accessibility → Menu position**, or hold and drag the side rail on the page.
+
+The relay forwards traffic to services already running on the PC. The development PC has a separate Windows logon task for the relay. On a fresh setup, start it manually after reboot. Use [CLOSE-PHONE-ACCESS-ZEROTIER.bat](../CLOSE-PHONE-ACCESS-ZEROTIER.bat) to stop the relay.
+
 ## Local Quest Map demos
 
 ### Account-synced progression check
@@ -69,7 +81,15 @@ Each script refuses non-local databases, creates a draft quiz, passes it through
 
 The Python fundamentals expansion script is idempotent and depends on the Python demo group above. It adds three reviewed quizzes (**Python Data Types Check**, **Python Conditionals & Loops Check**, **Python Lists & Strings Check**) and three Judge0-verified challenges (**Even or Odd**, **Count Vowels**, **Sum from 1 to N**) to the same group. It interleaves them in track sequence and prints the resulting group activity count. Rerunning it reuses the existing published activities and never resets attempts or XP.
 
-Sign in with a **C++ or Python student account**, open `/workshops`, select **Join Workshop**, and enter the matching printed code. Open the group card, start the **C++ Fundamentals Check** or **Python Fundamentals Check**, answer the three questions, and submit. For the Python journey, continue to **Add Two Numbers**, run the visible examples, then submit the solution officially. Return to `/dashboard` and refresh to see the completed activities, XP, recent attempts, and next recommendation. The instructor who owns the group can open it and use **Copy code** to share the invite code. Student **Create Workshop** remains a preview; saving groups requires instructor or admin access.
+Sign in with a **C++ or Python student account**, open `/workshops`, select **Join Workshop**, and enter the matching code. You can also follow a workshop invite link. After sign-in, confirm **Join Workshop**. Open the workshop’s **Activities** tab, start the **C++ Fundamentals Check** or **Python Fundamentals Check**, answer the three questions, and submit. For Python, continue to **Add Two Numbers**, run the visible examples, then submit the solution officially. Return to `/dashboard` to see completed activities, XP, recent attempts, and the next recommendation.
+
+### Workshop walkthrough (11/21/26)
+
+1. As an instructor, open **Workshops** under **Teach**, create a Python workshop and share one published quiz from **Add → Published activity**. Add a topic, assign a second activity to it and try the move buttons with the keyboard.
+2. On **Board**, post and pin an announcement. Check **Upcoming** against a shared activity closing within seven days or a published exam window. Use **Copy invite link** or **Show full screen** to give students the code.
+3. As a signed-out student, follow the invite and sign in. Confirm the join, then check the announcement, activity and People list at 375 px. Classmates appear by username. The instructor sees student details and can open **Progress** to see practice outcomes.
+4. Turn off joining in **Settings** and confirm that a new join is refused. Turn it back on, reset the code and verify that the previous code stops working. Try leaving or removing a student during an active workshop exam, then repeat after submission.
+5. Archive the workshop and confirm it moves to the **Archived** filter. Current members can still read the Board and open activities. Restore the workshop from **Settings**.
 
 For automated local checks that do not retain test membership, attempts, or XP, run `.\backend\.venv\Scripts\python.exe .\backend\scripts\smoke_local_quest_demo.py` and `.\backend\.venv\Scripts\python.exe .\backend\scripts\smoke_local_python_quest_demo.py` from the repository root. They check join, duplicate join, quiz grading, XP, and completion after reload inside rolled-back transactions. The Python check also calls real Judge0 for a sample run and an official submission, verifies hidden-case privacy, and reads the resulting dashboard and progress before rolling back. The Python smoke check needs a running Judge0 VM and a local Python student account.
 

@@ -38,6 +38,8 @@ POLICIES: dict[str, tuple[Rule, ...]] = {
     "quiz_submit": (Rule("quiz_submit", "account", "minute", 10),),
     "workshop_join": (Rule("workshop_join", "account", "hour", 12),),
     "workshop_create": (Rule("workshop_create", "account", "hour", 5),),
+    "workshop_code": (Rule("workshop_code", "account", "hour", 5),),
+    "workshop_announcement": (Rule("workshop_announcement", "account", "hour", 20),),
     "instructor_verify": (Rule("instructor_verify", "account", "minute", 5),),
     # Student global caps = class size (30) × the per-student daily cap, so one user can't starve the class.
     "student_ai": (
@@ -61,6 +63,9 @@ POLICIES: dict[str, tuple[Rule, ...]] = {
         Rule("pdf_index", "account", "day", 20),
     ),
     "embedding_chunk": (Rule("embedding_chunk", "global", "day", 500),),
+    # shortcut: global, because the hosted API sees Caddy's address rather than the learner's;
+    # make it per-client once uvicorn trusts forwarded headers.
+    "signup_check": (Rule("signup_check", "global", "minute", 60),),
 }
 
 

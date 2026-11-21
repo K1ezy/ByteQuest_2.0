@@ -11,11 +11,10 @@ from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.quotas import reserve
 from app.core.security import get_current_user
 from app.services.storage.supabase_storage import StorageError, avatar_storage
 from app.services.profile_attention import (
-    admin_attention,
-    instructor_attention,
     instructor_course_ids,
     personal_audit,
 )
@@ -27,7 +26,6 @@ from app.services.usernames import normalize_username
 from sqlalchemy.exc import IntegrityError
 from app.models.entities import (
     ActivityAttempt,
-    AuditEvent,
     Badge,
     Course,
     CourseMember,
@@ -128,6 +126,22 @@ def username_availability(username: str, db: Session = Depends(get_db)) -> dict[
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     taken = db.query(Profile.id).filter(func.lower(Profile.username) == normalized).first()
+    return {"available": taken is None}
+
+
+class SchoolIdCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    school_id: str = Field(min_length=1, max_length=64)
+
+
+@router.post("/school-id-availability")
+def school_id_availability(payload: SchoolIdCheck, db: Session = Depends(get_db)) -> dict[str, bool]:
+    """Public signup hint; the signup trigger and unique index stay authoritative.
+
+    POST keeps the School ID out of URLs and server logs.
+    """
+    reserve("signup_check")
+    taken = db.query(Profile.id).filter(Profile.school_id == payload.school_id).first()
     return {"available": taken is None}
 
 
@@ -376,28 +390,6 @@ class AuditEntry(BaseModel):
     created_at: datetime
 
 
-class ProfileAction(BaseModel):
-    """The single highest-priority thing this user could do next."""
-
-    kind: str
-    title: str
-    detail: str
-    status: str
-    href: str
-
-
-class InstructorAttention(BaseModel):
-    drafts_awaiting_review: int = 0
-    materials_needing_attention: int = 0
-    upcoming_activities: int = 0
-
-
-class AdminAttention(BaseModel):
-    accounts_needing_action: int = 0
-    failed_jobs: int = 0
-    availability_changes: int = 0
-
-
 class InstructorAnalytics(BaseModel):
     courses: int
     activities_created: int
@@ -405,8 +397,6 @@ class InstructorAnalytics(BaseModel):
     drafts_reviewed: int
     materials_uploaded: int
     learners_taught: int
-    attention: InstructorAttention = InstructorAttention()
-    next_action: ProfileAction | None = None
     recent_activity: list[AuditEntry] = []
 
 
@@ -417,9 +407,6 @@ class AdminAnalytics(BaseModel):
     total_activities: int
     total_materials: int
     # Platform-wide audit, kept separate from the personal timeline below.
-    recent_audit: list[AuditEntry]
-    attention: AdminAttention = AdminAttention()
-    next_action: ProfileAction | None = None
     recent_activity: list[AuditEntry] = []
 
 
@@ -663,7 +650,6 @@ def _instructor_analytics(db: Session, user: Profile) -> InstructorAnalytics:
             or 0
         )
 
-    attention_counts, next_action = instructor_attention(db, user, course_ids)
 
     return InstructorAnalytics(
         courses=len(course_ids),
@@ -672,8 +658,6 @@ def _instructor_analytics(db: Session, user: Profile) -> InstructorAnalytics:
         drafts_reviewed=int(drafts_reviewed),
         materials_uploaded=int(materials_uploaded),
         learners_taught=int(learners_taught),
-        attention=InstructorAttention(**attention_counts),
-        next_action=ProfileAction(**next_action),
         recent_activity=_personal_audit_entries(db, user),
     )
 
@@ -691,33 +675,12 @@ def _admin_analytics(db: Session, user: Profile) -> AdminAnalytics:
         .scalar()
         or 0
     )
-    audit_rows = (
-        db.query(AuditEvent)
-        .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
-        .limit(10)
-        .all()
-    )
-    recent_audit = [
-        AuditEntry(
-            action=event.action,
-            entity_type=event.entity_type,
-            summary=event.summary,
-            created_at=event.created_at,
-        )
-        for event in audit_rows
-    ]
-
-    attention_counts, next_action = admin_attention(db, user)
-
     return AdminAnalytics(
         total_accounts=int(total_accounts),
         accounts_by_role=accounts_by_role,
         total_courses=int(total_courses),
         total_activities=int(total_activities),
         total_materials=int(total_materials),
-        recent_audit=recent_audit,
-        attention=AdminAttention(**attention_counts),
-        next_action=ProfileAction(**next_action),
         recent_activity=_personal_audit_entries(db, user),
     )
 

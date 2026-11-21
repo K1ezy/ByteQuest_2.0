@@ -1,7 +1,10 @@
 "use client";
 
+import { metrics } from "@/lib/insight-metrics";
+import { PageHeader, Section, StatStrip, RowSkeleton, InlineError, InlineEmpty } from "./course-ui";
+import { MeasureDefinitions, MeterList, UpdatedAt } from "@/components/insights/ui";
 import Link from "next/link";
-import { Button, EmptyState, LoadingPanel, Notice, PageHeading, StatCard, useApi } from "@/components/workspace/ui";
+import { Button, useApi } from "@/components/workspace/ui";
 import { queryString, type ActivityAnalysis } from "@/lib/workspace";
 
 const percent = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 });
@@ -31,30 +34,21 @@ function AnalysisChart({ title, axisLabel, items }: {
 }) {
   const maximum = Math.max(1, ...items.map((item) => item.count));
   return (
-    <section className="ws-panel analysis-chart" aria-label={title}>
-      <h2>{title}</h2>
-      <ul className="insights-meters" aria-label={`${title} in ${axisLabel.toLowerCase()}`}>
-        {items.map(({ label, count }) => (
-          <li key={label}>
-            <strong className="insights-meter-name">{label}</strong>
-            <span className="insights-meter-track" aria-hidden="true">
-              <span className="insights-meter-fill" style={{ width: `${count / maximum * 100}%` }} />
-            </span>
-            <span className="insights-meter-figure">{count}</span>
-          </li>
-        ))}
-      </ul>
+    <Section title={title} className="analysis-chart">
+      <MeterList label={title + " in " + axisLabel.toLowerCase()} rows={items.map(({label, count}) => ({
+        name: label, value: count, total: maximum, figure: String(count),
+      }))} />
       <details className="insights-table-toggle">
         <summary className="ws-touch-action">Show as table</summary>
-        <table className="ws-table analysis-table">
+        <div className="ws-table-wrap"><table className="ws-table analysis-table">
           <caption className="sr-only">{title}</caption>
           <thead><tr><th scope="col">Group</th><th scope="col">{axisLabel}</th></tr></thead>
           <tbody>
             {items.map(({ label, count }) => <tr key={label}><th scope="row">{label}</th><td>{count}</td></tr>)}
           </tbody>
-        </table>
+        </table></div>
       </details>
-    </section>
+    </Section>
   );
 }
 
@@ -65,58 +59,51 @@ export function ActivityAnalysisView({ activityId }: { activityId: string }) {
   return (
     <div className="analysis-view">
       <Link className="ws-inline-link ws-touch-action analysis-back" href={activitiesHref}>Back to activities</Link>
-      <PageHeading
-        eyebrow="ACTIVITY ANALYSIS"
+      <PageHeader actions={<Button variant="outline" onClick={reload}>Refresh</Button>}
         title={data?.title ?? "Activity Analysis"}
-        description={data ? `${data.course.title} · ${data.activity_type === "quiz" ? "Quiz" : "Coding challenge"} · ${data.pass_mark_percent}% pass mark` : undefined}
+        subtitle={data ? `${data.course.title} · ${data.activity_type === "quiz" ? "Quiz" : "Coding challenge"} · ${data.pass_mark_percent}% pass mark` : undefined}
       />
-      {loading && !data ? <LoadingPanel label="Loading activity analysis…" /> : null}
-      {error ? (
-        <Notice tone="error">
-          {error} <Button className="ws-touch-action" variant="outline" onClick={reload}>Retry</Button>
-        </Notice>
-      ) : null}
+      {loading && !data && <RowSkeleton/>}
+      {error && <InlineError onRetry={reload}/>}
       {data ? (
         <>
+          {data.generated_at && <UpdatedAt at={data.generated_at}/>}
           <p className="ws-muted">
             {data.attempted} of {data.class_size} enrolled learners attempted this activity. {data.not_started} have yet to start.
             {data.excludes_exam_attempts ? " Figures cover graded practice only." : ""}
           </p>
-          <div className="ws-stat-grid" aria-label="Activity summary">
-            <StatCard label="Pass rate" value={percentOrDash(data.pass_rate)} hint={`${data.passed} of ${data.attempted} who attempted`} />
-            <StatCard label="First-try pass rate" value={percentOrDash(data.first_try_pass_rate)} hint="Of learners who attempted" />
-            <StatCard label="Median attempts to pass" value={data.median_attempts_to_pass ?? "—"} hint="Among learners who passed" />
-            <StatCard label="Stuck" value={data.stuck} hint={`${data.stuck_after_attempts}+ attempts without a pass`} tone={data.stuck ? "wait" : "info"} />
-          </div>
+          <StatStrip label="Activity statistics" items={[
+            {label:metrics.pass_rate.label,value:percentOrDash(data.pass_rate),note:data.passed+" of "+data.attempted+" who attempted"},
+            {label:metrics.first_try_pass_rate.label,value:percentOrDash(data.first_try_pass_rate)},
+            {label:metrics.median_attempts_to_pass.label,value:data.median_attempts_to_pass ?? "—"},
+            {label:metrics.stuck.label,value:data.stuck,note:data.stuck_after_attempts+"+ attempts without a pass"}
+          ]}/><MeasureDefinitions names={["pass_rate","first_try_pass_rate","median_attempts_to_pass","stuck"]}/>
           {data.attempted ? (
             <>
               <div className="analysis-charts">
                 <AnalysisChart title="Best scores" axisLabel="Learners" items={data.score_distribution} />
                 {data.activity_type === "challenge" ? (
                   data.error_categories.length ? <AnalysisChart title="Errors in failed attempts" axisLabel="Attempts" items={data.error_categories} /> :
-                    <section className="ws-panel analysis-chart"><h2>Errors in failed attempts</h2><p className="ws-muted">No failed attempts recorded.</p></section>
+                    <Section className="analysis-chart" title="Errors in failed attempts"><p className="ws-muted">No failed attempts recorded.</p></Section>
                 ) : null}
               </div>
-              <section className="ws-panel analysis-chart" aria-label="How to read the results">
-                <h2>What the results suggest</h2>
+              <Section className="analysis-chart" title="What the results suggest">
                 <p>{analysisReading(data)}</p>
                 {data.stuck ? <Link className="button button-outline ws-touch-action" href={stuckHref}>Stuck learners</Link> : null}
-              </section>
+              </Section>
             </>
-          ) : <EmptyState title="No attempts yet">{analysisReading(data)}</EmptyState>}
+          ) : <InlineEmpty><strong>No attempts yet</strong> {analysisReading(data)}</InlineEmpty>}
           {data.hint_use && (data.hint_use.learners > 0 || data.attempted > 0) ? (
-            <section className="ws-panel analysis-chart">
-              <h2>Hint use</h2>
+            <Section className="analysis-chart" title="Hint use">
               <p>{data.hint_use.learners} revealed a hint. {data.hint_use.passed} of those learners passed.</p>
-            </section>
+            </Section>
           ) : null}
           {data.questions && data.attempted > 0 ? (
-            <section className="ws-panel analysis-chart">
-              <h2>First attempts by question</h2>
+            <Section className="analysis-chart" title="First attempts by question">
               {data.questions.some((item) => item.recorded > 0) ? (
                 <>
                   <p className="ws-muted">Counts include first attempts with saved answers.</p>
-                  <table className="ws-table analysis-table">
+                  <div className="ws-table-wrap"><table className="ws-table analysis-table">
                     <caption className="sr-only">Correct responses on recorded first attempts</caption>
                     <thead><tr><th scope="col">Question</th><th scope="col">Correct</th></tr></thead>
                     <tbody>
@@ -124,10 +111,10 @@ export function ActivityAnalysisView({ activityId }: { activityId: string }) {
                         <tr key={question.question_id}><th scope="row">{question.prompt}</th><td>{question.correct} / {question.recorded}</td></tr>
                       ))}
                     </tbody>
-                  </table>
+                  </table></div>
                 </>
               ) : <p className="ws-muted">No first-attempt answers are available for this quiz.</p>}
-            </section>
+            </Section>
           ) : null}
         </>
       ) : null}

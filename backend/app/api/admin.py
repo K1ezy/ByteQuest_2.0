@@ -16,7 +16,6 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -55,6 +54,7 @@ from app.services.materials import (
     serialize_material,
     upload_material,
 )
+from app.services.ml_predictor.consent import consented_student_ids
 from app.services.monitoring import (
     audit_query,
     job_query,
@@ -72,6 +72,7 @@ from app.services.workspace_common import (
     material_state,
 )
 from app.services.workspace_queries import (
+    class_snapshot, enrolled_students,
     account_course_access,
     account_emails,
     activity_attempt_counts,
@@ -437,56 +438,6 @@ class AccountCreate(BaseModel):
         return value
 
 
-class StudentRegistrationApproval(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    school_id: str = Field(pattern=r"^[0-9]{2}-[0-9]{5}$", min_length=8, max_length=8)
-    email: str = Field(min_length=5, max_length=320)
-
-    @field_validator("school_id")
-    @classmethod
-    def validate_school_id(cls, value: str) -> str:
-        if value.endswith("-00000"):
-            raise ValueError("The sequence in the School ID must start at 00001.")
-        return value
-
-    @field_validator("email")
-    @classmethod
-    def validate_email(cls, value: str) -> str:
-        if not EMAIL_PATTERN.fullmatch(value):
-            raise ValueError("Enter the email address listed in the school roster.")
-        return value.lower()
-
-
-@router.put("/student-registration-roster")
-def approve_student_registration(
-    payload: StudentRegistrationApproval,
-    user: Profile = Depends(admin_user),
-    db: Session = Depends(get_db),
-):
-    try:
-        approved = db.scalar(text("""
-            INSERT INTO bytequest_private.student_registration_roster AS roster (school_id, email)
-            SELECT :school_id, :email
-            WHERE NOT EXISTS (
-                SELECT 1 FROM public.profiles
-                WHERE role = 'student' AND school_id = :school_id
-            )
-            ON CONFLICT (school_id) DO UPDATE SET email = excluded.email
-            WHERE roster.claimed_by IS NULL
-            RETURNING school_id
-        """), payload.model_dump())
-    except IntegrityError as exc:
-        if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) != "student_registration_roster_email_key":
-            raise
-        raise HTTPException(status_code=409, detail="This email is already approved for another School ID.") from exc
-    if approved is None:
-        raise HTTPException(status_code=409, detail="This School ID is already attached to a student account.")
-    record_audit(db, actor=user, action="student_registration.approved", entity_type="student_registration",
-                 summary="Approved a school roster entry for student registration.")
-    db.commit()
-    return {"message": "Student sign-up approved for this School ID and email."}
-
-
 @router.post("/accounts", status_code=status.HTTP_201_CREATED)
 async def create_account(
     payload: AccountCreate,
@@ -599,6 +550,42 @@ def account_emails_for_email(db: Session, email: str) -> bool:
 # ---------------------------------------------------------------------------
 # Courses and assignments
 # ---------------------------------------------------------------------------
+@router.get("/course-health")
+def course_health(request: Request, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
+    courses = sorted(courses_for_user(db, user, include_archived=True), key=lambda c: (c.status != "active", c.code))
+    instructors = {}
+    for course_id, name in (
+        db.query(CourseMember.course_id, Profile.display_name)
+        .join(Profile, Profile.id == CourseMember.profile_id)
+        .filter(CourseMember.member_role == "instructor", CourseMember.status == "active", Profile.account_status == "active")
+        .order_by(Profile.display_name).all()
+    ):
+        instructors.setdefault(course_id, []).append(name or "Assigned instructor")
+    now = datetime.now(timezone.utc)
+    rows = []
+    for course in courses:
+        # shortcut: one snapshot per course, batch the queries when courses exceed about 50
+        snapshot = class_snapshot(db, course.id, as_of=now)
+        enrolled = snapshot["active_learners"]
+        reportable = enrolled >= 5
+        names = instructors.get(course.id, [])
+        consent = None
+        if reportable:
+            consent = len(consented_student_ids(db, [s.id for s in enrolled_students(db, course.id)]))
+        rows.append({
+            "id": str(course.id), "code": course.code, "title": course.title, "course_status": course.status,
+            "status": "available" if reportable else "insufficient_data",
+            "instructor_count": len(names), "instructors": names, "enrolled": enrolled,
+            "published_activities": snapshot["published_activities"],
+            "active_7d": snapshot["active_7d"] if reportable else None,
+            "not_started": snapshot["need_follow_up"] if reportable else None,
+            "activities_passed": snapshot["average_completion_percent"] if reportable else None,
+            "research_consent": consent,
+        })
+    return {"courses": rows, "generated_at": iso(now),
+            "forecast_status": getattr(request.app.state, "ml_shadow_status", "disabled")}
+
+
 @router.get("/courses")
 def list_course_operations(user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
     courses = courses_for_user(db, user, include_archived=True)

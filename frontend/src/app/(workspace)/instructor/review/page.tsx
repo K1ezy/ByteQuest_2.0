@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { PageHeader } from "@/components/instructor/course-ui";
 import { useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
 import {
   Button,
   EmptyState,
   LoadingPanel,
   Notice,
-  PageHeading,
   SearchField,
   SelectField,
   StatusChip,
@@ -82,14 +82,13 @@ function ReviewQueue() {
 
   return (
     <>
-      <PageHeading
-        eyebrow="INSTRUCTOR WORKSPACE"
-        title="Review queue"
-        description="Inspect each generated draft and its cited source pages before publishing. Saving never publishes."
+      <PageHeader
+        title="Review drafts"
+        subtitle="Inspect each generated draft and its cited source pages before publishing. Saving never publishes."
         status={data ? <StatusChip state="active" label={`${data.total} in this view`} /> : undefined}
         actions={
-          <Link className="button button-primary" href={courseHref("/instructor/materials")}>
-            Upload material
+          <Link className="ic-button ic-primary" href={courseHref("/instructor/materials")}>
+            Upload PDF
           </Link>
         }
       />
@@ -109,7 +108,7 @@ function ReviewQueue() {
         ))}
       </div>
 
-      <Toolbar label="Review queue filters">
+      <Toolbar label="Review drafts filters">
         <SearchField
           value={search}
           onChange={setSearch}
@@ -145,7 +144,7 @@ function ReviewQueue() {
 
       {error ? (
         <Notice tone="error">
-          The review queue could not load. {error}{" "}
+          Review drafts could not load. {error}{" "}
           <button type="button" className="ws-inline-link" onClick={reload}>
             Retry
           </button>
@@ -161,7 +160,7 @@ function ReviewQueue() {
           action={
             <div className="ws-inline-actions">
               <Link className="button button-outline small" href={courseHref("/instructor/materials")}>
-                Upload material
+                Upload PDF
               </Link>
               <Link className="button button-primary small" href={`${courseHref("/instructor/activities")}&create=1`}>
                 Create activity
@@ -246,7 +245,7 @@ function DraftRow({
 
 export default function Page() {
   return (
-    <WorkspaceSuspense label="review queue">
+    <WorkspaceSuspense label="review drafts">
       <ReviewQueue />
     </WorkspaceSuspense>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useCallback, useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
 import { apiRequest, ApiError, getErrorMessage } from "@/lib/api";
@@ -21,119 +21,17 @@ import {
   uploadMyAvatar,
   type AdminAnalytics,
   type InstructorAnalytics,
-  type ProfileAction,
   type ProfileAnalytics,
   type ProfileAuditEntry,
   type StudentAnalytics,
   type HelpPattern,
-  type TrendPoint,
 } from "@/lib/workspace";
 import type { Profile } from "@/lib/types";
 import { ProfileHeader, ROLE_LABEL } from "@/components/profile/profile-header";
+import { MeterList, PracticeLink } from "@/components/insights/ui";
+import { InsightLineChart } from "@/components/insights/line-chart";
+import { metrics } from "@/lib/insight-metrics";
 import { DebuggerCodex } from "@/components/profile/debugger-codex";
-
-/** Inline score-trend sparkline (0–100%), oldest → newest. */
-function Sparkline({ points }: { points: TrendPoint[] }) {
-  if (points.length < 2) return <p className="ws-muted">Not enough attempts yet to chart a trend.</p>;
-  const width = 520;
-  const height = 120;
-  const pad = 8;
-  const step = (width - pad * 2) / (points.length - 1);
-  const coords = points.map((point, index) => {
-    const x = pad + index * step;
-    const y = height - pad - (Math.max(0, Math.min(100, point.score_percentage)) / 100) * (height - pad * 2);
-    return [x, y] as const;
-  });
-  const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-  const area = `${pad},${height - pad} ${line} ${width - pad},${height - pad}`;
-  const first = Math.round(points[0].score_percentage);
-  const latest = Math.round(points[points.length - 1].score_percentage);
-  return (
-    <svg
-      className="profile-spark"
-      viewBox={`0 0 ${width} ${height}`}
-      role="img"
-      aria-label={`Recent score trend across ${points.length} released or practice attempts, from ${first}% to ${latest}%`}
-    >
-      <polygon className="profile-spark-fill" points={area} />
-      <polyline className="profile-spark-line" points={line} />
-      {coords.map(([x, y], index) => (
-        <circle key={index} cx={x} cy={y} r={2.5} className="profile-spark-dot" />
-      ))}
-    </svg>
-  );
-}
-
-/** Horizontal labelled bars for breakdowns (value is 0–100). */
-function BarList({ items }: { items: { label: string; value: number; caption?: string }[] }) {
-  if (items.length === 0) return <p className="ws-muted">No data yet.</p>;
-  return (
-    <ul className="profile-bars">
-      {items.map((item) => (
-        <li key={item.label}>
-          <div className="profile-bar-head">
-            <span>{item.label}</span>
-            <strong>{Math.round(item.value)}%{item.caption ? ` · ${item.caption}` : ""}</strong>
-          </div>
-          <div
-            className="profile-bar-track"
-            role="progressbar"
-            aria-label={item.label}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(item.value)}
-          >
-            <div className="profile-bar-fill" style={{ width: `${Math.max(0, Math.min(100, item.value))}%` }} />
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function StudentOverview({ a }: { a: StudentAnalytics }) {
-  const nextHref = a.next_action.activity_id
-    ? `/${a.next_action.kind === "quiz" ? "quiz" : "arena"}/${a.next_action.activity_id}`
-    : "/quests";
-  return (
-    <section className="ws-panel profile-overview-panel" aria-labelledby="student-stats-title">
-      <div className="ws-panel-head">
-        <div>
-          <p className="eyebrow-label">LEARNING OVERVIEW</p>
-          <h2 id="student-stats-title">Your progress at a glance</h2>
-        </div>
-      </div>
-      <div className="profile-overview-grid">
-        <div className="profile-level-progress">
-          <div className="profile-level-ring" style={{ "--level-progress": `${a.level_progress_percent * 3.6}deg` } as CSSProperties} aria-hidden="true">
-            <span>Lv {a.current_level}</span>
-          </div>
-          <div className="profile-level-copy">
-            <strong>{a.xp_to_next_level} XP to Level {a.current_level + 1}</strong>
-            <span>{a.xp_into_level} of {a.xp_per_level} XP earned in this level</span>
-            <div className="profile-level-track" role="progressbar" aria-label={`Progress toward level ${a.current_level + 1}`} aria-valuemin={0} aria-valuemax={a.xp_per_level} aria-valuenow={a.xp_into_level}>
-              <span style={{ width: `${a.level_progress_percent}%` }} />
-            </div>
-          </div>
-        </div>
-        <div className="profile-next-action">
-          <div>
-            <span>Recommended next</span>
-            <strong>{a.next_action.title || (a.next_action.recommended_action === "completed_track" ? "Track complete" : "Explore your quest map")}</strong>
-            <p>{a.next_action.rationale}</p>
-          </div>
-          <Link className="button button-primary" href={nextHref}>{a.next_action.activity_id ? "Continue learning" : "View quest map"} <span aria-hidden="true">→</span></Link>
-        </div>
-      </div>
-      <div className="ws-stat-grid">
-        <StatCard label="Total XP" value={a.xp_points} hint={`Level ${a.current_level}`} icon="★" tone="good" />
-        <StatCard label="Pass rate" value={`${Math.round(a.pass_rate)}%`} hint={`${a.successful_attempts}/${a.total_attempts} passed`} icon="✓" tone={a.pass_rate >= 60 ? "good" : "wait"} />
-        <StatCard label="Average score" value={`${Math.round(a.average_score)}%`} hint={`Best ${Math.round(a.best_score)}%`} icon="◎" tone="info" />
-        <StatCard label="Badges" value={a.badge_count} hint={`${Math.round(a.total_time_seconds / 60)} min practised`} icon="▲" tone="info" />
-      </div>
-    </section>
-  );
-}
 
 // Informational feedback on process (independence, trying before asking), never a score or a penalty.
 function habitsMessage(p: HelpPattern): string {
@@ -154,11 +52,11 @@ function SolvingHabits({ pattern }: { pattern: HelpPattern }) {
         </div>
       </div>
       <div className="ws-stat-grid">
-        <StatCard label="Self-solved" value={`${pattern.self_solved} of ${pattern.challenges_solved}`}
+        <StatCard label={metrics.self_solved.label} value={`${pattern.self_solved} of ${pattern.challenges_solved}`}
           hint="Challenges passed without opening a hint" icon="★" tone="good" />
         <StatCard label="3-star solves" value={pattern.three_star}
           hint="No hints, within 2 attempts" icon="✦" tone="info" />
-        <StatCard label="Tried before asking"
+        <StatCard label={metrics.tried_before_asking.label}
           value={pattern.hinted_challenges ? `${pattern.tried_before_hint} of ${pattern.hinted_challenges}` : "—"}
           hint={pattern.hinted_challenges ? "Hinted challenges where you ran code first" : "No hints used yet"} icon="↻" tone="info" />
       </div>
@@ -172,6 +70,10 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
   return (
     <>
 
+      <div className="ws-stat-grid">
+        <StatCard label={metrics.attempts_passed.label} value={Math.round(a.pass_rate) + "%"} hint={a.successful_attempts + "/" + a.total_attempts + " passed"} />
+        <StatCard label={metrics.average_attempt_score.label} value={Math.round(a.average_score) + "%"} hint={"Best " + Math.round(a.best_score) + "%"} />
+      </div>
       <section className="ws-panel" aria-labelledby="learning-activity-title">
         <div className="ws-panel-head">
           <div>
@@ -205,7 +107,12 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
               <h2 id="trend-title">Recent score trend</h2>
             </div>
           </div>
-          <Sparkline points={a.score_trend} />
+          <InsightLineChart label="Recent score trend" xLabel="Attempt date" domain={[0,100]} numericX
+            formatX={time => formatDateTime(new Date(Number(time)).toISOString())}
+            rows={a.score_trend.map(p => ({ x: Date.parse(p.created_at), score: p.score_percentage }))}
+            series={[{ key: "score", label: "Score (%)", token: "var(--chart-series)" }]}
+            summary={a.score_trend.length ? "From " + Math.round(a.score_trend[0].score_percentage) + "% to "
+              + Math.round(a.score_trend[a.score_trend.length - 1].score_percentage) + "% across " + a.score_trend.length + " attempts." : ""} />
           {a.score_trend.length > 0 ? (
             <ul className="ws-compact-list profile-recent">
               {[...a.score_trend].reverse().slice(0, 6).map((point, index) => (
@@ -226,7 +133,9 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
                 <h2 id="bytype-title">Performance by activity type</h2>
               </div>
             </div>
-            <BarList items={a.by_type.map((t) => ({ label: typeLabel(t.activity_type), value: t.pass_rate, caption: `${t.attempts} tries` }))} />
+            <MeterList label="Performance by activity type" rows={a.by_type.map(t => ({
+              name: typeLabel(t.activity_type), value: t.pass_rate, total: 100, detail: t.attempts + " tries", figure: Math.round(t.pass_rate) + "%",
+            }))} />
           </section>
 
           <section className="ws-panel" aria-labelledby="bytopic-title">
@@ -236,7 +145,10 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
                 <h2 id="bytopic-title">Average score by topic</h2>
               </div>
             </div>
-            <BarList items={a.by_topic.map((t) => ({ label: t.topic, value: t.average_score, caption: `${t.attempts} tries` }))} />
+            <MeterList label="Average score by topic" rows={a.by_topic.map(t => ({
+              name: t.topic, value: t.average_score, total: 100, figure: Math.round(t.average_score) + "%",
+              detail: <>{t.attempts} tries {t.topic !== "General" && <PracticeLink topic={t.topic} />}</>,
+            }))} />
           </section>
         </div>
       </div>
@@ -280,7 +192,7 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
         )}
       </section>
 
-      <section className="ws-panel" aria-labelledby="badges-title">
+      <section className="ws-panel" id="badges" aria-labelledby="badges-title">
         <div className="ws-panel-head">
           <div>
             <p className="eyebrow-label">ACHIEVEMENTS</p>
@@ -292,13 +204,14 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
         ) : (
           <ul className="profile-badges">
             {a.badges.map((badge) => (
-              <li key={badge.code} data-tooltip={badge.description || undefined}>
+              <li key={badge.code}>
                 <span className="profile-badge-icon" aria-hidden="true">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={badge.icon_url} alt="" />
                 </span>
                 <span className="profile-badge-copy">
                   <strong>{badge.name}</strong>
+                  <span>{badge.description}</span>
                   <span>+{badge.xp_bonus} XP{badge.awarded_at ? ` · ${formatDateTime(badge.awarded_at)}` : ""}</span>
                 </span>
               </li>
@@ -307,64 +220,6 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
         )}
       </section>
     </>
-  );
-}
-
-/** The one dominant call to action for this role, per Von Restorff emphasis. */
-function RecommendedAction({ action, eyebrow }: { action: ProfileAction | null; eyebrow: string }) {
-  if (!action) return null;
-  const calm = action.kind === "workspace" || action.kind === "dashboard";
-  return (
-    <div className={`profile-next-action${calm ? " is-calm" : ""}`}>
-      <div>
-        <span>{eyebrow}</span>
-        <strong>{action.title}</strong>
-        <p>{action.detail}</p>
-      </div>
-      <div className="profile-next-action-side">
-        <StatusChip state={action.status} label={action.status} tone={calm ? "good" : "wait"} />
-        <Link className="button button-primary" href={action.href}>
-          {calm ? "Open workspace" : "Review now"} <span aria-hidden="true">→</span>
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-/** Counts of work waiting on this user. Numbers carry the meaning, not colour. */
-function AttentionSummary({
-  title,
-  items,
-}: {
-  title: string;
-  items: { label: string; value: number; hint: string; href: string }[];
-}) {
-  const total = items.reduce((sum, item) => sum + item.value, 0);
-  return (
-    <section className="ws-panel" aria-labelledby="attention-title">
-      <div className="ws-panel-head">
-        <div>
-          <p className="eyebrow-label">NEEDS ATTENTION</p>
-          <h2 id="attention-title">{title}</h2>
-        </div>
-      </div>
-      {total === 0 ? (
-        <p className="ws-muted">Nothing is waiting on you right now.</p>
-      ) : null}
-      <div className="ws-stat-grid">
-        {items.map((item) => (
-          <StatCard
-            key={item.label}
-            label={item.label}
-            value={item.value}
-            hint={item.hint}
-            href={item.href}
-            icon={item.value > 0 ? "!" : "✓"}
-            tone={item.value > 0 ? "wait" : "good"}
-          />
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -405,59 +260,8 @@ function PersonalTimeline({
   );
 }
 
-function InstructorOverview({ a }: { a: InstructorAnalytics }) {
-  return (
-    <section className="ws-panel profile-overview-panel" aria-labelledby="teach-overview-title">
-      <div className="ws-panel-head">
-        <div>
-          <p className="eyebrow-label">TEACHING IMPACT</p>
-          <h2 id="teach-overview-title">The learning you support</h2>
-        </div>
-        <Link className="button button-outline" href="/instructor">Open instructor workspace <span aria-hidden="true">→</span></Link>
-      </div>
-      <RecommendedAction action={a.next_action} eyebrow="Highest priority" />
-      <div className="ws-stat-grid">
-        <StatCard label="Courses" value={a.courses} hint="Assigned to you" icon="▦" tone="info" />
-        <StatCard label="Learners taught" value={a.learners_taught} hint="Across your courses" icon="◉" tone="good" />
-        <StatCard label="Published activities" value={a.activities_published} hint={`${a.activities_created} created`} icon="✎" tone="info" />
-        <StatCard label="Reviews completed" value={a.drafts_reviewed} hint="Drafts reviewed" icon="✓" tone="good" />
-      </div>
-    </section>
-  );
-}
-
 function InstructorSections({ a }: { a: InstructorAnalytics }) {
-  // Tolerate an older or partial payload rather than failing the whole view.
-  const attention = a.attention ?? {
-    drafts_awaiting_review: 0,
-    materials_needing_attention: 0,
-    upcoming_activities: 0,
-  };
-  return (
-    <>
-      <AttentionSummary
-        title="Work waiting in your courses"
-        items={[
-          {
-            label: "Materials needing attention",
-            value: attention.materials_needing_attention,
-            hint: "PDFs that cannot be cited yet",
-            href: "/instructor/materials?status=attention",
-          },
-          {
-            label: "Drafts awaiting review",
-            value: attention.drafts_awaiting_review,
-            hint: "Hidden from students until approved",
-            href: "/instructor/review?status=open",
-          },
-          {
-            label: "Upcoming activities",
-            value: attention.upcoming_activities,
-            hint: "Opening in the next 14 days",
-            href: "/instructor/activities?status=scheduled",
-          },
-        ]}
-      />
+  return (<>
     <section className="ws-panel" aria-labelledby="teach-title">
       <div className="ws-panel-head">
         <div>
@@ -467,12 +271,13 @@ function InstructorSections({ a }: { a: InstructorAnalytics }) {
         <Link className="button button-outline" href="/instructor">Manage teaching</Link>
       </div>
       <div className="ws-stat-grid">
+        <StatCard label="Courses" value={a.courses} />
         <StatCard label="Activities created" value={a.activities_created} hint={`${a.activities_published} published`} icon="✎" tone="info" />
         <StatCard label="Drafts reviewed" value={a.drafts_reviewed} hint="Learning content checked" icon="✓" tone="good" />
         <StatCard label="Materials uploaded" value={a.materials_uploaded} hint="Teaching resources" icon="▤" tone="info" />
-        <StatCard label="Learners reached" value={a.learners_taught} hint={`Across ${a.courses} courses`} icon="◉" tone="good" />
+        <StatCard label="Learners taught" value={a.learners_taught} hint={`Across ${a.courses} courses`} icon="◉" tone="good" />
       </div>
-      <p className="ws-footnote">Detailed review queues, materials, schedules, and class performance remain in the instructor workspace.</p>
+      <p className="ws-footnote">Review drafts, materials, schedules, and class performance remain in the instructor workspace.</p>
     </section>
       <PersonalTimeline
         entries={a.recent_activity ?? []}
@@ -483,60 +288,14 @@ function InstructorSections({ a }: { a: InstructorAnalytics }) {
   );
 }
 
-function AdminOverview({ a }: { a: AdminAnalytics }) {
-  return (
-    <section className="ws-panel profile-overview-panel" aria-labelledby="admin-overview-title">
-      <div className="ws-panel-head">
-        <div>
-          <p className="eyebrow-label">PLATFORM STEWARDSHIP</p>
-          <h2 id="admin-overview-title">ByteQuest at a glance</h2>
-        </div>
-        <Link className="button button-outline" href="/admin">Open admin workspace <span aria-hidden="true">→</span></Link>
-      </div>
-      <RecommendedAction action={a.next_action} eyebrow="Highest priority" />
+function AdminSections({ a }: { a: AdminAnalytics }) {
+  return (<>
       <div className="ws-stat-grid">
         <StatCard label="Accounts" value={a.total_accounts} hint="All roles" icon="◉" tone="info" />
         <StatCard label="Courses" value={a.total_courses} icon="▦" tone="info" />
         <StatCard label="Activities" value={a.total_activities} icon="▣" tone="info" />
         <StatCard label="Materials" value={a.total_materials} hint="Current versions" icon="▤" tone="good" />
       </div>
-    </section>
-  );
-}
-
-function AdminSections({ a }: { a: AdminAnalytics }) {
-  const total = Object.values(a.accounts_by_role).reduce((sum, value) => sum + value, 0) || 1;
-  // Tolerate an older or partial payload rather than failing the whole view.
-  const attention = a.attention ?? {
-    accounts_needing_action: 0,
-    failed_jobs: 0,
-    availability_changes: 0,
-  };
-  return (
-    <>
-      <AttentionSummary
-        title="Operational work waiting"
-        items={[
-          {
-            label: "Failed jobs",
-            value: attention.failed_jobs,
-            hint: "Processing that needs investigation",
-            href: "/admin/monitoring?status=failed",
-          },
-          {
-            label: "Accounts needing action",
-            value: attention.accounts_needing_action,
-            hint: "Blocked from course access",
-            href: "/admin/accounts?status=attention",
-          },
-          {
-            label: "Availability changes",
-            value: attention.availability_changes,
-            hint: "Scheduled or closed activities",
-            href: "/admin/activities?status=attention",
-          },
-        ]}
-      />
       <div className="ws-columns">
         <section className="ws-panel" aria-labelledby="roles-title">
           <div className="ws-panel-head">
@@ -545,36 +304,11 @@ function AdminSections({ a }: { a: AdminAnalytics }) {
               <h2 id="roles-title">Accounts by role</h2>
             </div>
           </div>
-          <BarList
-            items={Object.entries(a.accounts_by_role).map(([role, count]) => ({
-              label: ROLE_LABEL[role as Profile["role"]] || role,
-              value: (count / total) * 100,
-              caption: `${count}`,
-            }))}
-          />
+          <MeterList label="Accounts by role" rows={Object.entries(a.accounts_by_role).map(([role, count]) => ({
+            name: ROLE_LABEL[role as Profile["role"]] || role, value: count, total: a.total_accounts, figure: String(count),
+          }))} />
         </section>
 
-        <section className="ws-panel" aria-labelledby="audit-title">
-          <div className="ws-panel-head">
-            <div>
-              <p className="eyebrow-label">AUDIT</p>
-              <h2 id="audit-title">Recent platform activity</h2>
-            </div>
-          </div>
-          <p className="profile-context-note">This is a platform-wide audit view, not a measure of individual productivity.</p>
-          {(a.recent_audit ?? []).length === 0 ? (
-            <p className="ws-muted">No recorded activity yet.</p>
-          ) : (
-            <ul className="ws-compact-list">
-              {(a.recent_audit ?? []).map((event, index) => (
-                <li key={index}>
-                  <strong>{event.summary}</strong>
-                  <span>{event.action} · {formatDateTime(event.created_at)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
       </div>
       <PersonalTimeline
         entries={a.recent_activity ?? []}
@@ -729,7 +463,7 @@ function ProfilePageContent() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const tabParam = searchParams.get("tab");
-  const activeTab = tabParam === "activity" || tabParam === "account" ? tabParam : "overview";
+  const activeTab = tabParam === "account" ? "account" : "activity";
 
   const loadAnalytics = useCallback(async () => {
     setAnalyticsLoading(true);
@@ -770,7 +504,7 @@ function ProfilePageContent() {
   // does not reopen the editor.
   const editParam = searchParams.get("edit");
   useEffect(() => {
-    if (profile && editParam) router.replace(activeTab === "overview" ? "/profile" : `/profile?tab=${activeTab}`, { scroll: false });
+    if (profile && editParam) router.replace(activeTab === "activity" ? "/profile" : `/profile?tab=${activeTab}`, { scroll: false });
   }, [profile, editParam, activeTab, router]);
 
   useEffect(() => {
@@ -891,7 +625,6 @@ function ProfilePageContent() {
       />
 
       <nav className="profile-tabs" aria-label="Profile sections">
-        <Link href="/profile" scroll={false} aria-current={activeTab === "overview" ? "page" : undefined}>Overview</Link>
         <Link href="/profile?tab=activity" scroll={false} aria-current={activeTab === "activity" ? "page" : undefined}>{activityLabel}</Link>
         <Link href="/profile?tab=account" scroll={false} aria-current={activeTab === "account" ? "page" : undefined}>Account</Link>
       </nav>
@@ -913,12 +646,9 @@ function ProfilePageContent() {
         </section>
       ) : null}
 
-      {activeTab === "overview" && analytics?.student ? <StudentOverview a={analytics.student} /> : null}
-      {activeTab === "overview" && analytics?.instructor ? <InstructorOverview a={analytics.instructor} /> : null}
-      {activeTab === "overview" && analytics?.admin ? <AdminOverview a={analytics.admin} /> : null}
-
-      {activeTab === "activity" && profile.role === "student" ? <DebuggerCodex userId={profile.id} /> : null}
+      {/* Progress comes first; Debugger's Codex is a reward that may still be locked. */}
       {activeTab === "activity" && analytics?.student ? <StudentSections a={analytics.student} /> : null}
+      {activeTab === "activity" && profile.role === "student" ? <DebuggerCodex userId={profile.id} /> : null}
       {activeTab === "activity" && analytics?.instructor ? <InstructorSections a={analytics.instructor} /> : null}
       {activeTab === "activity" && analytics?.admin ? <AdminSections a={analytics.admin} /> : null}
 

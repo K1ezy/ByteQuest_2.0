@@ -655,6 +655,10 @@ export default function Arena({ activityId }: { activityId: string }) {
   const statement = splitProblemStatement(
     quest.problem_statement || "Read the prompt and write a program that satisfies the sample and hidden test cases."
   );
+  // The saved visible grading cases are what Run sample checks, so they win over examples typed into the prose.
+  const samples = quest.sample_cases?.length
+    ? quest.sample_cases.map((sample) => ({ input: sample.stdin, output: sample.expected_stdout }))
+    : statement.samples;
   const revealedReviewed = hintStatus?.reviewed.filter((hint) => hint.body) ?? [];
   const lockedReviewed = hintStatus?.reviewed.filter((hint) => !hint.body) ?? [];
   const runBlockedReason = !draftLoaded ? "Waiting for your saved code to load." : !code.trim() ? "Write some code first." : "";
@@ -721,12 +725,12 @@ export default function Arena({ activityId }: { activityId: string }) {
             <div className="arena-statement">{statement.body}</div>
           </section>
 
-          {statement.samples.length > 0 && (
+          {samples.length > 0 && (
             <section className="arena-section" aria-labelledby="arena-sample-title">
-              <h2 id="arena-sample-title">{statement.samples.length === 1 ? "Example" : "Examples"}</h2>
-              {statement.samples.map((sample, index) => (
+              <h2 id="arena-sample-title">{samples.length === 1 ? "Example" : "Examples"}</h2>
+              {samples.map((sample, index) => (
                 <dl className="arena-sample" key={index}>
-                  <div><dt>Input</dt><dd><pre>{sample.input}</pre></dd></div>
+                  <div><dt>Input</dt><dd><pre>{sample.input || "(no input)"}</pre></dd></div>
                   <div><dt>Expected output</dt><dd><pre>{sample.output}</pre></dd></div>
                 </dl>
               ))}

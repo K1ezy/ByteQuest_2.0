@@ -7,7 +7,7 @@ import anyio
 import pytest
 from fastapi import HTTPException
 
-from test_learning_flow_integration import flow, _token, _challenge, _quiz, _published_activity, _graded_job, _started_quiz_exam
+from test_learning_flow_integration import HIDDEN_OUTPUT, flow, _token, _challenge, _quiz, _published_activity, _graded_job, _started_quiz_exam
 from test_faculty_admin import workspace, _token as faculty_token
 from app.models.entities import (
     ActivityAttempt, ActivityKind, Badge, ChallengeHint, CourseMember, Exam, ExamAssignment, ExamAttempt, ExamItem, HintUse,
@@ -16,10 +16,9 @@ from app.models.entities import (
 )
 from app.services.gamification.badges import evaluate_and_award_badges
 from app.services.activity_publishing import apply_publish_rules
-from app.api.faculty import activities as faculty_activities
 from app.api import chat, pilot, workshops
 from app.core.config import settings
-from app.services import exam_worker, submission_worker
+from app.services import challenge_verification, exam_worker, submission_worker
 from app.services.judge0.client import Judge0UnavailableError, judge0_client
 
 
@@ -253,37 +252,18 @@ def test_studio_and_faculty_follow_active_course_assignments(workspace):
     client, sessions, ids = workspace
     author = faculty_token(ids["faculty"])
     assigned = faculty_token(ids["other_faculty"])
-    studio = f"/api/v1/instructor/activities/{ids['draft']}"
     faculty = f"/api/v1/faculty/drafts/{ids['draft']}"
     with sessions() as db:
         db.add(CourseMember(course_id=ids["course_a"], profile_id=ids["other_faculty"],
                             member_role="instructor", status="active"))
         db.query(CourseMember).filter_by(course_id=ids["course_a"], profile_id=ids["faculty"]).one().status = "removed"
         db.commit()
-    assert client.get(studio, headers=author).status_code == 404
     assert client.get(faculty, headers=author).status_code == 403
-    assert client.get(studio, headers=assigned).status_code == 200
     assert client.get(faculty, headers=assigned).status_code == 200
     removed_workspace = client.get("/api/v1/instructor/workspace", headers=author).json()
     assigned_workspace = client.get("/api/v1/instructor/workspace", headers=assigned).json()
     assert str(ids["draft"]) not in {row["activity_id"] for row in removed_workspace["activities"]}
     assert str(ids["document"]) in {row["document_id"] for row in assigned_workspace["documents"]}
-
-
-def test_studio_and_review_queue_share_the_saved_revision(workspace):
-    client, _, ids = workspace
-    instructor = faculty_token(ids["faculty"])
-    studio = f"/api/v1/instructor/activities/{ids['draft']}"
-    faculty = f"/api/v1/faculty/drafts/{ids['draft']}"
-    detail = client.get(studio, headers=instructor).json()
-    fields = ("title", "topic_concept", "problem_statement", "difficulty_level", "xp_reward", "quiz_questions_json", "content_version")
-    payload = {key: detail[key] for key in fields}
-    updated = client.patch(f"{studio}/quiz", headers=instructor, json=payload | {"title": "Edited in Studio"})
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["content_version"] == payload["content_version"] + 1
-    for route, body in ((f"{studio}/quiz", payload), (faculty, {"title": "Stale edit", "content_version": payload["content_version"]})):
-        stale = client.patch(route, headers=instructor, json=body)
-        assert stale.status_code == 409 and stale.json()["detail"]["code"] == "version_conflict"
 
 
 def test_restricted_exam_keeps_items_out_of_practice_and_requires_course_enrollment(workspace):
@@ -379,7 +359,7 @@ def test_verification_rejects_stale_content(workspace, monkeypatch):
             target.content_version += 1
             db.commit()
         return True, {"verified": True}
-    monkeypatch.setattr(faculty_activities, "_verify_snapshot", verification)
+    monkeypatch.setattr(challenge_verification, "run_reference_check", verification)
     response = client.post(f"/api/v1/faculty/activities/{ids['draft']}/verify", headers=faculty_token(ids["faculty"]))
     assert response.status_code == 409, response.text
     with sessions() as db:
@@ -413,7 +393,7 @@ def test_review_queue_requires_judge0_verification_for_saved_content(workspace, 
         verified = reference_solution_code == f"print({expected})"
         return verified, {"verified": verified}
 
-    monkeypatch.setattr(faculty_activities, "_verify_snapshot", verification)
+    monkeypatch.setattr(challenge_verification, "run_reference_check", verification)
     checked = client.post(verify, headers=instructor)
     assert checked.status_code == 200, checked.text
     assert checked.json()["activity"]["judge0_verified"] is True
@@ -568,6 +548,12 @@ def test_quest_detail_projection_keeps_track_order_and_visibility(flow):
     cards = {item["id"]: item for item in focused.json()}
     assert cards[str(challenge_id)]["starter_code"] is None and cards[str(challenge_id)]["problem_statement"] is None
     assert cards[str(quiz_id)]["quiz_questions"] == next(item["quiz_questions"] for item in full if item["id"] == str(quiz_id))
+    assert cards[str(challenge_id)]["sample_cases"] is None and cards[str(quiz_id)]["sample_cases"] is None
+    challenge = client.get("/api/v1/quests", params={"details_for": str(challenge_id)}, headers=headers).json()
+    detail = next(item for item in challenge if item["id"] == str(challenge_id))
+    # Students see exactly the visible cases Run sample uses; the hidden case never leaves the server.
+    assert detail["sample_cases"] == [{"stdin": "2", "expected_stdout": "4"}, {"stdin": "3", "expected_stdout": "6"}]
+    assert HIDDEN_OUTPUT not in str(challenge)
     foreign = client.get("/api/v1/quests", params={"details_for": str(quiz_id)}, headers=_token(users["other_track"]))
     assert foreign.status_code == 200 and str(quiz_id) not in {item["id"] for item in foreign.json()}
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { PracticeLink } from "@/components/insights/ui";
 import { MechanicIntro, MechanicTeaser } from "@/components/mechanic-rollout";
 import { Button, Notice, StatCard, StatusChip, useApi } from "@/components/workspace/ui";
 import type { CodexCategory, CodexResponse } from "@/lib/types";
@@ -20,7 +21,7 @@ export function CodexEntry({ entry }: { entry: CodexCategory }) {
           <p className="ws-muted">{recoveries} of {nextTier} {nextTier === 1 ? "recovery" : "recoveries"} toward {TIER_LABELS[tier + 1]}</p>
         </>
       ) : <p className="ws-muted">{recoveries} recoveries · Highest tier reached</p>}
-      <p>{topics.length ? topics.join(", ") : "Not discovered yet. Fix a failing run to record your first entry."}</p>
+      <p>{topics.length ? topics.map(topic => <span key={topic}>{topic === "General" ? topic : <PracticeLink topic={topic} />}{" "}</span>) : "Not discovered yet. Fix a failing run to record your first entry."}</p>
     </article>
   );
 }

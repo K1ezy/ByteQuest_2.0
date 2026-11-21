@@ -8,6 +8,7 @@ back, so the developer's existing accounts and school data are untouched.
 from __future__ import annotations
 
 import json
+import math
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -30,6 +31,9 @@ from app.api.faculty.common import _save_activity_revision
 from app.core.config import settings
 from app.core.database import get_db
 from app.main import app
+from app.services.ml_predictor import shadow as shadow_service
+from app.services.ml_predictor.feature_engineering import FEATURE_NAMES
+from app.services.ml_predictor.predictor import PredictionResult
 from app.services.ml_predictor.shadow import has_required_prediction_history, prior_graded_task_count
 from app.models.entities import (
     ActivityAttempt,
@@ -59,7 +63,6 @@ from app.models.entities import (
 )
 from app.services.ml_predictor.exam_history import course_exam_ids, released_exam_history
 from app.services.ml_predictor.audit import record_prediction_outcome
-from app.services.ml_predictor.feature_engineering import extract_features_from_dataframe
 from app.services.ml_predictor.targets import next_course_activity
 from app.services.judge0.client import Judge0UnavailableError, judge0_client
 from app.services.monitoring import record_grading_worker_heartbeat
@@ -483,7 +486,8 @@ def test_faculty_is_scoped_to_assigned_courses(workspace):
 def test_administrator_cannot_use_academic_faculty_routes(workspace):
     client, _db, ids = workspace
     headers = _token(ids["admin"])
-    for path in (f"/api/v1/faculty/drafts/{ids['draft']}", "/api/v1/faculty/dashboard"):
+    for path in (f"/api/v1/faculty/drafts/{ids['draft']}", "/api/v1/faculty/dashboard",
+                 f"/api/v1/faculty/ml/evaluation?course_id={ids['course_a']}"):
         response = client.get(path, headers=headers)
         assert response.status_code == 403
         assert response.json()["detail"]["code"] == "faculty_instructor_required"
@@ -644,10 +648,7 @@ def test_performance_and_ml_are_course_scoped(workspace):
     assert ml.json()["summary"]["graded_events"] >= 1
     assert client.get(f"/api/v1/faculty/ml?course_id={ids['course_b']}", headers=headers).status_code == 403
     assert client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}", headers=_token(ids["student"])).status_code == 403
-    aggregate = client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_a']}", headers=headers)
-    assert aggregate.status_code == 200, aggregate.text
-    assert client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_b']}", headers=headers).status_code == 403
-    assert client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_a']}", headers=_token(ids["admin"])).status_code == 403
+    assert client.get("/api/v1/predict/instructor/analytics", headers=headers).status_code == 404
 
     assert client.get(f"/api/v1/faculty/gradebook?course_id={ids['course_b']}", headers=headers).status_code == 403
     book = client.get(f"/api/v1/faculty/gradebook?course_id={ids['course_a']}", headers=headers).json()
@@ -667,7 +668,7 @@ def test_performance_and_ml_are_course_scoped(workspace):
     ).status_code == 404
 
 
-def test_activity_analysis_totals_and_practice_scope(workspace):
+def test_activity_analysis_totals_and_practice_scope(workspace, monkeypatch):
     client, db_session, ids = workspace
     now = datetime.now(timezone.utc)
     with db_session() as db:
@@ -711,6 +712,7 @@ def test_activity_analysis_totals_and_practice_scope(workspace):
                     student_id=learner, activity_id=ids["published"], attempt_number=number,
                     score_percentage=score, is_successful=score >= 65,
                     error_category="logic_error" if learner == enrolled[0] else "syntax_error",
+                    created_at=now - timedelta(days=8) if learner == enrolled[3] else now,
                 ))
         db.add_all([
             ActivityAttempt(student_id=enrolled[0], activity_id=ids["published"], attempt_number=4,
@@ -767,6 +769,26 @@ def test_activity_analysis_totals_and_practice_scope(workspace):
     book = client.get(f"/api/v1/faculty/gradebook?course_id={ids['course_a']}", headers=headers).json()
     column = next(item for item in book["activities"] if item["activity_id"] == str(ids["published"]))
     assert (column["attempted"], column["passed"]) == (body["attempted"], body["passed"])
+    listing = client.get(f"/api/v1/faculty/activities?course_id={ids['course_a']}", headers=headers).json()
+    row = next(r for r in listing["items"] if r["activity_id"] == str(ids["published"]))
+    assert row["health"] == {k: body[k] for k in ("passed", "attempted", "stuck", "not_started", "pass_rate")}
+    snapshot = client.get(f"/api/v1/faculty/dashboard?course_id={ids['course_a']}", headers=headers).json()["class_snapshot"]
+    assert snapshot["active_7d"] + snapshot["inactive_7d"] + snapshot["need_follow_up"] == snapshot["active_learners"]
+    inactive = client.get(f"/api/v1/faculty/performance?course_id={ids['course_a']}&inactive=1", headers=headers).json()
+    assert [row["student_id"] for row in inactive["students"]] == [str(enrolled[3])]
+    assert len(inactive["students"]) == snapshot["inactive_7d"]
+    _consent(monkeypatch, db_session, ids["student"])
+    def admin_row():
+        rows = client.get("/api/v1/admin/course-health", headers=_token(ids["admin"])).json()["courses"]
+        return next(r for r in rows if r["id"] == str(ids["course_a"]))
+    aggregate = admin_row()
+    assert aggregate["research_consent"] == 1
+    assert (aggregate["active_7d"], aggregate["not_started"], aggregate["activities_passed"]) == (
+        snapshot["active_7d"], snapshot["need_follow_up"], snapshot["average_completion_percent"])
+    with db_session() as db:
+        db.add(ResearchConsent(student_id=ids["student"], document_version="test-v1", choice="declined"))
+        db.commit()
+    assert admin_row()["research_consent"] == 0
     progress = client.get(
         f"/api/v1/faculty/performance?course_id={ids['course_a']}&activity_id={ids['published']}&stuck_only=true",
         headers=headers,
@@ -895,8 +917,8 @@ def test_forecast_history_and_quality_never_cross_course_boundaries(workspace, m
             activity_type=ActivityKind.quiz, language=ProgrammingLang.python, topic_concept="arithmetic",
             title="Other course quiz", review_status=ReviewState.published, sequence_order=1)
         next_activity = LearningActivity(course_id=ids["course_a"], created_by=ids["faculty"],
-            activity_type=ActivityKind.quiz, language=ProgrammingLang.python, topic_concept="arithmetic",
-            title="Next course quiz", review_status=ReviewState.published, sequence_order=2)
+            activity_type=ActivityKind.challenge, language=ProgrammingLang.python, topic_concept="arithmetic",
+            title="Next course challenge", review_status=ReviewState.published, sequence_order=2)
         db.add_all([other_activity, next_activity])
         db.flush()
         db.add(CourseMember(course_id=ids["course_b"], profile_id=ids["student"],
@@ -918,9 +940,6 @@ def test_forecast_history_and_quality_never_cross_course_boundaries(workspace, m
                           headers=_token(ids["faculty"]))
     assert detail_a.status_code == 200
     assert detail_a.json()["predictions"] == []
-    aggregate_a = client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_a']}",
-                             headers=_token(ids["faculty"]))
-    assert aggregate_a.json()["total_predictions_logged"] == 0
     course_b = client.get(f"/api/v1/faculty/ml?course_id={ids['course_b']}", headers=_token(ids["other_faculty"]))
     assert course_b.status_code == 200, course_b.text
     evaluation_b = client.get(f"/api/v1/faculty/ml/evaluation?course_id={ids['course_b']}",
@@ -934,9 +953,7 @@ def test_forecast_history_and_quality_never_cross_course_boundaries(workspace, m
     revoked = client.get(f"/api/v1/faculty/ml/evaluation?course_id={ids['course_b']}",
                          headers=_token(ids["other_faculty"]))
     assert revoked.json()["observed"]["labeled_predictions"] == 0
-    revoked_aggregate = client.get(f"/api/v1/predict/instructor/analytics?course_id={ids['course_b']}",
-                                   headers=_token(ids["other_faculty"]))
-    assert revoked_aggregate.json()["total_predictions_logged"] == 0
+
 
 
 def test_ml_dashboard_distinguishes_history_consent_and_model_states(workspace, monkeypatch):
@@ -951,8 +968,8 @@ def test_ml_dashboard_distinguishes_history_consent_and_model_states(workspace, 
 
     with db_session() as db:
         target = LearningActivity(course_id=ids["course_a"], created_by=ids["faculty"],
-            activity_type=ActivityKind.quiz, language=ProgrammingLang.python, topic_concept="arithmetic",
-            title="Next quiz", review_status=ReviewState.published, sequence_order=2)
+            activity_type=ActivityKind.challenge, language=ProgrammingLang.python, topic_concept="arithmetic",
+            title="Next challenge", review_status=ReviewState.published, sequence_order=2)
         db.add(target)
         db.commit()
     assert client.get(course_url, headers=headers).json()["students"][0]["forecast_status"] == "missing_consent"
@@ -1061,16 +1078,10 @@ def test_public_signup_username_is_reserved_with_auth_user(workspace):
     duplicate = uuid.uuid4()
     first_school_id = f"00-{created.int % 99_999 + 1:05d}"
     second_school_id = f"01-{duplicate.int % 99_999 + 1:05d}"
-    first_email = f"signup-{created}@example.test"
     second_email = f"signup-{duplicate}@example.test"
-    roster = "/api/v1/admin/student-registration-roster"
-    assert client.put(roster, headers=_token(ids["faculty"]),
-                      json={"school_id": first_school_id, "email": first_email}).status_code == 403
-    assert client.put(roster, headers=_token(ids["admin"]),
-                      json={"school_id": "26-00000", "email": first_email}).status_code == 422
-    for school_id, email in ((first_school_id, first_email), (second_school_id, second_email)):
-        assert client.put(roster, headers=_token(ids["admin"]),
-                          json={"school_id": school_id, "email": email}).status_code == 200
+    # Students register with their enrollment School ID directly; there is no admin approval step.
+    assert client.put("/api/v1/admin/student-registration-roster", headers=_token(ids["admin"]),
+                      json={"school_id": first_school_id, "email": second_email}).status_code == 404
     sql = text("""
         INSERT INTO auth.users (id, instance_id, aud, role, email, encrypted_password, raw_user_meta_data)
         VALUES (:id, '00000000-0000-0000-0000-000000000000', 'authenticated',
@@ -1089,10 +1100,8 @@ def test_public_signup_username_is_reserved_with_auth_user(workspace):
         assert (profile.school_id, profile.year_level, profile.block_section) == (first_school_id, 3, "F")
 
     assert client.get(endpoint, params={"username": "FRESHHANDLE"}).json() == {"available": False}
-    assert client.put(roster, headers=_token(ids["admin"]),
-                      json={"school_id": first_school_id, "email": second_email}).status_code == 409
     with db_session() as db:
-        with pytest.raises(DBAPIError, match="Student registration could not be verified"):
+        with pytest.raises(DBAPIError, match="Student School ID is already registered"):
             db.execute(sql, {"id": duplicate, "email": second_email,
                              "metadata": json.dumps({"username": "SecondHandle", "school_id": first_school_id,
                                                      "year_level": 3, "block_section": "F"})})
@@ -1134,6 +1143,26 @@ def test_public_signup_username_is_reserved_with_auth_user(workspace):
         assert db.get(Profile, invited) is None
 
 
+def test_school_id_availability_matches_the_signup_rule(workspace):
+    client, db_session, _ids = workspace
+    marker = uuid.uuid4()
+    school_id = f"02-{marker.int % 99_999 + 1:05d}"
+    endpoint = "/api/v1/profile/school-id-availability"
+    assert client.post(endpoint, json={"school_id": f" {school_id} "}).json() == {"available": True}
+    assert client.post(endpoint, json={"school_id": school_id, "email": "x@example.test"}).status_code == 422
+    assert client.get(endpoint, params={"school_id": school_id}).status_code == 405
+    with db_session() as db:
+        db.execute(text("""
+            INSERT INTO auth.users (id, instance_id, aud, role, email, encrypted_password, raw_user_meta_data)
+            VALUES (:id, '00000000-0000-0000-0000-000000000000', 'authenticated',
+                    'authenticated', :email, '', CAST(:metadata AS jsonb))
+        """), {"id": marker, "email": f"check-{marker}@example.test", "metadata": json.dumps(
+            {"username": "CheckHandle", "school_id": school_id, "year_level": 1, "block_section": "A"})})
+        db.commit()
+        assert db.get(Profile, marker).school_id == school_id
+    assert client.post(endpoint, json={"school_id": school_id}).json() == {"available": False}
+
+
 def test_ml_exam_history_waits_for_release_and_uses_overall_score_once(workspace):
     client, db_session, ids = workspace
     now = datetime.now(timezone.utc)
@@ -1151,6 +1180,10 @@ def test_ml_exam_history_waits_for_release_and_uses_overall_score_once(workspace
         db.add(ActivityAttempt(student_id=ids["student"], activity_id=ids["published"], attempt_number=2,
                                exam_attempt_id=attempt.id, score_percentage=80, is_successful=True))
         db.commit()
+        from app.api.exams import released_exam_summary
+        learners = [db.get(Profile, ids["student"])]
+        assert released_exam_summary(db, exam.id, learners, []) is None
+        assert released_exam_summary(db, exam.id, learners, [attempt]) is None
         assert exam.id in course_exam_ids(db, ids["course_a"])
         assert released_exam_history(db, ids["student"], ids["course_a"]) == []
         before = client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}", headers=_token(ids["faculty"])).json()
@@ -1162,15 +1195,28 @@ def test_ml_exam_history_waits_for_release_and_uses_overall_score_once(workspace
         history = released_exam_history(db, ids["student"], ids["course_a"])
         assert len(history) == 1 and history[0]["score_percentage"] == 80.0
         assert released_exam_history(db, ids["student"], ids["course_a"], as_of=now - timedelta(hours=1)) == []
-        features = extract_features_from_dataframe([], target_difficulty=1, exam_history=history)
-        assert features["released_exam_count"] == 1
-        assert features["released_exam_average_score_pct"] == 80.0
         after = client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}", headers=_token(ids["faculty"])).json()
         assert after["students"][0]["exam_count"] == 1
         assert after["students"][0]["challenge_count"] == 1
         detail = client.get(f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_a']}",
                             headers=_token(ids["faculty"])).json()
         assert any(point["exam"] == 80.0 for point in detail["trend"])
+        summary = released_exam_summary(db, exam.id, learners, [attempt])
+        assert summary["average_percent"] == 80
+        later = ExamAttempt(exam_id=exam.id, student_id=ids["student"], attempt_number=2,
+                            status="submitted", started_at=now, due_at=now, score=90, max_score=100)
+        db.add(later)
+        db.flush()
+        item = db.query(ExamItem).filter_by(exam_id=exam.id).one()
+        db.add(ActivityAttempt(student_id=ids["student"], activity_id=ids["published"], attempt_number=3,
+                               exam_item_id=item.id, exam_attempt_id=later.id, score_percentage=90, is_successful=True))
+        db.flush()
+        assert released_exam_summary(db, exam.id, learners, [later, attempt]) == summary
+        later.result_released_at = now
+        summary = released_exam_summary(db, exam.id, learners, [later, attempt])
+        assert summary["submitted"] == 1 and summary["average_percent"] == 90
+        assert sum(b["count"] for b in summary["score_bands"]) == 1
+        assert summary["items"][0]["attempted"] == summary["items"][0]["passed"] == 1
 
 
 def test_exam_release_timestamp_is_stable_idempotent_and_scoring_failure_is_isolated(workspace, monkeypatch):
@@ -1517,6 +1563,43 @@ def _consent(monkeypatch, db_session, student_id, version="test-v1"):
         db.commit()
 
 
+def test_shadow_saves_first_submission_forecasts_and_blank_features_as_null(workspace, monkeypatch):
+    _client, db_session, ids = workspace
+    for flag in ("ML_SHADOW_ENABLED", "ML_SHADOW_RESEARCH_APPROVED"):
+        monkeypatch.setattr(settings, flag, True)
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_TEXT", "Synthetic consent text")
+    _consent(monkeypatch, db_session, ids["student"])
+    monkeypatch.setattr(shadow_service, "get_setting_int", lambda *_args: 1)
+    features = dict.fromkeys(FEATURE_NAMES, math.nan) | {"prior_attempt_count": 1.0}
+    monkeypatch.setattr(shadow_service, "predict_student_success", lambda *_args, **_kwargs: PredictionResult(
+        features=features, logreg_probability=0.7, logreg_prediction=True, rf_probability=0.3,
+        rf_prediction=False, recommended_action="advance_next_level", model_version="v3-test",
+        selected_model="logreg"))
+    with db_session() as db:
+        target = LearningActivity(course_id=ids["course_a"], created_by=ids["faculty"],
+            activity_type=ActivityKind.challenge, language=ProgrammingLang.python, topic_concept="loops",
+            title="Next challenge", review_status=ReviewState.published, sequence_order=2)
+        db.add(target)
+        db.commit()
+        student = db.get(Profile, ids["student"])
+        source = db.query(ActivityAttempt).filter_by(student_id=student.id, activity_id=ids["published"]).one()
+        assert shadow_service.record_shadow_prediction(
+            db, student=student, target_activity_id=target.id, source_attempt=source, shadow_ready=True)
+        saved = db.query(MLPrediction).filter_by(student_id=student.id, target_activity_id=target.id).one()
+        # JSONB has no NaN, so a feature without history is stored as null.
+        assert saved.features_snapshot_json["prior_pass_rate"] is None
+        assert saved.features_snapshot_json["prior_attempt_count"] == 1.0
+
+        # Once the challenge is submitted, a retry is never scored as a first submission.
+        first_try = ActivityAttempt(student_id=student.id, activity_id=target.id, attempt_number=1,
+                                    score_percentage=0, is_successful=False)
+        db.add(first_try)
+        db.commit()
+        assert not shadow_service.record_shadow_prediction(
+            db, student=student, target_activity_id=target.id, source_attempt=first_try, shadow_ready=True)
+        assert db.query(MLPrediction).filter_by(student_id=student.id, target_activity_id=target.id).count() == 1
+
+
 def test_ml_period_filter_narrows_history_without_changing_eligibility(workspace):
     client, db_session, ids = workspace
     headers = _token(ids["faculty"])
@@ -1550,7 +1633,7 @@ def test_ml_student_detail_is_scoped_to_an_enrolled_learner(workspace):
     assert detail.status_code == 200
     body = detail.json()
     assert body["student"]["student_id"] == str(ids["student"])
-    assert body["evidence"]["topic_activities_required"] >= 1
+    assert body["evidence"]["prior_tasks_required"] >= 1
     assert "features_snapshot" not in detail.text and "pseudonym_id" not in detail.text
 
     assert client.get(
@@ -1571,15 +1654,28 @@ def test_ml_evaluation_keeps_model_versions_apart_and_scores_both_models(workspa
     client, db_session, ids = workspace
     headers = _token(ids["faculty"])
     _consent(monkeypatch, db_session, ids["student"])
+    now = datetime.now(timezone.utc)
     with db_session() as db:
+        pending_target = LearningActivity(course_id=ids["course_a"], created_by=ids["faculty"],
+            activity_type=ActivityKind.challenge, language=ProgrammingLang.python, topic_concept="arithmetic",
+            title="Pending challenge", review_status=ReviewState.published, sequence_order=2)
+        db.add(pending_target)
+        db.flush()
         db.add_all([
+            # An earlier snapshot for the same learner and challenge: only the
+            # latest one counts, so this wrong logreg call never enters accuracy.
+            MLPrediction(student_id=ids["student"], target_activity_id=ids["published"],
+                         features_snapshot_json={}, logreg_prob=0.2, logreg_pred=False,
+                         rf_prob=0.2, rf_pred=False, model_version="v2-test",
+                         selected_model="logreg", actual_outcome=True,
+                         created_at=now - timedelta(minutes=5)),
             # Active version: one correct for logreg, wrong for the forest.
             MLPrediction(student_id=ids["student"], target_activity_id=ids["published"],
                          features_snapshot_json={}, logreg_prob=0.8, logreg_pred=True,
                          rf_prob=0.2, rf_pred=False, model_version="v2-test",
-                         selected_model="logreg", actual_outcome=True),
+                         selected_model="logreg", actual_outcome=True, created_at=now),
             # Active version, still pending: excluded from accuracy.
-            MLPrediction(student_id=ids["student"], target_activity_id=ids["published"],
+            MLPrediction(student_id=ids["student"], target_activity_id=pending_target.id,
                          features_snapshot_json={}, logreg_prob=0.6, logreg_pred=True,
                          rf_prob=0.6, rf_pred=True, model_version="v2-test",
                          selected_model="logreg", actual_outcome=None),
@@ -1600,7 +1696,7 @@ def test_ml_evaluation_keeps_model_versions_apart_and_scores_both_models(workspa
     assert observed["total_predictions"] == 2
     assert observed["awaiting_outcome"] == 1
     assert observed["labeled_predictions"] == 1
-    assert observed["unit"] == "prediction snapshots"
+    assert observed["unit"] == "learner-challenge predictions"
     assert observed["models"]["logreg"]["accuracy_percent"] == 100.0
     assert observed["models"]["random_forest"]["accuracy_percent"] == 0.0
 
@@ -1760,3 +1856,45 @@ def test_gamification_insights_are_course_scoped_class_aggregates(workspace):
                       headers=_token(ids["student"])).status_code == 403
     assert client.get(f"/api/v1/faculty/gamification-insights?course_id={ids['course_a']}",
                       headers=_token(ids["admin"])).status_code == 403
+
+
+def test_admin_course_health_suppresses_small_groups_and_restricts_access(workspace):
+    client, _, ids = workspace
+    path = "/api/v1/admin/course-health"
+    for role in ("faculty", "student"):
+        assert client.get(path, headers=_token(ids[role])).status_code == 403
+    result = client.get(path, headers=_token(ids["admin"])).json()
+    assert set(result) == {"generated_at", "forecast_status", "courses"}
+    row = next(r for r in result["courses"] if r["id"] == str(ids["course_a"]))
+    assert set(row) == {"id","code","title","course_status","status","instructor_count","instructors",
+                        "enrolled","published_activities","active_7d","not_started","activities_passed","research_consent"}
+    assert row["enrolled"] == 1 and row["published_activities"] > 0 and row["status"] == "insufficient_data"
+    assert all(row[k] is None for k in ("active_7d","not_started","activities_passed","research_consent"))
+    assert str(ids["student"]) not in str(result)
+    created = client.post("/api/v1/admin/courses", headers=_token(ids["admin"]),
+                          json={"code": "QA-" + uuid.uuid4().hex[:8], "title": "Empty course"}).json()["course"]
+    rows = client.get(path, headers=_token(ids["admin"])).json()["courses"]
+    empty = next(r for r in rows if r["id"] == created["id"])
+    assert (empty["instructor_count"], empty["enrolled"], empty["published_activities"]) == (0, 0, 0)
+    assert empty["research_consent"] is None
+
+
+def test_material_upload_obeys_the_admin_upload_limit(workspace):
+    """Admins set one PDF size limit, and the faculty upload path enforces it."""
+    client, sessions, ids = workspace
+    with sessions() as db:
+        db.execute(text("update public.platform_settings set value = '1'::jsonb where key = 'pdf_upload_max_mb'"))
+        db.commit()
+    oversized = b"%PDF-1.4" + bytes(10) + b"0" * (1024 * 1024 + 512 * 1024)
+    response = client.post("/api/v1/faculty/materials", headers=_token(ids["faculty"]),
+        data={"course_id": str(ids["course_a"]), "title": "Loops lesson", "language_tag": "python"},
+        files={"file": ("loops.pdf", oversized, "application/pdf")})
+    assert response.status_code == 413, response.text
+    assert response.json()["detail"]["code"] == "file_too_large"
+
+
+def test_studio_generation_is_limited_to_course_instructors(workspace):
+    """Academic authoring stays with assigned faculty; administrators use the admin routes."""
+    client, _, ids = workspace
+    assert client.get("/api/v1/instructor/workspace", headers=_token(ids["admin"])).status_code == 403
+    assert client.get("/api/v1/instructor/workspace", headers=_token(ids["faculty"])).status_code == 200

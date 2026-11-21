@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
+from datetime import datetime, timedelta, timezone
 from statistics import median
 from typing import Optional
 
@@ -14,9 +15,9 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.entities import ActivityAttempt, ActivityKind, CourseMember, HintUse, LearningActivity, Profile, ReviewState
 from app.services.course_access import resolve_workspace_course
-from app.services.workspace_common import activity_state, iso
+from app.services.workspace_common import activity_state, as_aware, iso
 from app.services.attempt_visibility import practice_attempt_clause
-from app.services.workspace_queries import class_snapshot, enrolled_students, practice_attempts_by_student, published_activity_ids, scoped_activities
+from app.services.workspace_queries import SCORE_BANDS, STUCK_ATTEMPTS, activity_health, practice_cells, score_band_index, class_snapshot, enrolled_students, practice_attempts_by_student, published_activity_ids, scoped_activities
 from app.services.gamification.insights import GamificationInsights, course_insights
 from app.services.gamification.quiz_content import parse_quiz_questions
 from app.services.gamification.sequencer import QUIZ_MASTERY_SCORE
@@ -51,6 +52,8 @@ def performance(
     activity_id: Optional[uuid.UUID] = None,
     search: Optional[str] = None,
     stuck_only: bool = False,
+    inactive: bool = False,
+    not_started: bool = False,
     user: Profile = Depends(faculty_user),
     db: Session = Depends(get_db),
 ):
@@ -67,9 +70,19 @@ def performance(
     students = enrolled_students(db, course.id)
     stats = practice_attempts_by_student(db, activity_ids, [student.id for student in students])
 
+    as_of = datetime.now(timezone.utc)
+    latest_course_stats = stats
+    if (inactive or not_started) and activity_id:
+        latest_course_stats = practice_attempts_by_student(db, [a.id for a in course_activities], [s.id for s in students])
     needle = (search or "").strip().casefold()
     rows = []
     for student in students:
+        if not_started and student.id in latest_course_stats:
+            continue
+        if inactive:
+            last = as_aware(latest_course_stats.get(student.id, {}).get("latest_at"))
+            if last is None or last >= as_of - timedelta(days=7):
+                continue
         if needle and needle not in (student.username or "").casefold() and needle not in (student.display_name or "").casefold():
             continue
         entry = stats.get(student.id, {"completed": 0, "attempts": 0, "latest_score": None, "latest_at": None})
@@ -94,7 +107,7 @@ def performance(
     scored = [item["latest_score"] for item in rows if item["latest_score"] is not None]
     if scored:
         average_score = round(sum(scored) / len(scored), 1)
-    snapshot = class_snapshot(db, course.id) if activity_id is None else None
+    snapshot = class_snapshot(db, course.id, as_of=as_of)
     return {
         "course": _course_brief(course),
         "activities": [
@@ -107,10 +120,12 @@ def performance(
         ],
         "summary": {
             "active_learners": len(students),
-            "published_activities": len(activity_ids),
-            "average_score": average_score,
-            "average_completion_percent": snapshot["average_completion_percent"] if snapshot else None,
-            "need_follow_up": sum(1 for item in rows if item["attempt_count"] == 0),
+            "published_activities": snapshot["published_activities"],
+            "average_score": snapshot["average_score"] if activity_id is None else average_score,
+            "latest_activity_title": snapshot["latest_activity_title"] if activity_id is None else selected.title or selected.topic_concept,
+            "average_completion_percent": snapshot["average_completion_percent"],
+            "need_follow_up": snapshot["need_follow_up"],
+            "as_of": iso(as_of),
             "selected_activity_id": str(activity_id) if activity_id else None,
         },
         "students": rows,
@@ -207,10 +222,6 @@ def student_performance(
     }
 
 
-# A learner is "stuck" on an activity after this many attempts without a pass.
-STUCK_ATTEMPTS = 3
-
-
 @router.get("/gradebook")
 def gradebook(
     course_id: Optional[uuid.UUID] = None,
@@ -230,31 +241,9 @@ def gradebook(
         .all()
     )
     students = enrolled_students(db, course.id)
-    cells: dict[uuid.UUID, dict[str, dict]] = {student.id: {} for student in students}
-    if activities and students:
-        rows = (
-            db.query(
-                ActivityAttempt.student_id,
-                ActivityAttempt.activity_id,
-                func.count(ActivityAttempt.id),
-                func.max(ActivityAttempt.score_percentage),
-                func.bool_or(ActivityAttempt.is_successful),
-            )
-            .filter(
-                ActivityAttempt.activity_id.in_([item.id for item in activities]),
-                ActivityAttempt.student_id.in_(list(cells)),
-                practice_attempt_clause(),
-            )
-            .group_by(ActivityAttempt.student_id, ActivityAttempt.activity_id)
-            .all()
-        )
-        for student_id, activity_id, attempts, best, passed in rows:
-            cells[student_id][str(activity_id)] = {
-                "attempts": int(attempts),
-                "best_score": round(float(best or 0.0), 1),
-                "passed": bool(passed),
-                "stuck": not passed and attempts >= STUCK_ATTEMPTS,
-            }
+    activity_ids = [item.id for item in activities]
+    cells = practice_cells(db, activity_ids, [student.id for student in students])
+    health = activity_health(cells, activity_ids)
     return {
         "course": _course_brief(course),
         "stuck_after_attempts": STUCK_ATTEMPTS,
@@ -263,8 +252,7 @@ def gradebook(
                 "activity_id": str(item.id),
                 "title": item.title or item.topic_concept,
                 "activity_type": getattr(item.activity_type, "value", item.activity_type),
-                "attempted": sum(1 for row in cells.values() if str(item.id) in row),
-                "passed": sum(1 for row in cells.values() if row.get(str(item.id), {}).get("passed")),
+                **health[item.id],
             }
             for item in activities
         ],
@@ -283,7 +271,6 @@ def gradebook(
     }
 
 
-SCORE_BANDS = ("0–19%", "20–39%", "40–59%", "60–79%", "80–100%")
 ERROR_LABELS = {
     "syntax_error": "Compilation or syntax error",
     "logic_error": "Wrong output",
@@ -360,7 +347,7 @@ def activity_analysis(
     passers = {student_id: first_pass for student_id, _, _, first_pass in by_student if first_pass is not None}
     bands = [0] * len(SCORE_BANDS)
     for _, _, best, _ in by_student:
-        bands[max(0, min(len(bands) - 1, int(best // 20)))] += 1
+        bands[score_band_index(best)] += 1
 
     errors: Counter[str] = Counter()
     hint_use = None
@@ -384,6 +371,7 @@ def activity_analysis(
 
     attempted = len(by_student)
     result = {
+        "generated_at": iso(datetime.now(timezone.utc)),
         "activity_id": str(activity.id),
         "title": activity.title or activity.topic_concept,
         "activity_type": activity.activity_type.value,

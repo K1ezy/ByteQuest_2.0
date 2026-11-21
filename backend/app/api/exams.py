@@ -8,14 +8,15 @@ from typing import Any, Literal
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import exists, func, or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, aliased
 
+from app.api.workshops import require_open
 from app.core.database import get_db
 from app.core.security import get_current_user, require_instructor
 from app.core.quotas import reserve
 from app.models.entities import (
-    ActivityKind, CourseMember, Exam, ExamAssignment, ExamAttempt, ExamItem, ExamRetakeGrant,
+    ActivityAttempt, ActivityKind, CourseMember, Exam, ExamAssignment, ExamAttempt, ExamItem, ExamRetakeGrant,
     ExamSampleRun, LearningActivity, NotificationOutbox, Profile, Workshop,
     WorkshopMember, ReviewState, TestCase, UserRole,
 )
@@ -27,10 +28,13 @@ from app.services.ml_predictor.exam_history import course_exam_ids
 from app.services.ml_predictor.shadow import record_shadow_prediction
 from app.services.ml_predictor.targets import next_course_activity
 from app.services.judge0.client import TestCaseInput, judge0_client
+from app.services.workspace_queries import SCORE_BANDS, score_band_index
 from app.services.exam_worker import answer_grace, answers_accepted_until
 from app.services.pass_mark import EXAM_PASS_MARK
 from app.services.challenge_verification import challenge_is_verified
-from app.services.course_access import active_membership_course_ids, has_course_role, may_manage_instructional_content
+from app.services.course_access import (
+    active_membership_course_ids, has_course_role, may_manage_instructional_content, student_exam_course_clause,
+)
 
 router = APIRouter(prefix="/api/v1/exams", tags=["Exams"])
 logger = logging.getLogger(__name__)
@@ -89,18 +93,11 @@ def instructor_exam(db: Session, exam_id: uuid.UUID, user: Profile) -> Exam:
     return exam
 
 
-def _student_exam_course_clause(student_id: uuid.UUID):
-    return or_(Exam.restricted_course_id.is_(None), exists().where(
-        CourseMember.course_id == Exam.restricted_course_id,
-        CourseMember.profile_id == student_id, CourseMember.member_role == "student", CourseMember.status == "active",
-    ))
-
-
 def assigned(db: Session, exam_id: uuid.UUID, student_id: uuid.UUID) -> bool:
     return db.query(ExamAssignment.id).join(Exam, Exam.id == ExamAssignment.exam_id).join(
         WorkshopMember, WorkshopMember.workshop_id == ExamAssignment.workshop_id
     ).filter(ExamAssignment.exam_id == exam_id, WorkshopMember.profile_id == student_id,
-             _student_exam_course_clause(student_id)).first() is not None
+             student_exam_course_clause(student_id)).first() is not None
 
 
 def assigned_exam_numbers(db: Session, student_id: uuid.UUID):
@@ -110,7 +107,7 @@ def assigned_exam_numbers(db: Session, student_id: uuid.UUID):
     return db.query(
         Exam.id,
         func.row_number().over(order_by=(Exam.published_at, Exam.created_at, Exam.id)).label("exam_number"),
-    ).filter(Exam.id.in_(assignments), Exam.published_at.is_not(None), _student_exam_course_clause(student_id)).subquery()
+    ).filter(Exam.id.in_(assignments), Exam.published_at.is_not(None), student_exam_course_clause(student_id)).subquery()
 
 
 def _exam_access(exam: Exam, latest: ExamAttempt | None, grant: ExamRetakeGrant | None, now: datetime):
@@ -175,9 +172,13 @@ def create_exam(body: DraftExam, user: Profile = Depends(require_instructor), db
         raise HTTPException(422, "Choose a future exam window with the close after the open.")
     if len(set(body.workshop_ids)) != len(body.workshop_ids) or len({i.activity_id for i in body.items}) != len(body.items):
         raise HTTPException(422, "Groups and activities must be unique.")
-    workshops = db.query(Workshop).filter(Workshop.id.in_(body.workshop_ids)).all()
+    workshops = db.query(Workshop).filter(Workshop.id.in_(body.workshop_ids)).order_by(
+        Workshop.id,
+    ).with_for_update().all()
     if len(workshops) != len(body.workshop_ids) or (user.role != UserRole.admin and any(g.created_by != user.id for g in workshops)):
         raise HTTPException(404, "Workshop not found.")
+    for workshop in workshops:
+        require_open(workshop)
     languages = {g.language for g in workshops}
     if len(languages) != 1:
         raise HTTPException(422, "All assigned workshops must use one language track.")
@@ -229,7 +230,7 @@ def instructor_exams(user: Profile = Depends(require_instructor), db: Session = 
 
 @router.get("/instructor/catalog")
 def exam_catalog(user: Profile = Depends(require_instructor), db: Session = Depends(get_db)):
-    workshops_query = db.query(Workshop)
+    workshops_query = db.query(Workshop).filter(Workshop.archived_at.is_(None))
     activities_query = db.query(LearningActivity).filter(
         LearningActivity.archived_at.is_(None), or_(LearningActivity.review_status == ReviewState.published,
                                                    LearningActivity.exam_only.is_(True)),
@@ -248,6 +249,47 @@ def exam_catalog(user: Profile = Depends(require_instructor), db: Session = Depe
                             "kind": a.activity_type.value, "language": a.language.value,
                             "exam_only": a.exam_only}
                            for a in activities]}
+
+
+def released_exam_summary(db: Session, exam_id: uuid.UUID, students, attempts) -> dict | None:
+    assigned_ids = {student.id for student in students}
+    latest: dict[uuid.UUID, ExamAttempt] = {}
+    for attempt in attempts:
+        if (attempt.student_id not in assigned_ids or attempt.status != "submitted"
+                or not attempt.result_released_at or attempt.score is None or not attempt.max_score):
+            continue
+        previous = latest.get(attempt.student_id)
+        if previous is None or attempt.attempt_number > previous.attempt_number:
+            latest[attempt.student_id] = attempt
+    if not latest:
+        return None
+
+    scores = [100 * attempt.score / attempt.max_score for attempt in latest.values()]
+    bands = [0] * len(SCORE_BANDS)
+    for score in scores:
+        bands[score_band_index(score)] += 1
+    distinct_learners = func.count(func.distinct(ActivityAttempt.student_id))
+    item_counts = (
+        db.query(ActivityAttempt.exam_item_id, distinct_learners,
+                 distinct_learners.filter(ActivityAttempt.is_successful.is_(True)))
+        .filter(ActivityAttempt.exam_attempt_id.in_([attempt.id for attempt in latest.values()]))
+        .group_by(ActivityAttempt.exam_item_id)
+    )
+    counts = {item_id: (attempted, passed) for item_id, attempted, passed in item_counts}
+    items = db.query(ExamItem).filter(ExamItem.exam_id == exam_id).order_by(ExamItem.position)
+    outcomes = []
+    for index, item in enumerate(items, start=1):
+        attempted, passed = counts.get(item.id, (0, 0))
+        outcomes.append({
+            "id": str(item.id), "label": (item.snapshot_json or {}).get("title") or f"Item {index}",
+            "attempted": attempted, "passed": passed,
+        })
+    return {
+        "submitted": len(latest), "assigned": len(assigned_ids),
+        "average_percent": round(sum(scores) / len(scores), 1),
+        "score_bands": [{"label": label, "count": count} for label, count in zip(SCORE_BANDS, bands)],
+        "items": outcomes,
+    }
 
 
 @router.get("/instructor/{exam_id}")
@@ -278,7 +320,7 @@ def instructor_exam_detail(exam_id: uuid.UUID, user: Profile = Depends(require_i
             "results_released": attempt.result_released_at is not None,
             "xp_awarded": result.get("pending_xp") if result.get("xp_released") else None,
         })
-    return {"id": exam.id, "title": exam.title,
+    return {"id": exam.id, "title": exam.title, "summary": released_exam_summary(db, exam.id, students, attempts),
             "workshops": [{"id": g.id, "name": g.name} for g in workshops],
             "students": [{"id": s.id, "alias": s.username,
                           "attempts": len(attempts_by_student.get(s.id, ())),
@@ -544,9 +586,11 @@ def student_exam(exam_id: uuid.UUID, user: Profile = Depends(get_current_user), 
 
 @router.post("/{exam_id}/start")
 def start_exam(exam_id: uuid.UUID, user: Profile = Depends(get_current_user), db: Session = Depends(get_db)):
-    if user.role != UserRole.student or not assigned(db, exam_id, user.id):
+    if user.role != UserRole.student:
         raise HTTPException(404, "Assigned exam not found.")
     db.query(Profile).filter(Profile.id == user.id).with_for_update().one()
+    if not assigned(db, exam_id, user.id):
+        raise HTTPException(404, "Assigned exam not found.")
     exam = db.get(Exam, exam_id)
     now = utcnow()
     attempts = db.query(ExamAttempt).filter(ExamAttempt.exam_id == exam_id,
@@ -573,7 +617,7 @@ def start_exam(exam_id: uuid.UUID, user: Profile = Depends(get_current_user), db
 def own_attempt(db: Session, attempt_id: uuid.UUID, user: Profile, *, lock: bool = False) -> ExamAttempt:
     query = db.query(ExamAttempt).join(Exam, Exam.id == ExamAttempt.exam_id).filter(
         ExamAttempt.id == attempt_id, ExamAttempt.student_id == user.id,
-        _student_exam_course_clause(user.id),
+        student_exam_course_clause(user.id),
     )
     if lock:
         query = query.with_for_update(of=ExamAttempt)

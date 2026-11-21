@@ -5,7 +5,7 @@ import { useWorkspace } from "@/components/workspace/workspace-provider";
 import { useApi } from "@/components/workspace/ui";
 import { GamificationInsightsView, type GamificationInsightsData } from "@/components/instructor/gamification-insights";
 import { InlineEmpty, InlineError, PageHeader, RowSkeleton, Section, StatSkeleton } from "@/components/instructor/course-ui";
-import { formatManilaDateTime } from "@/lib/activity-date";
+import { UpdatedAt } from "@/components/insights/ui";
 
 function Insights({ courseId }: { courseId: string | null }) {
   const path = courseId ? `/faculty/gamification-insights?${new URLSearchParams({ course_id: courseId })}` : null;
@@ -35,7 +35,7 @@ function Insights({ courseId }: { courseId: string | null }) {
         ) : (
           <>
             <GamificationInsightsView data={data} topic={topic} />
-            <p className="ws-row-meta">Updated {formatManilaDateTime(data.generated_at)}</p>
+            <UpdatedAt at={data.generated_at}/>
           </>
         )
       ) : null}

@@ -10,7 +10,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api.quests_gamification import gamification_router, router as quests_router
 from app.api.reviews import router as reviews_router
 from app.api.workshops import router as workshops_router
-from app.api.ml_analytics import router as ml_analytics_router
 from app.api.profiles import router as profiles_router
 from app.api.pilot import router as pilot_router
 from app.api.submission_jobs import router as submission_jobs_router
@@ -133,7 +132,6 @@ app.include_router(rag_instructor_router)
 app.include_router(faculty_router)
 app.include_router(faculty_ml_router)
 app.include_router(admin_router)
-app.include_router(ml_analytics_router)
 app.include_router(profiles_router)
 app.include_router(pilot_router)
 app.include_router(submission_jobs_router)

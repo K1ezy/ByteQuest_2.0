@@ -22,6 +22,7 @@ from app.models.entities import (
     ProgrammingLang,
     ReviewState,
     StudentBadge,
+    TestCase,
     UserRole,
 )
 from app.services.gamification.badges import award_badges
@@ -71,6 +72,11 @@ class QuizSubmissionRequest(BaseModel):
     time_spent_seconds: int = Field(default=0, ge=0, le=86_400)
 
 
+class SampleCase(BaseModel):
+    stdin: str
+    expected_stdout: str
+
+
 class QuestCard(BaseModel):
     id: uuid.UUID
     title: Optional[str] = None
@@ -93,6 +99,8 @@ class QuestCard(BaseModel):
     is_closed: bool = False
     pass_mark_percent: int | None = None
     quiz_questions: Optional[list[PublicQuizQuestion]] = None
+    # Visible grading cases only; hidden cases never leave the server.
+    sample_cases: Optional[list[SampleCase]] = None
 
 
 class NextStepRecommendation(BaseModel):
@@ -261,6 +269,21 @@ def list_published_quests(
         completed_activity_ids = set()
         challenge_stars = {}
 
+    detail_challenge_ids = [
+        activity.id for activity in activities
+        if activity.activity_type == ActivityKind.challenge and (details_for is None or activity.id == details_for)
+    ]
+    samples: dict[uuid.UUID, list[SampleCase]] = {}
+    if detail_challenge_ids:
+        for case in (
+            db.query(TestCase)
+            .filter(TestCase.activity_id.in_(detail_challenge_ids), TestCase.is_hidden.is_(False))
+            .order_by(TestCase.order_index.asc())
+        ):
+            samples.setdefault(case.activity_id, []).append(
+                SampleCase(stdin=case.stdin, expected_stdout=case.expected_stdout)
+            )
+
     quests: list[QuestCard] = []
     for activity in activities:
         include_detail = details_for is None or activity.id == details_for
@@ -301,6 +324,7 @@ def list_published_quests(
                 is_closed=activity_is_closed(activity, now),
                 pass_mark_percent=(activity.pass_mark_percent or 100) if activity.activity_type == ActivityKind.challenge else None,
                 quiz_questions=public_questions,
+                sample_cases=samples.get(activity.id, []) if activity.id in detail_challenge_ids else None,
             )
         )
     for position, quest in enumerate(quests, start=1):

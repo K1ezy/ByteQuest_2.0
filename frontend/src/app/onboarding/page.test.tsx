@@ -4,6 +4,7 @@ import OnboardingPage from "./page";
 
 const auth = vi.hoisted(() => ({
   signUp: vi.fn(),
+  checkSignup: vi.fn(),
   signIn: vi.fn(),
   reset: vi.fn(),
   query: new URLSearchParams(),
@@ -12,7 +13,7 @@ const auth = vi.hoisted(() => ({
 
 vi.mock("next/navigation", () => ({ useRouter: () => auth.router, useSearchParams: () => auth.query }));
 vi.mock("@/components/app-shell", () => ({ AppShell: ({ children }: { children: React.ReactNode }) => children }));
-vi.mock("@/lib/student-signup", () => ({ signUpStudent: auth.signUp }));
+vi.mock("@/lib/student-signup", () => ({ signUpStudent: auth.signUp, checkStudentSignup: auth.checkSignup }));
 vi.mock("@/lib/supabase", () => ({ getSupabase: () => ({ auth: {
   getSession: async () => ({ data: { session: null } }),
   onAuthStateChange: () => ({ data: { subscription: { unsubscribe: vi.fn() } } }),
@@ -20,7 +21,7 @@ vi.mock("@/lib/supabase", () => ({ getSupabase: () => ({ auth: {
   resetPasswordForEmail: auth.reset,
 } }) }));
 
-beforeEach(() => { auth.query = new URLSearchParams(); });
+beforeEach(() => { auth.query = new URLSearchParams(); auth.checkSignup.mockResolvedValue(undefined); });
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 async function openAuth(query = "") {
@@ -105,13 +106,15 @@ it("requires both policy panels and acknowledgments on each visit and submits on
   fireEvent.change(screen.getByLabelText("Year level"), { target: { value: "3" } });
   fireEvent.change(screen.getByLabelText("Block section"), { target: { value: "F" } });
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-  const agree = screen.getByRole<HTMLButtonElement>("button", { name: "I agree" });
+  const agree = await screen.findByRole<HTMLButtonElement>("button", { name: "I agree" });
+  expect(auth.checkSignup).toHaveBeenCalledWith("learner@example.test", "password", "AdaHandle", { schoolId: "26-00123", yearLevel: 3, blockSection: "F" });
   expect(agree.disabled).toBe(true);
   expect(screen.getAllByRole<HTMLInputElement>("checkbox").every((box) => box.disabled)).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "I disagree" }));
   expect(auth.signUp).not.toHaveBeenCalled();
   expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe("password");
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await screen.findByRole("button", { name: "I agree" });
   for (const policy of ["Terms of Service", "Privacy Policy"]) {
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "I agree" }).disabled).toBe(true);
     const panel = screen.getByRole("region", { name: policy });
@@ -142,8 +145,26 @@ it("unlocks acknowledgment when the document already fits", async () => {
   fireEvent.change(screen.getByLabelText("Year level"), { target: { value: "3" } });
   fireEvent.change(screen.getByLabelText("Block section"), { target: { value: "F" } });
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await screen.findByRole("button", { name: "I agree" });
   expect(screen.getAllByRole<HTMLInputElement>("checkbox").every((box) => !box.disabled)).toBe(true);
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "I agree" }).disabled).toBe(true);
+});
+
+it("stops an already-used School ID on the details step, before the Terms", async () => {
+  auth.checkSignup.mockRejectedValueOnce(new Error("This School ID is already registered to an account."));
+  await openAuth();
+  for (const name of ["Sign up", "Student"]) fireEvent.click(screen.getByRole("button", { name }));
+  for (const [label, value] of Object.entries({
+    Username: "Learner", "Email address": "learner@example.test", Password: "password",
+    "School ID": "26-00123", "Year level": "3", "Block section": "F",
+  })) {
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect((await screen.findByRole("status")).textContent).toContain("already registered to an account");
+  expect(screen.queryByRole("button", { name: "I agree" })).toBeNull();
+  expect((screen.getByLabelText("School ID") as HTMLInputElement).value).toBe("26-00123");
+  expect(auth.signUp).not.toHaveBeenCalled();
 });
 
 it("shows a duplicate-email error beside the agreement actions and prefills sign-in", async () => {
@@ -157,8 +178,8 @@ it("shows a duplicate-email error beside the agreement actions and prefills sign
     fireEvent.change(screen.getByLabelText(label), { target: { value } });
   }
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  const agree = await screen.findByRole("button", { name: "I agree" });
   for (const box of screen.getAllByRole("checkbox")) fireEvent.click(box);
-  const agree = screen.getByRole("button", { name: "I agree" });
   fireEvent.click(agree);
   const error = await screen.findByRole("alert");
   expect(error.textContent).toContain("An account already uses this email");

@@ -1,8 +1,8 @@
 # ML features and prediction unit: manuscript vs. code
 
-**Status:** design note for the thesis adviser. No ML code has been changed.
-Changing the feature set or the prediction unit after pilot data is collected means
-retraining from scratch and discarding comparisons, so decide before the pilot.
+**Status:** superseded on 11/21/26 by the [ML improvement plan](ML_IMPROVEMENT_PLAN.md).
+The code now uses the manuscript's ten features and one row per learner and challenge
+at its first graded submission. This note is kept as the record of the gap it describes.
 
 ## 1. The two feature sets
 

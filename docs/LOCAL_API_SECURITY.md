@@ -8,13 +8,19 @@ shared-computer sign-out also clears local draft backups.
 
 ## School-issued IDs for student sign-up
 
-In **Admin → Accounts → Approve student sign-up**, enter the School ID and
-email from the official enrollment roster. For example, `26-00005` is a valid
-ID format. An unclaimed approval can be corrected by saving it again with the
-same ID and the updated roster email. The roster is private. A successful
-student registration claims the matched ID and email in the same database
-transaction as profile creation. The student confirms their email before
-signing in. For local testing, open the confirmation email in Mailpit at
+Students register with the School ID they received at enrollment, with no
+admin approval. The format is a two-digit year, a hyphen and a five-digit
+registration number starting at `00001`, for example `26-00005`. The sign-up
+trigger rejects any other format and any ID that another account already holds.
+A unique index on student School IDs also blocks two simultaneous sign-ups with
+one ID. `POST /api/v1/profile/school-id-availability` lets the form report a
+taken ID before the Terms step. It is capped globally and is only a hint; the
+trigger decides. The first person to register an ID owns it, so an admin must
+correct any ID registered by the wrong person. Email confirmation is turned off
+for now (`enable_confirmations = false` in `supabase/config.toml`), so a new
+account signs in immediately. To restore it, set that value back to `true` and
+restart local Supabase; the sign-up page already handles both modes. With
+confirmation on, local confirmation emails appear in Mailpit at
 `http://127.0.0.1:15434`.
 
 ## Access matrix
@@ -26,8 +32,8 @@ signing in. For local testing, open the confirmation email in Mailpit at
 | Published quests, alias leaderboard | 401 | Published track content | Published content | Published content |
 | Progress, dashboard, drafts, hints, consent | 401 | Own data and published track activities | 403 | 403 |
 | `/api/v1/submission-jobs` | 401 | Create and read own jobs | 403 for create, 404 for other jobs | 403 for create, 404 for other jobs |
-| Workshops (`/api/v1/workshops`) | 401 | Join by code and list joined workshops | Create and manage owned workshops; list joined workshops | May manage any workshop by ID |
-| Instructor documents, activities, student group summary, analytics | 401 | 403 | Own documents, activities, and groups; aggregate analytics | Cross-instructor override |
+| Workshops (`/api/v1/workshops`) | 401 | Join by code, read joined workshops and leave when allowed | Create and manage owned workshops and read joined workshops | List and manage workshops |
+| Instructor documents, activities and analytics | 401 | 403 | Own documents and activities, plus scoped analytics | Cross-instructor override |
 | Instructor exam management | 401 | 403 | Own exams and groups | Cross-instructor override |
 | Student exams and attempts | 401 | Assigned published exams and own attempts | No student attempt access | No student attempt access |
 
@@ -35,6 +41,20 @@ Foreign instructor resources return 404. A role mismatch on a non-resource
 endpoint returns 403. Student responses never include hidden test inputs or
 unreleased exam results. Research collection, shadow scoring, exports, and
 outbound mail remain disabled until their separate approval gates.
+
+Workshop details and invitations (11/21/26) use the stored role and membership.
+Join codes appear in owner and administrator responses and in the explicit
+invite link. Joining sends the code in the request body. Postgres permanently
+reserves issued codes, including the codes assigned when the reservation
+migration runs. Resetting a code or removing a workshop leaves its issued
+codes reserved. Student People
+responses contain classmate usernames only. Owners and administrators can read
+student roster fields and practice progress. The owner creates Workshop
+announcements, and administrators can moderate existing posts. Archived
+workshops reject writes until restored and still serve existing members.
+Leaving or removal returns 409 if the student has an active, unsubmitted exam
+attempt assigned through that workshop. New exam assignments require an active
+workshop.
 
 Student chat and practice hint endpoints return `403` with `detail.code=exam_in_progress`
 while a timed exam or retake can still accept answers. This includes the final
@@ -59,6 +79,8 @@ from AI cost quotas: a failed AI hint spends provider quota, but not a hint.
 | Practice quiz submissions | 10/minute per student |
 | Workshop-code attempts, including invalid codes | 12/hour per account |
 | Workshop creation | 5/hour per instructor |
+| Workshop code reset | 5/hour per managing account |
+| Workshop announcement posts and edits | 20/hour per managing account |
 | Instructor code verification | 5/minute per instructor |
 | Student AI hints | 3/hour and 10/day per student |
 | Instructor AI draft generation | 2/hour and 8/day per instructor |
@@ -75,8 +97,8 @@ file-size limit for new uploads.
 
 ## Local verification and future deployment
 
-Run `supabase db push --local --yes` from the repository root after pulling a
-new migration. `infra/start-local.ps1` does this during normal startup. Run
+Run `supabase migration up --local` from the repository root to apply pending
+migrations while retaining local data. Run
 the backend tests from `backend` with `.venv/Scripts/python.exe -m pytest -q`.
 With the local API and grading worker running, use
 `.venv/Scripts/python.exe tests/load_test_local_synthetic.py` from `backend`

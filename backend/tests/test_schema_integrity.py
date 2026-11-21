@@ -62,9 +62,6 @@ def test_signup_roles_with_local_staff_registration_enabled(db: Session, role: s
     user_id = uuid.uuid4()
     email = f"{user_id.hex}@example.test"
     school_id = f"00-{user_id.int % 99_999 + 1:05d}"
-    if role == "student":
-        db.execute(text("INSERT INTO bytequest_private.student_registration_roster (school_id, email) VALUES (:id, :email)"),
-                   {"id": school_id, "email": email})
     insert = text(
         "INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES (:id, :email, CAST(:metadata AS jsonb))"
     )

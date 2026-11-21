@@ -54,17 +54,32 @@ export interface Quest {
   is_closed?: boolean;
   pass_mark_percent?: number | null;
   quiz_questions?: QuizQuestion[] | null;
+  /** Visible grading cases for a challenge; hidden cases are never sent. */
+  sample_cases?: { stdin: string; expected_stdout: string }[] | null;
 }
 
-export interface Workshop {
+export interface WorkshopClassroomDetails {
+  block?: string | null;
+  year_level?: number | null;
+  subject?: string | null;
+  room?: string | null;
+}
+
+export interface Workshop extends WorkshopClassroomDetails {
   id: string;
   name: string;
   description: string | null;
   language: ProgrammingLanguage;
   is_owner: boolean;
+  owned_by_me: boolean;
   join_code: string | null;
+  joining_enabled: boolean;
+  archived: boolean;
+  owner_name: string;
   member_count: number;
   activity_ids: string[];
+  activities: { activity_id: string; topic: string | null; position: number; added_at: string }[];
+  next_closes_at?: string | null;
 }
 
 export interface Evaluation {

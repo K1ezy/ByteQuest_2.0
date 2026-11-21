@@ -7,6 +7,7 @@ import { ApiError, getErrorMessage } from "@/lib/api";
 import { safeReturnTo, useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
 import { StudentPreviewCard } from "@/components/workspace/student-preview";
 import { SaveConflict } from "@/components/instructor/save-conflict";
+import { PageHeader } from "@/components/instructor/course-ui";
 import {
   Button,
   ConfirmDialog,
@@ -14,7 +15,6 @@ import {
   FieldError,
   LoadingPanel,
   Notice,
-  PageHeading,
   StatusChip,
   useApi,
 } from "@/components/workspace/ui";
@@ -342,7 +342,7 @@ function DraftWorkspace() {
       setApproveOpen(false);
       setApproveChecked(false);
       setPublished(true);
-      setNotice({ tone: "success", text: `${result.message} The review queue is updated.` });
+      setNotice({ tone: "success", text: `${result.message} The Review drafts list is updated.` });
       reload();
       await refreshCourses();
     } catch (caught) {
@@ -356,13 +356,13 @@ function DraftWorkspace() {
   if (error && !data) {
     return (
       <section className="ws-panel" role="alert">
-        <PageHeading eyebrow="DRAFT WORKSPACE" title="Draft unavailable" description={friendlyLoadError(error)} />
+        <PageHeader title="Draft unavailable" subtitle={friendlyLoadError(error)} />
         <div className="ws-inline-actions">
           <Button variant="primary" onClick={reload}>
             Retry
           </Button>
           <Link className="button button-outline" href={returnTo}>
-            Back to review queue
+            Back to Review drafts
           </Link>
         </div>
       </section>
@@ -370,7 +370,7 @@ function DraftWorkspace() {
   }
   if (!data || !form) {
     return (
-      <EmptyState title="Draft not found" action={<Link className="button button-outline" href={returnTo}>Back to review queue</Link>}>
+      <EmptyState title="Draft not found" action={<Link className="button button-outline" href={returnTo}>Back to Review drafts</Link>}>
         The draft may have moved or your course access changed.
       </EmptyState>
     );
@@ -381,10 +381,9 @@ function DraftWorkspace() {
 
   return (
     <>
-      <PageHeading
-        eyebrow="DRAFT WORKSPACE"
+      <PageHeader
         title={data.title || "Untitled draft"}
-        description={
+        subtitle={
           <>
             {data.course?.title} · {data.activity_type === "quiz" ? "Quiz" : "Coding challenge"} · version{" "}
             {data.version_number} · saved {formatDateTime(data.updated_at || data.created_at)}
@@ -405,7 +404,7 @@ function DraftWorkspace() {
         }
         actions={
           <Link className="button button-outline" href={returnTo}>
-            ← Back to review queue
+            ← Back to Review drafts
           </Link>
         }
       />

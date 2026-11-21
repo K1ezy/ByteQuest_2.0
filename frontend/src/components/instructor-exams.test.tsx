@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import InstructorExamsPage from "./instructor-exams";
+import InstructorExamsPage, { examStage } from "./instructor-exams";
 
 const request = vi.hoisted(() => vi.fn());
 vi.mock("@/components/app-shell", () => ({ useShellProfile: () => ({ role: "instructor" }) }));
@@ -100,4 +100,33 @@ it("shows only exam-only content in restricted assessments", async () => {
   expect(screen.queryByRole("checkbox", { name: /^Loops/ })).toBeNull();
   expect(screen.getByRole("checkbox", { name: /Private loops/ })).toBeDefined();
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "Create and publish exam" }).disabled).toBe(true);
+});
+
+it("names each exam's stage, with the results state once published", () => {
+  const exam = { id: "e", title: "Term exam", opens_at: "2027-01-09T01:00:00Z", closes_at: "2027-01-09T02:00:00Z",
+    published: true, results_released: false };
+  expect(examStage({ ...exam, published: false })).toBe("Draft");
+  expect(examStage(exam, Date.parse("2027-01-09T00:00:00Z"))).toBe("Scheduled · Results held");
+  expect(examStage(exam, Date.parse("2027-01-09T01:30:00Z"))).toBe("Open · Results held");
+  expect(examStage({ ...exam, results_released: true, has_unreleased_results: true }, Date.parse("2027-01-10T00:00:00Z")))
+    .toBe("Closed · New results held");
+});
+
+it("asks before releasing results and releases only on confirmation", async () => {
+  const exam = { id: "term", title: "Term exam", opens_at: "2027-01-09T01:00:00Z", closes_at: "2027-01-09T02:00:00Z",
+    published: true, results_released: false };
+  request.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === "/exams/instructor/catalog") return { workshops, activities };
+    if (path === "/exams/instructor") return [exam];
+    if (path === "/exams/instructor/term/release" && init?.method === "POST") return {};
+    throw new Error(`Unexpected request to ${path}`);
+  });
+  render(<InstructorExamsPage />);
+  fireEvent.click(await screen.findByRole("button", { name: "Release results" }));
+  const dialog = await screen.findByRole("dialog", { name: "Release results?" });
+  expect(dialog.textContent).toContain("Term exam");
+  expect(request.mock.calls.some(([path]) => String(path).endsWith("/release"))).toBe(false);
+  fireEvent.click(screen.getAllByRole("button", { name: "Release results" }).at(-1)!);
+  await screen.findByText("Results released to students.");
+  expect(request.mock.calls.filter(([path]) => String(path).endsWith("/release"))).toHaveLength(1);
 });

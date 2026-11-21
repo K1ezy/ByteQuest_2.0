@@ -64,3 +64,45 @@ it("explains a touch long press without firing the action and lets a normal tap 
   expect(action).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("tooltip")).toBeNull();
 });
+
+it("labels icon-only controls visually without repeating their name as a description", () => {
+  render(<>
+    <a href="/instructor#recent" aria-label="Recent course activity"><svg aria-hidden="true" /></a>
+    <button aria-label="Close dialog">Close</button>
+    <AppTooltips />
+  </>);
+  const icon = screen.getByRole("link", { name: "Recent course activity" });
+  fireEvent.pointerOver(icon, { pointerType: "mouse" });
+  advance(350);
+  expect(screen.getByRole("tooltip").textContent).toBe("Recent course activity");
+  expect(icon.hasAttribute("aria-describedby")).toBe(false);
+
+  fireEvent.pointerOut(icon, { pointerType: "mouse", relatedTarget: document.body });
+  advance(180);
+  fireEvent.pointerOver(screen.getByRole("button", { name: "Close dialog" }), { pointerType: "mouse" });
+  advance(350);
+  expect(screen.queryByRole("tooltip")).toBeNull();
+});
+
+it("opens plain-text help on tap and leaves a link's native long press alone", () => {
+  render(<>
+    <span data-tooltip="3 or more attempts without passing">2 stuck</span>
+    <a href="/quests" data-tooltip="Open the Quest Map.">Quests</a>
+    <AppTooltips />
+  </>);
+  const chip = screen.getByText("2 stuck");
+  fireEvent.pointerDown(chip, { pointerType: "touch" });
+  fireEvent.pointerUp(chip, { pointerType: "touch" });
+  fireEvent.click(chip, { detail: 1 });
+  expect(screen.getByRole("tooltip").textContent).toBe("3 or more attempts without passing");
+
+  fireEvent.pointerDown(chip, { pointerType: "touch" });
+  fireEvent.click(chip, { detail: 1 });
+  expect(screen.queryByRole("tooltip")).toBeNull();
+
+  const link = screen.getByRole("link", { name: "Quests" });
+  fireEvent.pointerDown(link, { pointerType: "touch" });
+  advance(550);
+  expect(screen.queryByRole("tooltip")).toBeNull();
+  expect(fireEvent.contextMenu(link)).toBe(true);
+});

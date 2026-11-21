@@ -16,6 +16,16 @@ from app.models.entities import Exam
 from qa_mixed_exam_load import prepare_exam, utcnow
 
 
+async def held_grade(session, token: str, attempt_id: str) -> dict:
+    path = f"/exams/attempts/{attempt_id}"
+    for _ in range(40):
+        held = (await session.call(token, "GET", path)).json()
+        if held["status"] == "submitted":
+            return held
+        await asyncio.sleep(1)
+    raise TimeoutError("The exam did not reach its held grade.")
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--responsive", action="store_true", help="Run the localhost viewport matrix.")
@@ -46,8 +56,20 @@ async def main() -> None:
                             for account in state["accounts"] if not account["outside_course"]}
                 fixture = {"exam_id": exam_id, "challenge_id": ids["double"], "quiz_id": ids["quiz"],
                            "course_id": state["course_id"], "accounts": accounts, "code": qa.REFERENCE}
-                await asyncio.to_thread(subprocess.run, ["node", str(qa.ROOT / "frontend/scripts/qa-responsive.mjs")],
-                                        input=json.dumps(fixture), text=True, check=True, timeout=260)
+                async def inspect_viewports(phase):
+                    await asyncio.to_thread(subprocess.run, ["node", str(qa.ROOT / "frontend/scripts/qa-responsive.mjs")],
+                                            input=json.dumps({**fixture, "phase": phase}), text=True, check=True, timeout=1200)
+                await inspect_viewports("student")
+                # Inspect the class summary from the same exam the browser just exercised.
+                exam = (await session.call(token, "GET", f"/exams/{exam_id}")).json()
+                await session.call(token, "POST", f"/exams/attempts/{exam['latest_attempt_id']}/submit")
+                # The worker clears its claim once it grades, so wait on the result rather than the claim.
+                await held_grade(session, token, exam["latest_attempt_id"])
+                with qa.SessionLocal.begin() as db:
+                    db.get(Exam, uuid.UUID(exam_id)).closes_at = utcnow() - timedelta(seconds=1)
+                await session.call(instructor, "POST", f"/exams/instructor/{exam_id}/release")
+                assert not session.failures, session.failures
+                await inspect_viewports("staff")
                 return
             final = qa.REFERENCE + "# Restored after losing the browser connection\n"
             fixture = {"exam_id": exam_id, "email": learner["email"],
@@ -55,15 +77,8 @@ async def main() -> None:
             await asyncio.to_thread(subprocess.run, ["node", str(qa.ROOT / "frontend/scripts/qa-exam-mobile.mjs")],
                                     input=json.dumps(fixture), text=True, check=True, timeout=125)
             exam = (await session.call(token, "GET", f"/exams/{exam_id}")).json()
-            attempt_id = exam["latest_attempt_id"]
-            path = f"/exams/attempts/{attempt_id}"
-            for _ in range(40):
-                held = (await session.call(token, "GET", path)).json()
-                if held["status"] == "submitted":
-                    break
-                await asyncio.sleep(1)
-            else:
-                raise TimeoutError("The exam did not reach its held grade.")
+            path = f"/exams/attempts/{exam['latest_attempt_id']}"
+            held = await held_grade(session, token, exam["latest_attempt_id"])
             assert held["result"] is None and final in held["answers"].values()
             with qa.SessionLocal.begin() as db:
                 db.get(Exam, uuid.UUID(exam_id)).closes_at = utcnow() - timedelta(seconds=1)

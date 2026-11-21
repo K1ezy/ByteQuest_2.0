@@ -93,6 +93,15 @@ export default function SubmissionStatusPage() {
   const isQueued = job?.status === "queued";
   const isRunning = job?.status === "running";
   const isDelayed = (isQueued || isRunning) && waitedSeconds >= 60;
+  const passed = Boolean(finished && job?.result?.evaluation.is_successful);
+  const lead = finished
+    ? passed ? "Your official attempt is recorded and passed." : "Your official attempt is recorded. Refine your code and submit again when ready."
+    : isFailed ? "Your submitted code is saved. Retry grading uses that same code."
+    : "Your submission is saved. You can leave this page and return to check the result.";
+  // One short announcement per state change; the card itself is not a live region.
+  const announcement = !job ? "" : finished
+    ? `Grading complete: ${job.result?.evaluation.passed_test_cases} of ${job.result?.evaluation.total_test_cases} tests passed.`
+    : isFailed ? "Grading could not finish. Retry is available." : isRunning ? "Running tests." : "Waiting to be graded.";
 
   return (
     <div className="page-shell pilot-dashboard">
@@ -117,9 +126,8 @@ export default function SubmissionStatusPage() {
           ? "Grading could not finish"
           : "Grading in progress"}
       </h1>
-      <p className="pilot-lead">
-        Your submission is saved. You can leave this page and return to check the result.
-      </p>
+      <p className="pilot-lead">{lead}</p>
+      <p className="sr-only" role="status">{announcement}</p>
 
       {/* Progressive State Stepper */}
       <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs">
@@ -198,9 +206,8 @@ export default function SubmissionStatusPage() {
       {!job && !error && <p role="status">Loading submission status…</p>}
 
       {job && (
-        <section className="pilot-card" aria-live="polite">
+        <section className="pilot-card" aria-label="Submission result">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
-            <span className="text-xs font-semibold text-slate-500 font-mono">Job ID: {job.id}</span>
             <span
               className={`rounded-full px-2.5 py-0.5 text-xs font-bold uppercase ${
                 finished
@@ -299,8 +306,6 @@ export default function SubmissionStatusPage() {
             </div>
           )}
 
-          {finished && job.id === id && !job.dry_run_only && <SubmissionComparisonPanel key={job.id} jobId={job.id} />}
-
           <div className="pilot-actions mt-5 pt-3 border-t border-slate-100 flex flex-wrap gap-3">
             {isFailed && (
               <button type="button" className="button button-primary" onClick={() => void retryGrading()} disabled={retrying}>
@@ -314,6 +319,9 @@ export default function SubmissionStatusPage() {
               Dashboard
             </Link>
           </div>
+          {finished && job.id === id && !job.dry_run_only && <SubmissionComparisonPanel key={job.id} jobId={job.id} />}
+          <p className="ws-row-meta submission-reference">Support reference: <code>{job.id}</code></p>
+
         </section>
       )}
     </div>

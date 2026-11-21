@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { ApiError, getErrorMessage } from "@/lib/api";
-import { formatStudentSchoolId, STUDENT_SCHOOL_ID_ERROR, STUDENT_SCHOOL_ID_PATTERN } from "@/lib/school-id";
 import { useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
 import {
   Button,
@@ -21,7 +20,6 @@ import {
   useApi,
 } from "@/components/workspace/ui";
 import {
-  approveStudentRegistration,
   createAccount,
   deactivateAccount,
   formatDateTime,
@@ -32,55 +30,6 @@ import {
 } from "@/lib/workspace";
 
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
-function StudentRegistrationApproval() {
-  const [schoolId, setSchoolId] = useState("");
-  const [email, setEmail] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [result, setResult] = useState<{ tone: "success" | "error"; message: string } | null>(null);
-
-  async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSaving(true);
-    setResult(null);
-    try {
-      const response = await approveStudentRegistration(schoolId, email.trim());
-      setResult({ tone: "success", message: response.message });
-      setSchoolId("");
-      setEmail("");
-    } catch (error) {
-      setResult({ tone: "error", message: getErrorMessage(error) });
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <details className="ws-panel">
-      <summary>Approve student sign-up</summary>
-      <p className="ws-muted" id="student-approval-help">Enter the ID and email from the official school roster.</p>
-      <form className="ws-form-grid" onSubmit={(event) => void save(event)} aria-describedby="student-approval-help">
-        <div className="ws-field">
-          <label htmlFor="student-approval-id">School ID</label>
-          <input id="student-approval-id" required inputMode="numeric" maxLength={8} pattern={STUDENT_SCHOOL_ID_PATTERN}
-            title={STUDENT_SCHOOL_ID_ERROR} placeholder="26-00001" value={schoolId} onChange={(event) => {
-              const value = formatStudentSchoolId(event.target.value);
-              if (value !== null) setSchoolId(value);
-            }} />
-        </div>
-        <div className="ws-field">
-          <label htmlFor="student-approval-email">Roster email address</label>
-          <input id="student-approval-email" type="email" required maxLength={320} value={email}
-            onChange={(event) => setEmail(event.target.value)} />
-        </div>
-        <div className="ws-inline-actions full">
-          <Button type="submit" variant="primary" disabled={saving}>{saving ? "Saving…" : "Approve sign-up"}</Button>
-        </div>
-      </form>
-      {result && <Notice tone={result.tone}>{result.message}</Notice>}
-    </details>
-  );
-}
 
 function AdminAccounts() {
   const { profile, courses } = useWorkspace();
@@ -233,7 +182,6 @@ function AdminAccounts() {
 
       {notice ? <Notice tone={notice.tone} onDismiss={() => setNotice(null)}>{notice.text}</Notice> : null}
 
-      <StudentRegistrationApproval />
 
       {createOpen ? (
         <section className="ws-panel" aria-labelledby="create-account-title">

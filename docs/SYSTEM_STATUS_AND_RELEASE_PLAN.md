@@ -6,7 +6,7 @@
 
 Use this report for the current system status, release gates, and prioritized improvements. The November 17 review records what was found at the time. The remediation checklist records the fixes and later local tests. The deployment guide records the current hosting decisions. The operator and recovery runbooks give the procedures. The local Phase 7 checks have supporting evidence, and the hosted deployment and classroom evaluation still have open gates.
 
-The [20 November system snapshot](BYTEQUEST_SYSTEM_STATUS_2026-11-20.md) records the latest working-tree changes, Gemini tutor evaluation, and UI/UX review. This plan provides the scoring rubric and release gates.
+The [21 November system snapshot](BYTEQUEST_SYSTEM_STATUS_2026-11-21.md) records the current checkout, development PC and verification. The [20 November weekly snapshot](BYTEQUEST_SYSTEM_STATUS_2026-11-20.md) records the Gemini tutor evaluation and the prior UI/UX review. This plan provides the scoring rubric and release gates.
 
 ## 1. Where the project stands
 

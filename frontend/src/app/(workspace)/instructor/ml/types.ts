@@ -114,8 +114,8 @@ export type Detail = {
   predictions: SavedForecast[];
   evidence: {
     topic: string | null;
-    topic_activities_attempted: number;
-    topic_activities_required: number;
+    prior_tasks_attempted: number;
+    prior_tasks_required: number;
     result_count: number;
     period: Period;
   };
@@ -168,6 +168,7 @@ export type OfflineReport = {
 };
 
 export type Evaluation = {
+  readiness?: Dashboard["readiness"];
   course: CourseRef;
   observed: {
     unit: string;
@@ -199,9 +200,10 @@ export const FORECAST_REASONS: Record<string, string> = {
   no_graded_history: "No graded results yet",
   no_next_activity: "No eligible next activity",
   missing_consent: "Research consent unavailable",
-  insufficient_history: "More topic history needed",
+  insufficient_history: "More course history needed",
   model_unavailable: "Approved model unavailable",
   no_saved_prediction: "Awaiting a saved prediction",
+  first_submission_made: "Forecasts cover first submissions only",
 };
 
 export const READINESS_MESSAGES: Record<string, string> = {

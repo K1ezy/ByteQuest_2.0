@@ -277,3 +277,59 @@ it("exposes a readable countdown and announces time milestones separately from s
   expect(save.getAttribute("role")).toBe("status");
   expect(save.getAttribute("aria-atomic")).toBe("true");
 });
+
+it("reviews unanswered tasks before the final submit and lets the learner go back", async () => {
+  serveActiveExam({ revision: 0, answers: {} });
+  render(<ExamPage />);
+  await screen.findByRole("radio", { name: /Correct/ });
+  fireEvent.click(screen.getAllByRole("button", { name: "Submit exam" })[0]);
+  const dialog = await screen.findByRole("dialog", { name: "Submit exam?" });
+  expect(dialog.textContent).toContain("1 of 1 task has no answer yet.");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  const writes = (mocks.apiRequest.mock.calls as Call[]).filter(([, init]) => init?.method && init.method !== "GET");
+  expect(writes).toHaveLength(0);
+});
+
+it("offers a retake only when the exam info already knows the submitted attempt", async () => {
+  const serve = (latestAttemptId: string | null) => mocks.apiRequest.mockImplementation(async (path: string, init?: RequestInit) => {
+    const serverNow = new Date().toISOString();
+    if (path === "/exams/exam-1") {
+      return { id: "exam-1", title: "Retake exam", opens_at: serverNow, closes_at: serverNow, duration_minutes: 30,
+        can_start: true, latest_attempt_id: latestAttemptId, latest_status: latestAttemptId ? "submitted" : null,
+        results_released: false, server_now: serverNow };
+    }
+    if (path === "/exams/exam-1/start" && init?.method === "POST") return { attempt_id: "attempt-1" };
+    if (path === "/exams/attempts/attempt-1") {
+      return { id: "attempt-1", exam_id: "exam-1", title: "Retake exam", status: "submitted",
+        due_at: serverNow, revision: 1, last_saved_at: serverNow, server_now: serverNow, answers: {},
+        items: [], results_released: false, result: null, score: null };
+    }
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${path}`);
+  });
+
+  // Info loaded before the first attempt still says can_start; after it, no retake is on offer.
+  serve(null);
+  render(<ExamPage />);
+  fireEvent.click(await screen.findByRole("button", { name: "Start exam" }));
+  await screen.findByText("Your instructor will release scores after the exam closes.");
+  expect(screen.queryByRole("button", { name: "Start granted retake" })).toBeNull();
+  cleanup();
+
+  // A granted retake: the info names the submitted attempt and still allows a start.
+  serve("attempt-1");
+  render(<ExamPage />);
+  expect(await screen.findByRole("button", { name: "Start granted retake" })).toBeTruthy();
+});
+
+it("does not claim time ran out when reopening an attempt the learner submitted", async () => {
+  serveActiveExam({ revision: 1, answers: {} });
+  const serve = mocks.apiRequest.getMockImplementation()!;
+  mocks.apiRequest.mockImplementation(async (path: string, init?: RequestInit) => {
+    const response = await serve(path, init);
+    return path === "/exams/attempts/attempt-1" ? { ...response, status: "submitted" } : response;
+  });
+  render(<ExamPage />);
+  await screen.findByRole("heading", { name: "Exam submitted" });
+  expect(screen.queryByText(/Time ended/)).toBeNull();
+});

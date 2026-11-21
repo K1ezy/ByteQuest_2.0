@@ -427,7 +427,7 @@ Seed and verify one published programming challenge per language directly in loc
 | **SO-5** | Logistic Regression Predictive Modeling | Phase 5 | `ml_pipeline/train_compare.py` (LogReg) |
 | **SO-6** | Random Forest Predictive Modeling | Phase 5 | `ml_pipeline/train_compare.py` (RandomForest) |
 | **SO-7** | Empirical Model Performance Comparison | Phase 5 | `ml_pipeline/artifacts/metrics.json`, ROC-AUC |
-| **SO-8** | Adaptive Task Sequencing Integration | Phase 6 | `backend/app/api/ml_analytics.py`, `backend/app/services/ml_predictor/` |
+| **SO-8** | Adaptive Task Sequencing Integration | Phase 6 | `backend/app/api/faculty_ml.py`, `backend/app/services/ml_predictor/` |
 | **SO-9** | Platform Deployment & Usability Evaluation | Phase 7 | Vercel + VPS Caddy Stack, NEMSU CS Study |
 
 ---

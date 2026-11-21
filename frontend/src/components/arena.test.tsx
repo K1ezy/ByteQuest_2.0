@@ -98,3 +98,22 @@ it("reuses a hint request after a dropped response and keeps the recovered hint 
   expect(keys[0]).toBeTruthy();
   expect(keys[0]).toBe(keys[1]);
 });
+
+it("shows the saved visible grading cases instead of examples typed into the statement", async () => {
+  vi.mocked(apiRequest).mockImplementation(async (path) => {
+    if (path === "/quests?details_for=challenge") return [{
+      id: "challenge", title: "Double it", activity_type: "challenge", difficulty: 1, starter_code: "",
+      problem_statement: "Print twice the number.\nExample input: 9\nExample output: 99",
+      sample_cases: [{ stdin: "4", expected_stdout: "8" }, { stdin: "", expected_stdout: "0" }],
+    }];
+    if (path === "/pilot/drafts/challenge") return null;
+    if (path === "/pilot/activities/challenge/hints") return { remaining: 5, reviewed: [], ai_hints: [] };
+    throw new Error(`Unexpected request ${path}`);
+  });
+
+  render(<Arena activityId="challenge" />);
+  const examples = within(await screen.findByRole("region", { name: "Examples" }));
+  expect(examples.getByText("8")).toBeTruthy();
+  expect(examples.getByText("(no input)")).toBeTruthy();
+  expect(screen.queryByText("99")).toBeNull();
+});

@@ -301,6 +301,8 @@ Keep current direct browser table grants closed. Add row policies as defense in 
 
 ## Analytics
 
+Superseded by `docs/prompts/chatgpt-insights-*.md`. On-time and late rates, test-case metrics and per-widget motion specifications are not planned. The reference material below is scoped to the course.
+
 ### Filters and shared facts
 
 - The URL holds `course`, `range` (`7d`, `30d`, `term`, `custom`), `from`, `to`, `topic`, `activity`, and display `tab`. The server verifies that every selected ID belongs to the chosen scope. Changing course clears incompatible topic/activity/student selections, aborts old requests, and drops the old render immediately. Browser Back/Forward and shared links reconstruct the same view after permission checks.

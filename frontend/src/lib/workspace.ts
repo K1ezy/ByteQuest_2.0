@@ -30,6 +30,7 @@ export interface CourseList {
 }
 
 export interface ActivityAnalysis {
+  generated_at?: string;
   activity_id: string;
   title: string;
   activity_type: "quiz" | "challenge";
@@ -167,6 +168,9 @@ export interface FacultyDashboard {
     average_completion_percent: number;
     average_score: number | null;
     need_follow_up: number;
+    inactive_7d?: number;
+    as_of?: string;
+    latest_activity_title?: string | null;
     active_7d: number;
     attempts_7d: number;
   };
@@ -277,6 +281,7 @@ export interface StudentPreview {
 export interface ActivityDetail {
   activity_id: string;
   activity_type: "quiz" | "challenge";
+  language?: "python" | "cpp" | "java";
   exam_only?: boolean;
   course_id: string | null;
   course: CourseSummary;
@@ -326,6 +331,7 @@ export interface DraftList {
 }
 
 export interface ActivityListItem {
+  health?: { attempted: number; passed: number; stuck: number; not_started: number; pass_rate: number | null } | null;
   activity_id: string;
   title: string | null;
   activity_type: "quiz" | "challenge";
@@ -376,6 +382,9 @@ export interface PerformanceResponse {
     average_score: number | null;
     average_completion_percent: number | null;
     need_follow_up: number;
+    inactive_7d?: number;
+    as_of?: string;
+    latest_activity_title?: string | null;
     selected_activity_id: string | null;
   };
   students: PerformanceRow[];
@@ -478,41 +487,40 @@ export function getMaterials(params: { courseId: string | null; status?: string;
   );
 }
 
-export function uploadMaterial(formData: FormData, documentId?: string) {
-  const path = documentId ? `/faculty/materials/${documentId}/versions` : "/faculty/materials";
-  return apiRequest<{ message: string; material: MaterialSummary; job: { status: string; cause: string | null; trace_id: string } }>(
-    path,
-    { method: "POST", body: formData },
-  );
+/** Faculty routes act on the selected course; admin routes act across courses. */
+export type MaterialScope = "faculty" | "admin";
+type MaterialJob = { status: string; cause: string | null; trace_id: string };
+
+export function uploadMaterial(scope: MaterialScope, formData: FormData, replacesDocumentId?: string) {
+  const path = replacesDocumentId ? `/${scope}/materials/${replacesDocumentId}/versions` : `/${scope}/materials`;
+  return apiRequest<{ message: string; material: MaterialSummary; job?: MaterialJob }>(path, { method: "POST", body: formData });
 }
 
 export function updateMaterial(
+  scope: MaterialScope,
   documentId: string,
-  body: { title: string; description: string | null; language_tag: string; topic_concept: string | null },
+  body: { title: string; description: string | null; language_tag?: string; topic_concept: string | null },
 ) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/faculty/materials/${documentId}`, {
+  return apiRequest<{ material: MaterialSummary; message: string }>(`/${scope}/materials/${documentId}`, {
     method: "PATCH",
     body: JSON.stringify(body),
   });
 }
 
-export function archiveMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/faculty/materials/${documentId}/archive`, { method: "POST" });
+export function archiveMaterial(scope: MaterialScope, documentId: string) {
+  return apiRequest<{ material: MaterialSummary; message: string }>(`/${scope}/materials/${documentId}/archive`, { method: "POST" });
 }
 
-export function restoreMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/faculty/materials/${documentId}/restore`, { method: "POST" });
+export function restoreMaterial(scope: MaterialScope, documentId: string) {
+  return apiRequest<{ material: MaterialSummary; message: string }>(`/${scope}/materials/${documentId}/restore`, { method: "POST" });
 }
 
-export function retryMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string; job: { status: string; cause: string | null; trace_id: string } }>(
-    `/faculty/materials/${documentId}/retry`,
-    { method: "POST" },
-  );
+export function retryMaterial(scope: MaterialScope, documentId: string) {
+  return apiRequest<{ material: MaterialSummary; message: string; job?: MaterialJob }>(`/${scope}/materials/${documentId}/retry`, { method: "POST" });
 }
 
-export function getMaterialDownload(documentId: string) {
-  return apiRequest<{ download_url: string }>(`/faculty/materials/${documentId}/download`);
+export function getMaterialDownload(scope: MaterialScope, documentId: string) {
+  return apiRequest<{ download_url: string }>(`/${scope}/materials/${documentId}/download`);
 }
 
 export function getFacultyActivities(params: { courseId: string | null; status?: string; type?: string; search?: string }) {
@@ -774,13 +782,6 @@ export function createAccount(body: { email: string; role: string; display_name?
   });
 }
 
-export function approveStudentRegistration(schoolId: string, email: string) {
-  return apiRequest<{ message: string }>("/admin/student-registration-roster", {
-    method: "PUT",
-    body: JSON.stringify({ school_id: schoolId, email }),
-  });
-}
-
 export function deactivateAccount(accountId: string) {
   return apiRequest<{ message: string }>(`/admin/accounts/${accountId}/deactivate`, {
     method: "POST",
@@ -822,33 +823,6 @@ export function getAdminMaterials(params: { courseId?: string; status?: string; 
   return apiRequest<AdminMaterialList>(
     `/admin/materials${queryString({ course_id: params.courseId, status: params.status, search: params.search })}`,
   );
-}
-
-export function adminUploadMaterial(formData: FormData) {
-  return apiRequest<{ material: MaterialSummary; message: string }>("/admin/materials", { method: "POST", body: formData });
-}
-
-export function adminUpdateMaterial(documentId: string, body: { title: string; description: string | null; topic_concept: string | null }) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/admin/materials/${documentId}`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
-}
-
-export function adminArchiveMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/admin/materials/${documentId}/archive`, { method: "POST" });
-}
-
-export function adminRestoreMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/admin/materials/${documentId}/restore`, { method: "POST" });
-}
-
-export function adminRetryMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/admin/materials/${documentId}/retry`, { method: "POST" });
-}
-
-export function adminGetMaterialDownload(documentId: string) {
-  return apiRequest<{ download_url: string }>(`/admin/materials/${documentId}/download`);
 }
 
 export function getAdminActivities(params: { courseId?: string; status?: string; type?: string; search?: string }) {
@@ -1076,26 +1050,6 @@ export interface ProfileAuditEntry {
 }
 
 /** The single highest-priority thing this user could do next. */
-export interface ProfileAction {
-  kind: string;
-  title: string;
-  detail: string;
-  status: string;
-  href: string;
-}
-
-export interface InstructorAttention {
-  drafts_awaiting_review: number;
-  materials_needing_attention: number;
-  upcoming_activities: number;
-}
-
-export interface AdminAttention {
-  accounts_needing_action: number;
-  failed_jobs: number;
-  availability_changes: number;
-}
-
 export interface InstructorAnalytics {
   courses: number;
   activities_created: number;
@@ -1103,8 +1057,6 @@ export interface InstructorAnalytics {
   drafts_reviewed: number;
   materials_uploaded: number;
   learners_taught: number;
-  attention: InstructorAttention;
-  next_action: ProfileAction | null;
   /** Only actions this user personally performed. */
   recent_activity: ProfileAuditEntry[];
 }
@@ -1116,9 +1068,6 @@ export interface AdminAnalytics {
   total_activities: number;
   total_materials: number;
   /** Platform-wide audit, distinct from the personal timeline below. */
-  recent_audit: ProfileAuditEntry[];
-  attention: AdminAttention;
-  next_action: ProfileAction | null;
   /** Only actions this user personally performed. */
   recent_activity: ProfileAuditEntry[];
 }

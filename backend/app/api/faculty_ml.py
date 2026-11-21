@@ -20,6 +20,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.entities import (
     ActivityAttempt,
+    ActivityKind,
     LearningActivity,
     MLPrediction,
     Profile,
@@ -63,10 +64,6 @@ AGGREGATION_TIMEZONE = "UTC"
 
 def _faculty(user: Annotated[Profile, Depends(get_current_user)]) -> Profile:
     return require_course_instructor(user)
-
-
-def _topic_key(value: object) -> str:
-    return str(value).strip().casefold()
 
 
 def _period_cutoff(period: str) -> str | None:
@@ -177,7 +174,8 @@ def _snapshot(
         else []
     )
     by_student: dict[uuid.UUID, list[dict]] = defaultdict(list)
-    topic_history: dict[tuple, set[uuid.UUID]] = defaultdict(set)
+    # Distinct graded tasks per learner and language: the live forecast gate.
+    course_history: dict[tuple, set[uuid.UUID]] = defaultdict(set)
     for attempt in attempts:
         activity = activity_by_id[attempt.activity_id]
         by_student[attempt.student_id].append(
@@ -189,9 +187,7 @@ def _snapshot(
                 "activity_id": str(activity.id),
             }
         )
-        topic_history[
-            (attempt.student_id, activity.language, _topic_key(activity.topic_concept))
-        ].add(activity.id)
+        course_history[(attempt.student_id, activity.language)].add(activity.id)
 
     # Only learner-visible successes retire an activity, matching
     # next_course_activity(). A row therefore names the same target the shadow
@@ -228,9 +224,9 @@ def _snapshot(
         predictions_by_student[prediction.student_id].append(prediction)
 
     consented = consented_student_ids(db, student_ids)
-    shadow_status = getattr(request.app.state, "ml_shadow_status", "disabled")
-    ready = shadow_status == "ready"
-    active_version = getattr(request.app.state, "model_version", None)
+    readiness = forecast_readiness(request)
+    ready = readiness["forecasts_available"]
+    active_version = readiness["active_model_version"]
     required_history = get_setting_int(db, "prediction_min_history", 3)
     eligible_exam_ids = course_exam_ids(db, course.id) if students else set()
 
@@ -267,6 +263,7 @@ def _snapshot(
                 activity
                 for activity in activities
                 if activity.id not in successful[student.id]
+                and activity.activity_type == ActivityKind.challenge
                 and activity.language == student.enrolled_language
             ),
             None,
@@ -289,13 +286,13 @@ def _snapshot(
             status = "no_next_activity"
         elif student.id not in consented:
             status = "missing_consent"
-        elif (
-            len(topic_history[(student.id, target.language, _topic_key(target.topic_concept))])
-            < required_history
-        ):
+        elif len(course_history[(student.id, target.language)]) < required_history:
             status = "insufficient_history"
         elif not ready:
             status = "model_unavailable"
+        elif current is None and target.id in course_history[(student.id, target.language)]:
+            # Forecasts predict a first submission; none follows once it is made.
+            status = "first_submission_made"
         elif current is None:
             status = "no_saved_prediction"
         else:
@@ -350,11 +347,7 @@ def _snapshot(
                                 "from_active_model": False,
                             }
                         )
-        topic_attempted = (
-            len(topic_history[(student.id, target.language, _topic_key(target.topic_concept))])
-            if target
-            else 0
-        )
+        prior_tasks = len(course_history[(student.id, target.language)]) if target else 0
         details[student.id] = {
             "course": course_reference(course),
             "student": row,
@@ -363,8 +356,8 @@ def _snapshot(
             "predictions": prediction_history,
             "evidence": {
                 "topic": target.topic_concept if target else None,
-                "topic_activities_attempted": topic_attempted,
-                "topic_activities_required": required_history,
+                "prior_tasks_attempted": prior_tasks,
+                "prior_tasks_required": required_history,
                 "result_count": len(history),
                 "period": period,
             },
@@ -378,11 +371,7 @@ def _snapshot(
         "aggregation_timezone": AGGREGATION_TIMEZONE,
         "students": rows,
         "details": details,
-        "readiness": {
-            "status": shadow_status,
-            "forecasts_available": ready,
-            "active_model_version": active_version,
-        },
+        "readiness": readiness,
         "summary": {
             "active_learners": enrolled_count,
             "graded_events": len(all_events),
@@ -405,6 +394,12 @@ def _snapshot(
             "decision": DECISION_THRESHOLD,
         },
     }
+
+
+def forecast_readiness(request: Request) -> dict:
+    status = getattr(request.app.state, "ml_shadow_status", "disabled")
+    return {"status": status, "forecasts_available": status == "ready",
+            "active_model_version": getattr(request.app.state, "model_version", None)}
 
 
 @router.get("")
@@ -488,15 +483,22 @@ def evaluation(
         selected_version = versions[0] if versions else None
 
     # Versions are never pooled: a mixed count would compare models that were
-    # fitted on different data.
-    rows = [row for row in saved if row.model_version == selected_version] if selected_version else []
+    # fitted on different data. Each learner and challenge counts once, through
+    # its latest snapshot (rows are newest first), so repeated snapshots before
+    # one first submission cannot inflate the accuracy.
+    latest: dict[tuple, MLPrediction] = {}
+    for row in saved:
+        if row.model_version == selected_version:
+            latest.setdefault((row.student_id, row.target_activity_id), row)
+    rows = list(latest.values())
     labeled = [row for row in rows if row.actual_outcome is not None]
 
     report = getattr(request.app.state, "ml_model_report", None)
     return {
         "course": course_reference(course),
+        "readiness": forecast_readiness(request),
         "observed": {
-            "unit": "prediction snapshots",
+            "unit": "learner-challenge predictions",
             "versions": versions,
             "selected_version": selected_version,
             "active_version": active_version,

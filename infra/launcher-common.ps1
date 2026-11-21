@@ -130,32 +130,26 @@ function Test-BlocksLoopbackListener {
 }
 
 function Get-ListenerPidMap {
-    # One socket enumeration for every listening port. Get-NetTCPConnection
-    # can omit live listeners on some Windows power states; netstat fills gaps.
-    # Returns @{ port = @(pid) }
-    # with [int] keys and no null or non-positive PIDs, so callers can trust
-    # both the key type and the contents. Only listeners that can block a
-    # 127.0.0.1 bind are included (see Test-BlocksLoopbackListener).
+    # The native listing is faster than the CIM-based cmdlet and includes
+    # listeners it can miss on battery. Omit -p so both TCP families are listed.
+    $lines = & netstat.exe -ano 2>$null
+    $listeners = if ($LASTEXITCODE -eq 0 -and $lines -match '^\s*TCP\s+.*\sLISTENING\s') {
+        foreach ($line in $lines) {
+            if ($line -match '^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$') {
+                [pscustomobject]@{ LocalAddress = $Matches[1]; LocalPort = $Matches[2]; OwningProcess = $Matches[3] }
+            }
+        }
+    }
+    else {
+        Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue
+    }
+
     $map = @{}
-    foreach ($connection in (Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue)) {
+    foreach ($connection in $listeners) {
         if (-not (Test-BlocksLoopbackListener -Address $connection.LocalAddress)) { continue }
         $port = $connection.LocalPort -as [int]
         $processId = $connection.OwningProcess -as [int]
-        if ($null -eq $port -or $port -le 0) { continue }
-        if ($null -eq $processId -or $processId -le 0) { continue }
-        if (-not $map.ContainsKey($port)) {
-            $map[$port] = [System.Collections.Generic.List[int]]::new()
-        }
-        if (-not $map[$port].Contains($processId)) {
-            $map[$port].Add($processId)
-        }
-    }
-    foreach ($line in (& netstat.exe -ano -p tcp)) {
-        if ($line -notmatch '^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$') { continue }
-        if (-not (Test-BlocksLoopbackListener -Address $Matches[1])) { continue }
-        $port = [int]$Matches[2]
-        $processId = [int]$Matches[3]
-        if ($processId -le 0) { continue }
+        if (-not $port -or -not $processId -or $processId -lt 0) { continue }
         if (-not $map.ContainsKey($port)) {
             $map[$port] = [System.Collections.Generic.List[int]]::new()
         }
@@ -243,6 +237,7 @@ function Get-ProcessDetailMap {
             CommandLine     = [string]$process.CommandLine
             ExecutablePath  = [string]$process.ExecutablePath
             ParentProcessId = $parentProcessId
+            StartedUtcTicks = if ($process.CreationDate) { $process.CreationDate.ToUniversalTime().Ticks } else { 0 }
         }
     }
     return $map
@@ -443,4 +438,49 @@ function Get-FrontendFingerprint {
     }
     $bytes = [Text.Encoding]::UTF8.GetBytes(($parts -join "`n"))
     return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+}
+
+function Get-BackendFingerprint {
+    param([Parameter(Mandatory)][string]$RepoRoot)
+
+    $backend = Join-Path $RepoRoot 'backend'
+    $files = @(
+        Get-ChildItem -LiteralPath (Join-Path $backend 'app') -Recurse -File -Filter '*.py'
+        Get-ChildItem -LiteralPath $backend -File -Filter 'requirements*'
+        foreach ($name in @(
+            'backend/.env', 'backend/.env.local', 'backend/.venv/pyvenv.cfg',
+            'infra/run-grading-worker.ps1', 'logs/.launcher-supabase-state.json',
+            'ml_pipeline/artifacts/active_model.json'
+        )) {
+            $path = Join-Path $RepoRoot $name
+            if (Test-Path -LiteralPath $path -PathType Leaf) { Get-Item -LiteralPath $path }
+        }
+    ) | Sort-Object FullName
+    $parts = foreach ($file in $files) {
+        "$($file.FullName.Substring($RepoRoot.Length)):$((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash)"
+    }
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($parts -join "`n"))
+    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+}
+
+function Test-LocalBackendProcesses {
+    param(
+        [Parameter(Mandatory)]$State,
+        [Parameter(Mandatory)]$ListenerPidMap
+    )
+
+    $listenerPids = Get-PortListenerPids -ListenerPidMap $ListenerPidMap -Port $State.ApiPort
+    if (-not $State.ApiPid -or -not $State.SupervisorPid -or $State.ApiPid -notin $listenerPids) { return $false }
+
+    $processes = Get-ProcessDetailMap -ProcessIds @($State.ApiPid, $State.SupervisorPid)
+    $api = Get-ProcessDetail -DetailMap $processes -ProcessId $State.ApiPid
+    $supervisor = Get-ProcessDetail -DetailMap $processes -ProcessId $State.SupervisorPid
+    if (-not $api -or -not $supervisor -or
+        $api.Name -ne 'python.exe' -or $supervisor.Name -ne 'pwsh.exe' -or
+        -not $api.StartedUtcTicks -or $api.StartedUtcTicks -ne $State.ApiStartedUtcTicks -or
+        -not $supervisor.StartedUtcTicks -or $supervisor.StartedUtcTicks -ne $State.SupervisorStartedUtcTicks) { return $false }
+
+    # A supervisor in backoff is alive even if its worker failed to start.
+    $supervisorPid = [int]$State.SupervisorPid
+    return [bool](Get-CimInstance Win32_Process -Filter "ParentProcessId = $supervisorPid AND Name = 'python.exe'" -ErrorAction SilentlyContinue)
 }
