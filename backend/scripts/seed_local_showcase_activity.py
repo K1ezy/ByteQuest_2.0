@@ -78,7 +78,7 @@ WEEK_TOPICS = {1: "Week 1: Input, output and types", 2: "Week 2: Conditionals an
                3: "Week 3: Loops", 4: "Week 4: Functions"}
 EXAM_TITLE = "Midterm Quiz: Python Basics"
 EXAM_SEQUENCES = [1, 3, 5, 7]  # quiz items only, so grading needs no Judge0
-EXAM_DAY, RELEASE_DAY = 19, 20  # days after TERM_START: Friday of week 3, then Saturday
+EXAM_DAY, RELEASE_DAY = 19, 20  # days after TERM_START, in week 3; posts name the real weekday
 
 PERSONAS = {  # attempt chance, start delay (days), failed tries before a pass, chance of never passing, exam accuracy
     "strong": dict(attempt=1.0, delay=(0, 2), fails=[0, 0, 0, 0, 0, 0, 1, 1, 2], give_up=0.0, exam=(0.85, 1.0)),
@@ -95,6 +95,10 @@ def at(day: int, hour: int, minute: int = 0) -> datetime:
 
 def week_release(week: int) -> int:
     return 1 + 7 * (week - 1)
+
+
+def weekday(day: int) -> str:
+    return (TERM_START + timedelta(days=day)).strftime("%A")
 
 
 def personas_for(count: int, rng: random.Random) -> list[str | None]:
@@ -346,9 +350,9 @@ def main() -> None:
                                                       WorkshopActivity.activity_id.in_(wanted)).update(
                         {WorkshopActivity.added_at: at(week_release(week) - 1, 17)}, synchronize_session=False)
             posts = [
-                (0, 8, True, f"Welcome to {workshop.block or 'CS102'}! Practice activities open every Monday. "
+                (0, 8, True, f"Welcome to {workshop.block or 'CS102'}! Practice activities open every {weekday(week_release(1))}. "
                              "Finish each week's quiz before its challenge, and ask in class if you get stuck."),
-                (week_release(3) - 1, 18, False, f"Reminder: {EXAM_TITLE} is on Friday, 10:00-11:00 AM. "
+                (week_release(3) - 1, 18, False, f"Reminder: {EXAM_TITLE} is on {weekday(EXAM_DAY)}, 10:00-11:00 AM. "
                                                  "It covers weeks 1 and 2. You will have 45 minutes once you start."),
                 (RELEASE_DAY, 9, False, "Midterm quiz results are released. Open Exams to see your score per item. "
                                         "Retake the Week 2 quizzes for practice if you scored below 75%."),
