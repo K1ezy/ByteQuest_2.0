@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 vi.mock("@/components/accessibility-provider", () => ({useAccessibility:() => ({preferences:{reducedMotion:true}})}));
 vi.mock("recharts", () => {
   const wrap = ({children}:{children:ReactNode}) => <div>{children}</div>;
-  return {ResponsiveContainer:wrap,LineChart:wrap,CartesianGrid:()=>null,XAxis:()=>null,YAxis:()=>null,ReferenceLine:()=>null,
+  return {ResponsiveContainer:wrap,LineChart:wrap,CartesianGrid:()=>null,XAxis:()=>null,YAxis:()=>null,ReferenceLine:()=>null,Tooltip:()=>null,
     Line:({isAnimationActive}:{isAnimationActive:boolean})=><span data-testid="line">{String(isAnimationActive)}</span>};
 });
 afterEach(cleanup);
@@ -16,7 +16,7 @@ const chart:ChartProps = {rows:[{x:"Monday",score:80}],series:[{key:"score",labe
   domain:[0,100],xLabel:"Day",label:"Scores",summary:"Monday averaged 80%."};
 it("exposes the summary, table and reduced-motion plot", () => {
   render(<><InsightLineChart {...chart}/><Plot {...chart}/></>);
-  expect(screen.getByRole("img",{name:/Monday averaged 80%/})).toBeTruthy();
+  expect(screen.getByRole("figure",{name:/Monday averaged 80%/})).toBeTruthy();
   fireEvent.click(screen.getByText("View as table"));
   expect(screen.getByRole("table",{name:"Scores"})).toBeTruthy();
   expect(screen.getAllByTestId("line").every(line=>line.textContent==="false")).toBe(true);
