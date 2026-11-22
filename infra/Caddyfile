@@ -1,8 +1,8 @@
 {$BYTEQUEST_API_DOMAIN} {
-    # PDF uploads are limited to 10 MiB by FastAPI. Allow multipart framing
-    # overhead while rejecting oversized requests at the public edge.
-    request_body {
-        max_size 12MB
+    @pdf_upload {
+        method POST
+        header_regexp Content-Type `(?i)^multipart/form-data\s*(;|$)`
+        path_regexp `^/api/v1/(admin/materials|faculty/materials(/[^/]+/versions)?|instructor/documents/(upload|[^/]+/versions))/?$`
     }
 
     header {
@@ -13,5 +13,17 @@
     }
 
     encode zstd gzip
-    reverse_proxy fastapi:8000
+    handle @pdf_upload {
+        request_body {
+            max_size 54525952
+        }
+        reverse_proxy fastapi:8000
+    }
+
+    handle {
+        request_body {
+            max_size 12582912
+        }
+        reverse_proxy fastapi:8000
+    }
 }

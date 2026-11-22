@@ -4,6 +4,7 @@ export type UserRole = "student" | "instructor" | "admin";
 export interface Profile {
   id: string;
   pseudonym_id: string;
+  username: string;
   role: UserRole;
   enrolled_language: ProgrammingLanguage;
   year_level: number;
@@ -15,6 +16,10 @@ export interface Profile {
   avatar_url?: string | null;
   email?: string | null;
   created_at?: string | null;
+  /** True until a student saves their learning track; always false for staff. */
+  needs_track_setup?: boolean;
+  /** False while the account still has its generated starter handle; the server owns this rule. */
+  handle_chosen?: boolean;
 }
 
 export interface QuizOption {
@@ -36,23 +41,45 @@ export interface Quest {
   topic_concept: string;
   difficulty_level: number;
   sequence_order: number;
+  /** Place in this learner's own quest list (what "Quest #" shows). */
+  position?: number;
+  added_at: string;
+  added_at_estimated: boolean;
+  /** Best solve-quality stars (1-3) on a solved code challenge; null otherwise. */
+  stars?: number | null;
   xp_reward: number;
   problem_statement: string | null;
   starter_code: string | null;
   is_completed: boolean;
   is_closed?: boolean;
+  pass_mark_percent?: number | null;
   quiz_questions?: QuizQuestion[] | null;
+  /** Visible grading cases for a challenge; hidden cases are never sent. */
+  sample_cases?: { stdin: string; expected_stdout: string }[] | null;
 }
 
-export interface QuestGroup {
+export interface WorkshopClassroomDetails {
+  block?: string | null;
+  year_level?: number | null;
+  subject?: string | null;
+  room?: string | null;
+}
+
+export interface Workshop extends WorkshopClassroomDetails {
   id: string;
   name: string;
   description: string | null;
   language: ProgrammingLanguage;
   is_owner: boolean;
+  owned_by_me: boolean;
   join_code: string | null;
+  joining_enabled: boolean;
+  archived: boolean;
+  owner_name: string;
   member_count: number;
   activity_ids: string[];
+  activities: { activity_id: string; topic: string | null; position: number; added_at: string }[];
+  next_closes_at?: string | null;
 }
 
 export interface Evaluation {
@@ -86,3 +113,71 @@ export interface ErrorExplanation {
   hints: string[];
   pedagogical_tip: string;
 }
+export type PracticeError = "syntax_error" | "logic_error" | "runtime_error" | "timeout";
+export type CodexRecovery = { category: PracticeError; label: string };
+export type CodexCategory = CodexRecovery & {
+  recoveries: number;
+  tier: number;
+  next_tier_at: number | null;
+  topics: string[];
+  first_recovered_at: string | null;
+};
+export type CodexResponse = {
+  locked: boolean;
+  day: number;
+  unlock: MechanicUnlock;
+  categories: CodexCategory[];
+  total_recoveries: number | null;
+  comebacks: number | null;
+};
+
+export type MasteryConcept = {
+  concept: string;
+  total: number;
+  completed: number;
+  mastery_percent: number;
+  state: "not_started" | "in_progress" | "mastered";
+  average_stars: number | null;
+  weak_spot: PracticeError | null;
+  activity_ids: string[];
+  memory?: MemoryConcept | null;
+};
+export type MasteryMapResponse = { track: ProgrammingLanguage; concepts: MasteryConcept[] };
+
+export type MemoryState = "fresh" | "due" | "fading" | "long_term";
+export type MemoryConcept = {
+  concept: string;
+  stage: number;
+  state: MemoryState;
+  due_at: string;
+  open_review_id: string | null;
+};
+export type MechanicUnlock = { unlocked: boolean; unlock_day: number; unlocks_on: string | null };
+export type ReviewOverview = {
+  locked: boolean;
+  day: number;
+  unlock: MechanicUnlock;
+  concepts: MemoryConcept[];
+  due_count: number;
+};
+export type ReviewResult = {
+  correct: number;
+  total: number;
+  passed: boolean;
+  xp_awarded: number;
+  new_total_xp: number;
+  new_level: number;
+  level_up: boolean;
+  new_badges_unlocked: string[];
+  badge_xp_awarded?: number;
+  next_due_at: string;
+  next_check_days: number;
+  stage: number;
+};
+export type RecallReview = {
+  id: string;
+  concept: string;
+  stage: number;
+  questions: QuizQuestion[];
+  result: ReviewResult | null;
+};

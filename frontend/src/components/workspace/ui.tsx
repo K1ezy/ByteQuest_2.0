@@ -14,7 +14,7 @@ import { apiRequest, getErrorMessage } from "@/lib/api";
 
 /* ------------------------------------------------------------------ hooks */
 
-export function useApi<T>(path: string | null) {
+export function useApi<T>(path: string | null, abortOnCleanup = false) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(Boolean(path));
@@ -22,12 +22,14 @@ export function useApi<T>(path: string | null) {
 
   useEffect(() => {
     if (!path) return;
+    const controller = abortOnCleanup ? new AbortController() : null;
     let active = true;
     // Synchronizing fetch state with a new request path is intentional here.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setError("");
-    apiRequest<T>(path)
+    const request = controller ? apiRequest<T>(path, { signal: controller.signal }) : apiRequest<T>(path);
+    request
       .then((result) => {
         if (active) setData(result);
       })
@@ -39,8 +41,9 @@ export function useApi<T>(path: string | null) {
       });
     return () => {
       active = false;
+      controller?.abort();
     };
-  }, [path, nonce]);
+  }, [path, nonce, abortOnCleanup]);
 
   const reload = useCallback(() => setNonce((value) => value + 1), []);
   return { data, error, loading, reload, setData };
@@ -49,8 +52,26 @@ export function useApi<T>(path: string | null) {
 export function useNow(intervalMs = 30_000): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), intervalMs);
-    return () => window.clearInterval(timer);
+    let timer: number;
+    const refresh = () => setNow(new Date());
+    const schedule = () => {
+      const delay = Math.min(intervalMs, 60_000 - Date.now() % 60_000 + 50);
+      timer = window.setTimeout(() => {
+        refresh();
+        schedule();
+      }, delay);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    schedule();
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [intervalMs]);
   return now;
 }
@@ -145,7 +166,8 @@ export function StatCard({
       {inner}
     </Link>
   ) : (
-    <div className="ws-stat-card" data-tooltip={tooltip}>
+    // Focusable only when it carries help, so keyboard users can open the tip too.
+    <div className="ws-stat-card" data-tooltip={tooltip} tabIndex={tooltip ? 0 : undefined}>
       {inner}
     </div>
   );
@@ -166,7 +188,7 @@ export function StatusChip({
 }) {
   const resolvedTone = tone || stateTone(state);
   return (
-    <span className={`ws-chip ${resolvedTone}`} data-tooltip={tooltip}>
+    <span className={`ws-chip ${resolvedTone}`} data-tooltip={tooltip} tabIndex={tooltip ? 0 : undefined}>
       {label || prettify(state)}
     </span>
   );
@@ -202,27 +224,27 @@ export function shortId(id: string): string {
 
 // Primary label for a pseudonymous person: their chosen display name when set,
 // otherwise a short readable handle derived from the stable id.
-export function personName(displayName: string | null | undefined, pseudonym: string): string {
+export function personName(displayName: string | null | undefined, _pseudonym: string, username?: string | null): string {
   const trimmed = displayName?.trim();
   if (trimmed) return trimmed;
-  const bare = (pseudonym || "").replace(/^[a-z]+_/i, "");
-  return bare ? `Learner ${bare.slice(0, 4).toUpperCase()}` : "Learner";
+  return username ? `@${username}` : "Learner";
 }
 
 export function Identity({
   displayName,
   pseudonym,
+  username,
   meta,
   size = "md",
 }: {
   displayName?: string | null;
   pseudonym: string;
+  username?: string | null;
   meta?: ReactNode;
   size?: "sm" | "md";
 }) {
-  const name = personName(displayName, pseudonym);
-  const bare = (pseudonym || "").replace(/^[a-z]+_/i, "");
-  const monogram = (displayName?.trim()?.[0] ?? bare[0] ?? "?").toUpperCase();
+  const name = personName(displayName, pseudonym, username);
+  const monogram = (displayName?.trim()?.[0] ?? username?.[0] ?? "?").toUpperCase();
   const hue = identityHue(pseudonym || name);
   return (
     <span className={`ws-identity ws-identity-${size}`}>
@@ -236,7 +258,7 @@ export function Identity({
       <span className="ws-identity-text">
         <strong>{name}</strong>
         <span className="ws-row-meta">
-          <code>{shortId(pseudonym)}</code>
+          <code>{username ? `@${username}` : "Learner"}</code>
           {meta ? <> · {meta}</> : null}
         </span>
       </span>
@@ -380,10 +402,10 @@ export function SelectField({
   );
 }
 
-export function FieldError({ children }: { children?: ReactNode }) {
+export function FieldError({ children, id }: { children?: ReactNode; id?: string }) {
   if (!children) return null;
   return (
-    <p className="ws-field-error" role="alert">
+    <p className="ws-field-error" role="alert" id={id}>
       {children}
     </p>
   );
@@ -402,6 +424,8 @@ export function ConfirmDialog({
   tone = "primary",
   busy = false,
   hideConfirm = false,
+  confirmForm,
+  variant = "dialog",
   onConfirm,
   onCancel,
 }: {
@@ -413,6 +437,9 @@ export function ConfirmDialog({
   tone?: "primary" | "danger";
   busy?: boolean;
   hideConfirm?: boolean;
+  confirmForm?: string;
+  /** "drawer" docks the same dialog to the right edge on wide screens. */
+  variant?: "dialog" | "drawer";
   onConfirm?: () => void;
   onCancel: () => void;
 }) {
@@ -464,12 +491,18 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="ws-modal-backdrop"
+      className={`ws-modal-backdrop${variant === "drawer" ? " ws-drawer-backdrop" : ""}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onCancel();
       }}
     >
-      <div className="ws-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={dialogRef}>
+      <div
+        className={`ws-dialog${variant === "drawer" ? " ws-drawer" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        ref={dialogRef}
+      >
         <div className="ws-dialog-heading">
           <h2 id={titleId}>{title}</h2>
           <button type="button" className="ws-dialog-close" aria-label="Close dialog" onClick={onCancel} disabled={busy}>
@@ -482,7 +515,13 @@ export function ConfirmDialog({
             {cancelLabel}
           </button>
           {hideConfirm ? null : (
-            <Button variant={tone === "danger" ? "danger" : "primary"} onClick={onConfirm} disabled={busy}>
+            <Button
+              variant={tone === "danger" ? "danger" : "primary"}
+              type={confirmForm ? "submit" : "button"}
+              form={confirmForm}
+              onClick={onConfirm}
+              disabled={busy}
+            >
               {busy ? "Working…" : confirmLabel}
             </Button>
           )}

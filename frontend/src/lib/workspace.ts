@@ -29,6 +29,29 @@ export interface CourseList {
   timezone?: string;
 }
 
+export interface ActivityAnalysis {
+  generated_at?: string;
+  activity_id: string;
+  title: string;
+  activity_type: "quiz" | "challenge";
+  course: CourseSummary;
+  class_size: number;
+  attempted: number;
+  passed: number;
+  pass_rate: number | null;
+  first_try_pass_rate: number | null;
+  median_attempts_to_pass: number | null;
+  stuck: number;
+  stuck_after_attempts: number;
+  not_started: number;
+  pass_mark_percent: number;
+  excludes_exam_attempts: boolean;
+  score_distribution: { label: string; count: number }[];
+  error_categories: { category: string; label: string; count: number }[];
+  hint_use: { learners: number; passed: number } | null;
+  questions?: { question_id: string; prompt: string; correct: number; recorded: number }[];
+}
+
 export function queryString(params: Record<string, string | number | boolean | null | undefined>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -37,6 +60,49 @@ export function queryString(params: Record<string, string | number | boolean | n
   }
   const serialized = search.toString();
   return serialized ? `?${serialized}` : "";
+}
+
+export interface AnnouncementInput {
+  title: string;
+  body: string;
+  pinned: boolean;
+  expires_at: string | null;
+}
+
+export interface CourseAnnouncement extends AnnouncementInput {
+  id: string;
+  expired: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StudentAnnouncement extends AnnouncementInput {
+  id: string;
+  course_title: string;
+  author_name: string;
+  created_at: string;
+}
+
+export const studentAnnouncementsPath = "/pilot/announcements";
+
+export function courseAnnouncementsPath(courseId: string) {
+  return `/faculty/announcements${queryString({ course_id: courseId })}`;
+}
+
+export function postCourseAnnouncement(courseId: string, input: AnnouncementInput) {
+  return apiRequest<CourseAnnouncement>("/faculty/announcements", {
+    method: "POST", body: JSON.stringify({ course_id: courseId, ...input }),
+  });
+}
+
+export function updateCourseAnnouncement(id: string, changes: Partial<AnnouncementInput>, updatedAt: string) {
+  return apiRequest<CourseAnnouncement>(`/faculty/announcements/${id}`, {
+    method: "PATCH", body: JSON.stringify({ ...changes, expected_updated_at: updatedAt }),
+  });
+}
+
+export function deleteCourseAnnouncement(id: string) {
+  return apiRequest<void>(`/faculty/announcements/${id}`, { method: "DELETE" });
 }
 
 export function getFacultyCourses() {
@@ -102,6 +168,11 @@ export interface FacultyDashboard {
     average_completion_percent: number;
     average_score: number | null;
     need_follow_up: number;
+    inactive_7d?: number;
+    as_of?: string;
+    latest_activity_title?: string | null;
+    active_7d: number;
+    attempts_7d: number;
   };
   recent_changes: AuditEntry[];
 }
@@ -138,6 +209,7 @@ export interface MaterialList {
   items: MaterialSummary[];
   total: number;
   counts: Record<string, number>;
+  max_upload_bytes: number;
   filters: { statuses: string[] };
 }
 
@@ -209,6 +281,8 @@ export interface StudentPreview {
 export interface ActivityDetail {
   activity_id: string;
   activity_type: "quiz" | "challenge";
+  language?: "python" | "cpp" | "java";
+  exam_only?: boolean;
   course_id: string | null;
   course: CourseSummary;
   title: string | null;
@@ -216,6 +290,8 @@ export interface ActivityDetail {
   problem_statement: string | null;
   difficulty_level: number;
   xp_reward: number;
+  /** Null keeps the default pass rule. */
+  pass_mark_percent?: number | null;
   review_status: string;
   draft_state?: string;
   state: string;
@@ -255,9 +331,11 @@ export interface DraftList {
 }
 
 export interface ActivityListItem {
+  health?: { attempted: number; passed: number; stuck: number; not_started: number; pass_rate: number | null } | null;
   activity_id: string;
   title: string | null;
   activity_type: "quiz" | "challenge";
+  language?: ProgrammingLanguage;
   topic_concept: string;
   state: "draft" | "scheduled" | "open" | "closed" | "archived";
   review_status: string;
@@ -282,21 +360,10 @@ export interface ActivityList {
   filters: { statuses: string[] };
 }
 
-export interface PredictionView {
-  status: "saved" | "unavailable";
-  as_of: string | null;
-  target_activity?: string | null;
-  probability?: number;
-  random_forest_probability?: number;
-  label?: string;
-  model_version?: string;
-  advisory?: string;
-  reason?: string;
-}
-
 export interface PerformanceRow {
   student_id: string;
   pseudonym: string;
+  username: string;
   display_name: string | null;
   enrolled_language: string;
   completed_count: number;
@@ -304,7 +371,6 @@ export interface PerformanceRow {
   attempt_count: number;
   latest_score: number | null;
   latest_at: string | null;
-  prediction: PredictionView;
 }
 
 export interface PerformanceResponse {
@@ -316,6 +382,9 @@ export interface PerformanceResponse {
     average_score: number | null;
     average_completion_percent: number | null;
     need_follow_up: number;
+    inactive_7d?: number;
+    as_of?: string;
+    latest_activity_title?: string | null;
     selected_activity_id: string | null;
   };
   students: PerformanceRow[];
@@ -326,6 +395,7 @@ export interface StudentPerformance {
   student: {
     student_id: string;
     pseudonym: string;
+    username: string;
     display_name: string | null;
     enrolled_language: string;
     xp_points: number;
@@ -342,8 +412,10 @@ export interface StudentPerformance {
     is_successful: boolean;
     xp_awarded: number;
     created_at: string | null;
+    attempt_number?: number;
+    error_category?: string;
+    submitted_code?: string | null;
   }[];
-  prediction: PredictionView;
 }
 
 export function getFacultyDashboard(courseId: string | null) {
@@ -415,41 +487,40 @@ export function getMaterials(params: { courseId: string | null; status?: string;
   );
 }
 
-export function uploadMaterial(formData: FormData, documentId?: string) {
-  const path = documentId ? `/faculty/materials/${documentId}/versions` : "/faculty/materials";
-  return apiRequest<{ message: string; material: MaterialSummary; job: { status: string; cause: string | null; trace_id: string } }>(
-    path,
-    { method: "POST", body: formData },
-  );
+/** Faculty routes act on the selected course; admin routes act across courses. */
+export type MaterialScope = "faculty" | "admin";
+type MaterialJob = { status: string; cause: string | null; trace_id: string };
+
+export function uploadMaterial(scope: MaterialScope, formData: FormData, replacesDocumentId?: string) {
+  const path = replacesDocumentId ? `/${scope}/materials/${replacesDocumentId}/versions` : `/${scope}/materials`;
+  return apiRequest<{ message: string; material: MaterialSummary; job?: MaterialJob }>(path, { method: "POST", body: formData });
 }
 
 export function updateMaterial(
+  scope: MaterialScope,
   documentId: string,
-  body: { title: string; description: string | null; language_tag: string; topic_concept: string | null },
+  body: { title: string; description: string | null; language_tag?: string; topic_concept: string | null },
 ) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/faculty/materials/${documentId}`, {
+  return apiRequest<{ material: MaterialSummary; message: string }>(`/${scope}/materials/${documentId}`, {
     method: "PATCH",
     body: JSON.stringify(body),
   });
 }
 
-export function archiveMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/faculty/materials/${documentId}/archive`, { method: "POST" });
+export function archiveMaterial(scope: MaterialScope, documentId: string) {
+  return apiRequest<{ material: MaterialSummary; message: string }>(`/${scope}/materials/${documentId}/archive`, { method: "POST" });
 }
 
-export function restoreMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/faculty/materials/${documentId}/restore`, { method: "POST" });
+export function restoreMaterial(scope: MaterialScope, documentId: string) {
+  return apiRequest<{ material: MaterialSummary; message: string }>(`/${scope}/materials/${documentId}/restore`, { method: "POST" });
 }
 
-export function retryMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string; job: { status: string; cause: string | null; trace_id: string } }>(
-    `/faculty/materials/${documentId}/retry`,
-    { method: "POST" },
-  );
+export function retryMaterial(scope: MaterialScope, documentId: string) {
+  return apiRequest<{ material: MaterialSummary; message: string; job?: MaterialJob }>(`/${scope}/materials/${documentId}/retry`, { method: "POST" });
 }
 
-export function getMaterialDownload(documentId: string) {
-  return apiRequest<{ download_url: string }>(`/faculty/materials/${documentId}/download`);
+export function getMaterialDownload(scope: MaterialScope, documentId: string) {
+  return apiRequest<{ download_url: string }>(`/${scope}/materials/${documentId}/download`);
 }
 
 export function getFacultyActivities(params: { courseId: string | null; status?: string; type?: string; search?: string }) {
@@ -481,10 +552,10 @@ export function updateActivity(activityId: string, body: Record<string, unknown>
   });
 }
 
-export function scheduleActivity(activityId: string, opensAt: string | null, closesAt: string | null) {
+export function scheduleActivity(activityId: string, opensAt: string | null, closesAt: string | null, version: number) {
   return apiRequest<{ activity: ActivityDetail; message: string }>(`/faculty/activities/${activityId}/schedule`, {
     method: "POST",
-    body: JSON.stringify({ opens_at: opensAt, closes_at: closesAt }),
+    body: JSON.stringify({ opens_at: opensAt, closes_at: closesAt, content_version: version }),
   });
 }
 
@@ -548,7 +619,7 @@ export interface AdminDashboard {
 export interface ServiceHealth {
   service: string;
   label: string;
-  status: "healthy" | "stale" | "failed" | "unavailable";
+  status: "healthy" | "stale" | "failed" | "unavailable" | "off";
   detail: string;
   last_checked_at: string | null;
   trace_id: string | null;
@@ -559,6 +630,7 @@ export interface AccountRecord {
   email: string | null;
   display_name: string | null;
   pseudonym: string;
+  username: string;
   role: "student" | "instructor" | "admin";
   account_status: "active" | "deactivated";
   created_at: string | null;
@@ -587,6 +659,7 @@ export interface AdminMaterialList {
   items: MaterialSummary[];
   total: number;
   counts: Record<string, number>;
+  max_upload_bytes: number;
   courses: CourseSummary[];
 }
 
@@ -643,6 +716,7 @@ export interface AssignmentRecord {
   email: string | null;
   display_name: string | null;
   pseudonym: string;
+  username: string;
   account_role: string;
   account_status: string;
   member_role: "instructor" | "student";
@@ -751,33 +825,6 @@ export function getAdminMaterials(params: { courseId?: string; status?: string; 
   );
 }
 
-export function adminUploadMaterial(formData: FormData) {
-  return apiRequest<{ material: MaterialSummary; message: string }>("/admin/materials", { method: "POST", body: formData });
-}
-
-export function adminUpdateMaterial(documentId: string, body: { title: string; description: string | null; topic_concept: string | null }) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/admin/materials/${documentId}`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
-}
-
-export function adminArchiveMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/admin/materials/${documentId}/archive`, { method: "POST" });
-}
-
-export function adminRestoreMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/admin/materials/${documentId}/restore`, { method: "POST" });
-}
-
-export function adminRetryMaterial(documentId: string) {
-  return apiRequest<{ material: MaterialSummary; message: string }>(`/admin/materials/${documentId}/retry`, { method: "POST" });
-}
-
-export function adminGetMaterialDownload(documentId: string) {
-  return apiRequest<{ download_url: string }>(`/admin/materials/${documentId}/download`);
-}
-
 export function getAdminActivities(params: { courseId?: string; status?: string; type?: string; search?: string }) {
   return apiRequest<AdminActivityList>(
     `/admin/activities${queryString({
@@ -866,6 +913,7 @@ export const serviceStateLabel: Record<string, string> = {
   stale: "Stale",
   failed: "Failed",
   unavailable: "Unavailable",
+  off: "Off",
 };
 
 export function friendlyLoadError(message: string): string {
@@ -958,6 +1006,15 @@ export interface NextAction {
   kind: string | null;
 }
 
+/** How the student solves challenges and seeks help. Descriptive, never scored. */
+export interface HelpPattern {
+  challenges_solved: number;
+  self_solved: number;
+  three_star: number;
+  hinted_challenges: number;
+  tried_before_hint: number;
+}
+
 export interface StudentAnalytics {
   total_attempts: number;
   successful_attempts: number;
@@ -982,6 +1039,7 @@ export interface StudentAnalytics {
   score_trend: TrendPoint[];
   exam_history: ExamHistoryEntry[];
   badges: BadgeEntry[];
+  help_pattern?: HelpPattern;
 }
 
 export interface ProfileAuditEntry {
@@ -992,26 +1050,6 @@ export interface ProfileAuditEntry {
 }
 
 /** The single highest-priority thing this user could do next. */
-export interface ProfileAction {
-  kind: string;
-  title: string;
-  detail: string;
-  status: string;
-  href: string;
-}
-
-export interface InstructorAttention {
-  drafts_awaiting_review: number;
-  materials_needing_attention: number;
-  upcoming_activities: number;
-}
-
-export interface AdminAttention {
-  accounts_needing_action: number;
-  failed_jobs: number;
-  availability_changes: number;
-}
-
 export interface InstructorAnalytics {
   courses: number;
   activities_created: number;
@@ -1019,8 +1057,6 @@ export interface InstructorAnalytics {
   drafts_reviewed: number;
   materials_uploaded: number;
   learners_taught: number;
-  attention: InstructorAttention;
-  next_action: ProfileAction | null;
   /** Only actions this user personally performed. */
   recent_activity: ProfileAuditEntry[];
 }
@@ -1032,9 +1068,6 @@ export interface AdminAnalytics {
   total_activities: number;
   total_materials: number;
   /** Platform-wide audit, distinct from the personal timeline below. */
-  recent_audit: ProfileAuditEntry[];
-  attention: AdminAttention;
-  next_action: ProfileAction | null;
   /** Only actions this user personally performed. */
   recent_activity: ProfileAuditEntry[];
 }
@@ -1050,7 +1083,7 @@ export function getMyProfile() {
   return apiRequest<Profile>("/profile/me");
 }
 
-export function updateMyProfile(body: { display_name?: string | null; bio?: string | null }) {
+export function updateMyProfile(body: { display_name?: string | null; bio?: string | null; username?: string }) {
   return apiRequest<Profile>("/profile/me", { method: "PATCH", body: JSON.stringify(body) });
 }
 

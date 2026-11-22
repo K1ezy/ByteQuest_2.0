@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
 
 type TooltipState = {
@@ -8,133 +8,221 @@ type TooltipState = {
   left: number;
   top: number;
   side: "top" | "bottom";
+  container: HTMLElement;
 };
 
-/** One tooltip layer for icon controls on every route, including dialogs and drawers. */
+const TRIGGER = "[data-tooltip], button[aria-label], a[aria-label]";
+const INTERACTIVE = 'a[href], button, input, select, textarea, summary, label, [contenteditable], [role="button"], [role="link"], [role="tab"]';
+const contains = (element: HTMLElement | null, target: EventTarget | null) =>
+  target instanceof Node && Boolean(element?.contains(target));
+
+/**
+ * Explicit data-tooltip text is the help. Without it, only an icon-only control shows its
+ * accessible name as a visual label; a control with visible text needs no automatic tip.
+ */
+export function tooltipFor(target: HTMLElement): { text: string; describes: boolean } | null {
+  const name = target.getAttribute("aria-label")?.trim() || "";
+  const explicit = target.dataset.tooltip?.trim() || "";
+  if (explicit) return { text: explicit, describes: explicit !== name };
+  if (!name || hasVisibleText(target)) return null;
+  return { text: name, describes: false };
+}
+
+function hasVisibleText(node: Node): boolean {
+  return Array.from(node.childNodes).some((child) => child.nodeType === Node.TEXT_NODE
+    ? Boolean(child.textContent?.trim())
+    : child instanceof HTMLElement && child.getAttribute("aria-hidden") !== "true"
+      && !child.classList.contains("sr-only") && hasVisibleText(child));
+}
+
 export function AppTooltips() {
+  const id = useId();
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
   useEffect(() => {
+    let active: HTMLElement | null = null;
     let hovered: HTMLElement | null = null;
-    let dismissed: HTMLElement | null = null;
-    let showTimer: ReturnType<typeof setTimeout> | null = null;
-    let touchTimer: ReturnType<typeof setTimeout> | null = null;
+    let focused: HTMLElement | null = null;
+    let longPressed: HTMLElement | null = null;
+    let tapped: HTMLElement | null = null;
+    let touch: { target: HTMLElement; x: number; y: number } | null = null;
+    let showTimer: number | undefined;
+    let hideTimer: number | undefined;
 
-    const clearTimers = () => {
-      if (showTimer) clearTimeout(showTimer);
-      if (touchTimer) clearTimeout(touchTimer);
-      showTimer = null;
-      touchTimer = null;
-    };
+    function findTarget(target: EventTarget | null) {
+      return target instanceof Element ? target.closest<HTMLElement>(TRIGGER) : null;
+    }
 
-    const hide = () => {
+    function clearTimers() {
+      window.clearTimeout(showTimer);
+      window.clearTimeout(hideTimer);
+    }
+
+    function unlink() {
+      if (!active) return;
+      const ids = (active.getAttribute("aria-describedby") || "").split(/\s+/).filter((value) => value && value !== id);
+      if (ids.length) active.setAttribute("aria-describedby", ids.join(" "));
+      else active.removeAttribute("aria-describedby");
+      active = null;
+    }
+
+    function hide() {
       clearTimers();
-      hovered = null;
+      unlink();
       setTooltip(null);
-    };
+    }
 
-    const findTarget = (event: Event) =>
-      event.target instanceof Element
-        ? event.target.closest<HTMLElement>("[data-tooltip], button[aria-label], a[aria-label]")
-        : null;
-
-    const show = (element: HTMLElement) => {
-      const text = element.dataset.tooltip?.trim() || element.getAttribute("aria-label")?.trim();
-      if (!text || !element.isConnected) return;
-      const rect = element.getBoundingClientRect();
-      const side = rect.top >= 76 ? "top" : "bottom";
+    function show(target: HTMLElement) {
+      const help = tooltipFor(target);
+      if (!help || !target.isConnected) return;
+      const { text } = help;
+      if (active !== target) {
+        unlink();
+        // A tip that repeats the accessible name stays visual, so it is not announced twice.
+        if (help.describes) {
+          const describedBy = target.getAttribute("aria-describedby")?.trim();
+          target.setAttribute("aria-describedby", describedBy ? `${describedBy} ${id}` : id);
+        }
+        active = target;
+      }
+      const rect = target.getBoundingClientRect();
+      const side = rect.top >= 88 && rect.top > window.innerHeight - rect.bottom ? "top" : "bottom";
       const edge = Math.min(142, window.innerWidth / 2);
       setTooltip({
         text,
         left: Math.max(edge, Math.min(window.innerWidth - edge, rect.left + rect.width / 2)),
-        top: side === "top" ? rect.top - 10 : rect.bottom + 10,
+        top: side === "top" ? rect.top - 6 : rect.bottom + 6,
         side,
+        container: target.closest<HTMLElement>("dialog[open]") ?? document.body,
       });
-    };
+    }
 
-    const onPointerOver = (event: PointerEvent) => {
+    function onPointerOver(event: PointerEvent) {
       if (event.pointerType === "touch") return;
-      const target = findTarget(event);
-      if (!target || target === hovered || target === dismissed) return;
-      clearTimers();
-      setTooltip(null);
-      hovered = target;
-      showTimer = setTimeout(() => show(target), 350);
-    };
-
-    const onPointerOut = (event: PointerEvent) => {
-      if (dismissed && !dismissed.contains(event.relatedTarget as Node | null)) dismissed = null;
-      if (hovered && !hovered.contains(event.relatedTarget as Node | null)) hide();
-    };
-
-    const onFocusIn = (event: FocusEvent) => {
-      const target = findTarget(event);
-      if (!target || target === dismissed) return;
-      clearTimers();
-      hovered = target;
-      show(target);
-    };
-
-    const onFocusOut = (event: FocusEvent) => {
-      if (hovered && !hovered.contains(event.relatedTarget as Node | null)) hide();
-    };
-
-    const onPointerDown = (event: PointerEvent) => {
-      const target = findTarget(event);
-      if (!target) return;
-      if (event.pointerType !== "touch") {
-        dismissed = target;
-        hide();
+      if (contains(document.getElementById(id), event.target)) {
+        window.clearTimeout(hideTimer);
         return;
       }
-      clearTimers();
+      const target = findTarget(event.target);
+      if (!target || hovered === target) return;
       hovered = target;
-      touchTimer = setTimeout(() => show(target), 500);
-    };
-
-    const onPointerUp = (event: PointerEvent) => {
-      if (event.pointerType === "touch") hide();
-    };
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") hide();
-    };
-
-    const onClick = (event: MouseEvent) => {
-      dismissed = findTarget(event);
+      if (active === target) {
+        window.clearTimeout(hideTimer);
+        return;
+      }
       hide();
-    };
+      showTimer = window.setTimeout(() => show(target), 350);
+    }
 
-    document.addEventListener("pointerover", onPointerOver);
-    document.addEventListener("pointerout", onPointerOut);
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("pointerup", onPointerUp);
-    document.addEventListener("pointercancel", onPointerUp);
-    document.addEventListener("click", onClick);
-    document.addEventListener("focusin", onFocusIn);
-    document.addEventListener("focusout", onFocusOut);
-    document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("scroll", hide, true);
-    window.addEventListener("resize", hide);
+    function onPointerOut(event: PointerEvent) {
+      if (event.pointerType === "touch") return;
+      const panel = document.getElementById(id);
+      if (contains(hovered, event.relatedTarget) || contains(panel, event.relatedTarget)) return;
+      if (!contains(hovered, event.target) && !contains(panel, event.target)) return;
+      hovered = null;
+      window.clearTimeout(showTimer);
+      if (active && active !== focused) hideTimer = window.setTimeout(hide, 180);
+    }
+
+    function onFocusIn(event: FocusEvent) {
+      const target = findTarget(event.target);
+      focused = target?.matches(":focus-visible") ? target : null;
+      if (!focused) return;
+      hide();
+      show(focused);
+    }
+
+    function onFocusOut(event: FocusEvent) {
+      if (contains(focused, event.relatedTarget)) return;
+      if (active === focused && active !== hovered && !document.getElementById(id)?.matches(":hover")) hide();
+      focused = null;
+    }
+
+    function onPointerDown(event: PointerEvent) {
+      const target = findTarget(event.target);
+      const wasOpen = Boolean(target && active === target);
+      hide();
+      longPressed = null;
+      tapped = null;
+      touch = null;
+      if (event.pointerType !== "touch" || !target) return;
+      // Touch: a tap opens help on plain text such as a chip. Long press peeks a button's
+      // label. Links, fields and editors keep their native long-press menu and selection.
+      const control = target.closest(INTERACTIVE);
+      if (!control) {
+        if (!wasOpen) tapped = target;
+        return;
+      }
+      if (!control.matches("button")) return;
+      touch = { target, x: event.clientX, y: event.clientY };
+      showTimer = window.setTimeout(() => {
+        longPressed = target;
+        show(target);
+      }, 550);
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      if (!touch || event.pointerType !== "touch") return;
+      if (Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 10) onPointerEnd();
+    }
+
+    function onPointerEnd() {
+      if (touch) window.clearTimeout(showTimer);
+      touch = null;
+    }
+
+    function onClick(event: MouseEvent) {
+      if (longPressed && event.detail > 0 && contains(longPressed, event.target)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        longPressed = null;
+        return;
+      }
+      hide();
+      if (tapped && contains(tapped, event.target)) show(tapped);
+      tapped = null;
+    }
+
+    function onContextMenu(event: MouseEvent) {
+      if ((touch && contains(touch.target, event.target)) || contains(longPressed, event.target)) {
+        event.preventDefault();
+      }
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && active && active.isConnected && !event.defaultPrevented) {
+        event.preventDefault();
+        event.stopPropagation();
+        hide();
+      }
+    }
+
+    const listeners = new AbortController();
+    const signal = listeners.signal;
+    document.addEventListener("pointerover", onPointerOver, { signal });
+    document.addEventListener("pointerout", onPointerOut, { signal });
+    document.addEventListener("pointerdown", onPointerDown, { signal });
+    document.addEventListener("pointermove", onPointerMove, { signal });
+    document.addEventListener("pointerup", onPointerEnd, { signal });
+    document.addEventListener("pointercancel", onPointerEnd, { signal });
+    document.addEventListener("click", onClick, { capture: true, signal });
+    document.addEventListener("contextmenu", onContextMenu, { signal });
+    document.addEventListener("focusin", onFocusIn, { signal });
+    document.addEventListener("focusout", onFocusOut, { signal });
+    window.addEventListener("keydown", onKeyDown, { capture: true, signal });
+    document.addEventListener("scroll", hide, { capture: true, signal });
+    window.addEventListener("resize", hide, { signal });
     return () => {
+      listeners.abort();
       clearTimers();
-      document.removeEventListener("pointerover", onPointerOver);
-      document.removeEventListener("pointerout", onPointerOut);
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("pointerup", onPointerUp);
-      document.removeEventListener("pointercancel", onPointerUp);
-      document.removeEventListener("click", onClick);
-      document.removeEventListener("focusin", onFocusIn);
-      document.removeEventListener("focusout", onFocusOut);
-      document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("scroll", hide, true);
-      window.removeEventListener("resize", hide);
+      unlink();
     };
-  }, []);
+  }, [id]);
 
   if (!tooltip) return null;
   return createPortal(
     <div
+      id={id}
       className="app-icon-tooltip"
       data-side={tooltip.side}
       role="tooltip"
@@ -142,6 +230,6 @@ export function AppTooltips() {
     >
       {tooltip.text}
     </div>,
-    document.body,
+    tooltip.container,
   );
 }

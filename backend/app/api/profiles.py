@@ -11,20 +11,21 @@ from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.quotas import reserve
 from app.core.security import get_current_user
 from app.services.storage.supabase_storage import StorageError, avatar_storage
 from app.services.profile_attention import (
-    admin_attention,
-    instructor_attention,
     instructor_course_ids,
     personal_audit,
 )
 from app.services.gamification.progression import XP_PER_LEVEL
 from app.services.gamification.sequencer import determine_track_recommendation
+from app.services.gamification.solve_quality import help_pattern
 from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.usernames import normalize_username
+from sqlalchemy.exc import IntegrityError
 from app.models.entities import (
     ActivityAttempt,
-    AuditEvent,
     Badge,
     Course,
     CourseMember,
@@ -54,6 +55,7 @@ class ProfileResponse(BaseModel):
 
     id: uuid.UUID
     pseudonym_id: str
+    username: str
     role: UserRole
     enrolled_language: ProgrammingLang
     year_level: int
@@ -65,6 +67,8 @@ class ProfileResponse(BaseModel):
     avatar_url: str | None = None
     email: str | None = None
     created_at: datetime | None = None
+    needs_track_setup: bool = False
+    handle_chosen: bool = True
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -74,6 +78,28 @@ class ProfileUpdateRequest(BaseModel):
 
     display_name: str | None = Field(default=None, max_length=120)
     bio: str | None = Field(default=None, max_length=500)
+    username: str | None = None
+
+
+class StaffSetupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    school_id: str = Field(min_length=1, max_length=64)
+
+
+@router.put("/staff-setup", status_code=204)
+def complete_staff_setup(
+    payload: StaffSetupRequest,
+    current_user: Profile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    profile = db.query(Profile).filter(Profile.id == current_user.id).with_for_update().populate_existing().one()
+    if profile.role not in (UserRole.instructor, UserRole.admin) or profile.account_status != "active":
+        raise HTTPException(status_code=403, detail="Staff setup requires an active Faculty or Admin account.")
+    if profile.school_id is not None and profile.school_id != payload.school_id:
+        raise HTTPException(status_code=409, detail="A School ID is already saved for this account. Enter the same ID or contact your ByteQuest administrator.")
+    profile.school_id = payload.school_id
+    db.commit()
 
 
 def _require_student(profile: Profile) -> None:
@@ -90,6 +116,33 @@ def get_my_profile(
 ) -> ProfileResponse:
     """Return the authenticated user's application profile."""
     return current_user
+
+
+@router.get("/username-availability")
+def username_availability(username: str, db: Session = Depends(get_db)) -> dict[str, bool]:
+    """Public signup hint; the unique database index remains authoritative."""
+    try:
+        normalized = normalize_username(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    taken = db.query(Profile.id).filter(func.lower(Profile.username) == normalized).first()
+    return {"available": taken is None}
+
+
+class SchoolIdCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    school_id: str = Field(min_length=1, max_length=64)
+
+
+@router.post("/school-id-availability")
+def school_id_availability(payload: SchoolIdCheck, db: Session = Depends(get_db)) -> dict[str, bool]:
+    """Public signup hint; the signup trigger and unique index stay authoritative.
+
+    POST keeps the School ID out of URLs and server logs.
+    """
+    reserve("signup_check")
+    taken = db.query(Profile.id).filter(Profile.school_id == payload.school_id).first()
+    return {"available": taken is None}
 
 
 @router.patch("/me", response_model=ProfileResponse)
@@ -111,7 +164,22 @@ def update_my_profile(
         bio = (fields["bio"] or "").strip()
         current_user.bio = bio or None
 
-    db.commit()
+    if "username" in fields:
+        if not fields["username"]:
+            raise HTTPException(status_code=422, detail="Username is required.")
+        try:
+            current_user.username = normalize_username(fields["username"])
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        if constraint == "profiles_username_lower_unique":
+            raise HTTPException(status_code=409, detail="That username is already taken.") from exc
+        raise
     db.refresh(current_user)
     return current_user
 
@@ -127,6 +195,7 @@ def complete_student_onboarding(
     current_user.enrolled_language = payload.enrolled_language
     current_user.year_level = payload.year_level
     current_user.semester = payload.semester
+    current_user.track_selected_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(current_user)
@@ -277,6 +346,16 @@ class NextAction(BaseModel):
     kind: str | None = None
 
 
+class HelpPattern(BaseModel):
+    """How the student solves challenges and seeks help; descriptive, never scored."""
+
+    challenges_solved: int
+    self_solved: int
+    three_star: int
+    hinted_challenges: int
+    tried_before_hint: int
+
+
 class StudentAnalytics(BaseModel):
     total_attempts: int
     successful_attempts: int
@@ -301,6 +380,7 @@ class StudentAnalytics(BaseModel):
     score_trend: list[TrendPoint]
     exam_history: list[ExamHistoryEntry]
     badges: list[BadgeEntry]
+    help_pattern: HelpPattern
 
 
 class AuditEntry(BaseModel):
@@ -310,28 +390,6 @@ class AuditEntry(BaseModel):
     created_at: datetime
 
 
-class ProfileAction(BaseModel):
-    """The single highest-priority thing this user could do next."""
-
-    kind: str
-    title: str
-    detail: str
-    status: str
-    href: str
-
-
-class InstructorAttention(BaseModel):
-    drafts_awaiting_review: int = 0
-    materials_needing_attention: int = 0
-    upcoming_activities: int = 0
-
-
-class AdminAttention(BaseModel):
-    accounts_needing_action: int = 0
-    failed_jobs: int = 0
-    availability_changes: int = 0
-
-
 class InstructorAnalytics(BaseModel):
     courses: int
     activities_created: int
@@ -339,8 +397,6 @@ class InstructorAnalytics(BaseModel):
     drafts_reviewed: int
     materials_uploaded: int
     learners_taught: int
-    attention: InstructorAttention = InstructorAttention()
-    next_action: ProfileAction | None = None
     recent_activity: list[AuditEntry] = []
 
 
@@ -351,9 +407,6 @@ class AdminAnalytics(BaseModel):
     total_activities: int
     total_materials: int
     # Platform-wide audit, kept separate from the personal timeline below.
-    recent_audit: list[AuditEntry]
-    attention: AdminAttention = AdminAttention()
-    next_action: ProfileAction | None = None
     recent_activity: list[AuditEntry] = []
 
 
@@ -447,7 +500,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
     ]
 
     exam_rows = (
-        db.query(ExamAttempt, Exam.title, Exam.results_released_at)
+        db.query(ExamAttempt, Exam.title)
         .join(Exam, Exam.id == ExamAttempt.exam_id)
         .filter(ExamAttempt.student_id == user.id)
         .order_by(ExamAttempt.started_at.desc())
@@ -464,8 +517,8 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
             submitted_at=attempt.submitted_at,
             results_released=released,
         )
-        for attempt, title, released_at in exam_rows
-        for released in [bool(released_at and attempt.submitted_at and attempt.submitted_at <= released_at)]
+        for attempt, title in exam_rows
+        for released in [bool(attempt.result_released_at)]
     ]
 
     badge_rows = (
@@ -541,6 +594,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
             kind=_enum_value(target.activity_type) if target else None,
         ),
         badge_count=len(badges),
+        help_pattern=HelpPattern(**help_pattern(db, user.id)),
         by_type=by_type,
         by_topic=by_topic,
         score_trend=score_trend,
@@ -596,7 +650,6 @@ def _instructor_analytics(db: Session, user: Profile) -> InstructorAnalytics:
             or 0
         )
 
-    attention_counts, next_action = instructor_attention(db, user, course_ids)
 
     return InstructorAnalytics(
         courses=len(course_ids),
@@ -605,8 +658,6 @@ def _instructor_analytics(db: Session, user: Profile) -> InstructorAnalytics:
         drafts_reviewed=int(drafts_reviewed),
         materials_uploaded=int(materials_uploaded),
         learners_taught=int(learners_taught),
-        attention=InstructorAttention(**attention_counts),
-        next_action=ProfileAction(**next_action),
         recent_activity=_personal_audit_entries(db, user),
     )
 
@@ -624,33 +675,12 @@ def _admin_analytics(db: Session, user: Profile) -> AdminAnalytics:
         .scalar()
         or 0
     )
-    audit_rows = (
-        db.query(AuditEvent)
-        .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
-        .limit(10)
-        .all()
-    )
-    recent_audit = [
-        AuditEntry(
-            action=event.action,
-            entity_type=event.entity_type,
-            summary=event.summary,
-            created_at=event.created_at,
-        )
-        for event in audit_rows
-    ]
-
-    attention_counts, next_action = admin_attention(db, user)
-
     return AdminAnalytics(
         total_accounts=int(total_accounts),
         accounts_by_role=accounts_by_role,
         total_courses=int(total_courses),
         total_activities=int(total_activities),
         total_materials=int(total_materials),
-        recent_audit=recent_audit,
-        attention=AdminAttention(**attention_counts),
-        next_action=ProfileAction(**next_action),
         recent_activity=_personal_audit_entries(db, user),
     )
 

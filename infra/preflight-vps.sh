@@ -17,6 +17,7 @@ python3 - <<'PY'
 import json
 import re
 import stat
+import subprocess
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
@@ -157,21 +158,12 @@ def bounded_integer(
 
 
 db_connection_budget = bounded_integer(backend, "DB_CONNECTION_BUDGET", "backend", 1, 1000)
-db_pool_size = bounded_integer(backend, "DB_POOL_SIZE", "backend", 1, 20)
-db_max_overflow = bounded_integer(backend, "DB_MAX_OVERFLOW", "backend", 0, 20)
+bounded_integer(backend, "DB_POOL_SIZE", "backend", 1, 20)
+bounded_integer(backend, "DB_MAX_OVERFLOW", "backend", 0, 20)
 bounded_integer(backend, "DB_POOL_TIMEOUT_SECONDS", "backend", 1, 30)
 bounded_integer(backend, "DB_CONNECT_TIMEOUT_SECONDS", "backend", 1, 30)
 bounded_integer(backend, "DB_POOL_RECYCLE_SECONDS", "backend", 60, 86400)
-uvicorn_workers = bounded_integer(infra, "UVICORN_WORKERS", "infra", 1, 8)
-if all(value is not None for value in (db_connection_budget, db_pool_size, db_max_overflow, uvicorn_workers)):
-    worker_connections = 2  # submission-worker: DB_POOL_SIZE=1, DB_MAX_OVERFLOW=1
-    configured_connections = uvicorn_workers * (db_pool_size + db_max_overflow) + worker_connections
-    if configured_connections > db_connection_budget:
-        errors.append(
-            "Backend connection demand for one Compose replica exceeds DB_CONNECTION_BUDGET "
-            f"({uvicorn_workers} API workers x ({db_pool_size} pool + {db_max_overflow} overflow) + {worker_connections} grading-worker connections "
-            f"= {configured_connections}, budget {db_connection_budget})."
-        )
+bounded_integer(infra, "UVICORN_WORKERS", "infra", 1, 8)
 
 supabase_url = required(backend, "SUPABASE_URL", "backend")
 if supabase_url:
@@ -197,7 +189,11 @@ if supabase_url:
 required(backend, "SUPABASE_ANON_KEY", "backend")
 if not backend.get("SUPABASE_SERVICE_ROLE_KEY", "").strip() and not backend.get("SUPABASE_SECRET_KEY", "").strip():
     errors.append("Set SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY for private PDF storage.")
-required(backend, "GEMINI_API_KEY", "backend")
+gemini_enabled = backend.get("GEMINI_ENABLED", "true").strip().lower()
+if gemini_enabled == "true":
+    required(backend, "GEMINI_API_KEY", "backend")
+elif gemini_enabled != "false":
+    errors.append("Set GEMINI_ENABLED to true or false in backend.prod.env.")
 
 try:
     cors_origins = json.loads(required(backend, "CORS_ORIGINS", "backend"))
@@ -255,6 +251,11 @@ if judge0.get("POSTGRES_PORT", "").strip() != "5432":
     errors.append("Set POSTGRES_PORT=5432 in judge0.prod.conf to match the private Compose service.")
 if judge0.get("REDIS_PORT", "").strip() != "6379":
     errors.append("Set REDIS_PORT=6379 in judge0.prod.conf to match the private Compose service.")
+
+for key in ("ENABLE_CALLBACKS", "ALLOW_ENABLE_NETWORK", "ENABLE_NETWORK"):
+    if judge0.get(key) != "false":
+        errors.append(f"Set {key}=false in judge0.prod.conf.")
+
 positive_settings = (
     "COUNT",
     "MAX_QUEUE_SIZE",
@@ -301,14 +302,42 @@ if errors:
         print(f"ERROR: {error}")
     raise SystemExit(1)
 
+# Compose's rendered environment includes env-file values, service overrides and
+# shell interpolation. Keep it in memory, since it also contains credentials.
+try:
+    rendered = subprocess.run(
+        ["docker", "compose", "--profile", "vps", "config", "--format", "json"],
+        check=True, capture_output=True, text=True,
+    )
+    services = json.loads(rendered.stdout)["services"]
+    api_env = services["fastapi"]["environment"]
+    worker_env = services["submission-worker"]["environment"]
+    uvicorn_workers = int(api_env["UVICORN_WORKERS"])
+    api_pool_size = int(api_env["DB_POOL_SIZE"])
+    api_overflow = int(api_env["DB_MAX_OVERFLOW"])
+    worker_pool_size = int(worker_env["DB_POOL_SIZE"])
+    worker_overflow = int(worker_env["DB_MAX_OVERFLOW"])
+except (subprocess.CalledProcessError, KeyError, TypeError, ValueError):
+    raise SystemExit("ERROR: Compose could not render the effective API and grading-worker settings.") from None
+
+if not (1 <= uvicorn_workers <= 8 and 1 <= api_pool_size <= 20 and 0 <= api_overflow <= 20
+        and 1 <= worker_pool_size <= 20 and 0 <= worker_overflow <= 20):
+    raise SystemExit("ERROR: Rendered Compose worker counts or database pool settings are out of range.")
+
+worker_connections = worker_pool_size + worker_overflow
+configured_connections = uvicorn_workers * (api_pool_size + api_overflow) + worker_connections
+connection_summary = (
+    f"{uvicorn_workers} API workers x ({api_pool_size} pool + {api_overflow} overflow) "
+    f"+ {worker_connections} grading-worker connections = {configured_connections}, budget {db_connection_budget}"
+)
+if configured_connections > db_connection_budget:
+    raise SystemExit(f"ERROR: Backend connection demand exceeds DB_CONNECTION_BUDGET ({connection_summary}).")
+
 print("Production settings passed local validation. No secret values were displayed.")
 print(
     "Backend DB connection ceiling for one Compose replica: "
-    f"{uvicorn_workers} workers x ({db_pool_size} pool + {db_max_overflow} overflow) "
-    f"= {uvicorn_workers * (db_pool_size + db_max_overflow)} connections."
+    f"{connection_summary}."
 )
 PY
 
-# Compose config renders sensitive values; --quiet validates without printing them.
-docker compose --profile vps config --quiet
 printf 'VPS Compose configuration is valid. No services were started.\n'

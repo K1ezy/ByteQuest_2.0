@@ -2,259 +2,159 @@
 
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useChat } from "@/components/chat/chat-provider";
+import { useEffect, useId, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { belongsTo } from "@/lib/navigation";
+import { useChat } from "./chat-provider";
+import { useChatViewport, useCompactChatLayout } from "./use-chat-viewport";
 
 const ChatConversation = dynamic(
-  () =>
-    import("@/components/chat/chat-conversation").then(
-      (module) => module.ChatConversation,
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="chat-loading" role="status">
-        Loading chat…
-      </div>
-    ),
-  },
+  () => import("./chat-conversation").then((module) => module.ChatConversation),
+  { ssr: false, loading: () => <div className="chat-loading" role="status">Loading chat…</div> },
 );
 
-const UUID_PATH =
-  /^\/(?:arena|quiz)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i;
+export function ChatIcon() {
+  return (
+    <svg className="bq-chat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 11.5a8 8 0 0 1-8 8H7l-4 3v-5.6A8 8 0 0 1 11 5h2a8 8 0 0 1 8 6.5Z" />
+      <path d="M8 11h.01M12 11h.01M16 11h.01" />
+    </svg>
+  );
+}
+
+function ChatPanel({ id, mobile, arena, close, expand, minimize }: {
+  id: string; mobile: boolean; arena: boolean; close: () => void; expand: () => void; minimize: () => void;
+}) {
+  const dialogRef = useChatViewport<HTMLDialogElement>();
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    closeRef.current?.focus({ preventScroll: true });
+    if (!dialog) return;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      if (dialog.open) dialog.close();
+      document.body.style.overflow = overflow;
+    };
+  }, [dialogRef]);
+
+  const title = id + "-title";
+  const contents: ReactNode = <>
+    <header className="chat-panel-header">
+      <h2 id={title}>Chat Assistant</h2>
+      <div className="chat-window-actions">
+        <button type="button" className="chat-window-btn" aria-label="Minimize chat" title="Minimize chat" onClick={minimize}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <path d="M6 12h12" />
+          </svg>
+        </button>
+        <button type="button" className="chat-window-btn" aria-label="Open full page" title="Open full page" onClick={expand}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
+            <path d="M8 5h11v11h-3" /><rect x="5" y="8" width="11" height="11" rx="1" />
+          </svg>
+        </button>
+        <button type="button" className="chat-window-btn" aria-label="Close chat" title="Close chat" ref={closeRef} onClick={close}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
+      </div>
+    </header>
+    <ChatConversation variant="compact" />
+  </>;
+
+  if (mobile) return (
+    <dialog id={id} ref={dialogRef} aria-labelledby={title} className="chat-panel chat-sheet"
+      onCancel={(event) => { event.preventDefault(); close(); }}
+      onClick={(event) => {
+        if (event.target !== event.currentTarget) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (event.clientY < bounds.top || event.clientY > bounds.bottom) close();
+      }}>
+      {contents}
+    </dialog>
+  );
+
+  return (
+    <section id={id} className="chat-panel chat-panel-desktop" role="dialog" aria-labelledby={title}
+      data-arena={arena || undefined}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || event.defaultPrevented) return;
+        event.preventDefault();
+        close();
+      }}>
+      {contents}
+    </section>
+  );
+}
 
 export function ChatShell() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const {
-    signedIn,
-    setActivityId,
-    setReturnPath,
-  } = useChat();
-
-  const [open, setOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
-  const panelRef = useRef<HTMLElement>(null);
+  const { signedIn, setReturnPath, windowMode, setWindowMode } = useChat();
+  const open = windowMode === "open";
+  const mobile = useCompactChatLayout();
+  const panelId = useId();
   const launcherRef = useRef<HTMLButtonElement>(null);
-  const restoreFocusRef = useRef(false);
-
-  const isChatPage = pathname === "/chat";
-  const isExamRoute = pathname === "/exams" || pathname.startsWith("/exams/");
-  const isDisallowed =
-    pathname === "/" ||
-    pathname === "/onboarding" ||
-    pathname === "/faculty" ||
-    pathname.startsWith("/faculty/") ||
-    pathname === "/admin" ||
-    pathname.startsWith("/admin/") ||
-    pathname.startsWith("/account") ||
-    isExamRoute ||
-    isChatPage;
-  const canShow = signedIn === true && !isDisallowed;
+  const restoreRef = useRef<HTMLButtonElement>(null);
+  const visible = signedIn === true && !belongsTo(pathname, "/chat") && !belongsTo(pathname, "/exams");
 
   useEffect(() => {
-    const query = window.matchMedia("(max-width: 767px)");
-    const sync = () => setIsMobile(query.matches);
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
-  }, []);
-
-  useEffect(() => {
-    if (isChatPage || isDisallowed) return;
+    if (!visible) return;
     const query = searchParams.toString();
-    setReturnPath(query ? `${pathname}?${query}` : pathname);
-  }, [isChatPage, isDisallowed, pathname, searchParams, setReturnPath]);
+    setReturnPath(query ? pathname + "?" + query : pathname);
+  }, [visible, pathname, searchParams, setReturnPath]);
 
   useEffect(() => {
-    const match = pathname.match(UUID_PATH);
-    setActivityId(match ? match[1] : null);
-  }, [pathname, setActivityId]);
+    if (visible) return;
+    // The route or account may change while the portal is open.
+    setWindowMode("closed");
+  }, [visible, setWindowMode]);
 
-  useEffect(() => {
-    if (!canShow && open) {
-      // Route/auth visibility is an external system; collapse the panel when
-      // the shell itself is no longer allowed on this page.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setOpen(false);
-    }
-  }, [canShow, open]);
+  function close() {
+    setWindowMode("closed");
+    requestAnimationFrame(() => launcherRef.current?.focus({ preventScroll: true }));
+  }
 
-  const closePanel = useCallback(() => {
-    restoreFocusRef.current = true;
-    setOpen(false);
-  }, []);
-
-  useEffect(() => {
-    if (open || !restoreFocusRef.current) return;
-    restoreFocusRef.current = false;
-    launcherRef.current?.focus();
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closePanel();
-        return;
-      }
-      if (!isMobile || event.key !== "Tab" || !panelRef.current) return;
-      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      );
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [closePanel, isMobile, open]);
-
-  useEffect(() => {
-    if (!open || !isMobile) return;
-    const main = document.getElementById("main-content");
-    const header = document.querySelector<HTMLElement>(".site-header-redesign");
-    const skipLink = document.querySelector<HTMLElement>(".skip-to-content");
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    [main, header, skipLink].forEach((element) =>
-      element?.setAttribute("inert", ""),
-    );
-    return () => {
-      [main, header, skipLink].forEach((element) =>
-        element?.removeAttribute("inert"),
-      );
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [isMobile, open]);
-
-  const maximize = useCallback(() => {
-    restoreFocusRef.current = false;
-    setOpen(false);
+  function expand() {
+    setWindowMode("closed");
     router.push("/chat");
-  }, [router]);
+  }
 
-  if (isChatPage || !canShow) return null;
+  function minimize() {
+    setWindowMode("minimized");
+    requestAnimationFrame(() => restoreRef.current?.focus({ preventScroll: true }));
+  }
 
+  if (!visible) return null;
   return (
     <>
-      {!open && (
-        <button
-          ref={launcherRef}
-          type="button"
-          className="chat-launcher"
-          aria-label="Open Chat Assistant"
-          onClick={() => setOpen(true)}
-        >
-          <svg
-            className="chat-launcher-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.9"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M21 11.5a8 8 0 0 1-8 8H7l-4 3v-5.6A8 8 0 0 1 11 5h2a8 8 0 0 1 8 6.5Z" />
-            <path d="M8 11h.01M12 11h.01M16 11h.01" />
-          </svg>
-          <span className="chat-launcher-label">Chat</span>
-        </button>
+      <button ref={launcherRef} type="button" className="button button-outline bq-chat-action"
+        aria-label={open ? "Close Chat Assistant" : "Open Chat Assistant"} aria-expanded={open} aria-haspopup="dialog"
+        aria-controls={open ? panelId : undefined}
+        onClick={() => open ? close() : setWindowMode("open")}
+        onKeyDown={(event) => {
+          if (open && event.key === "Escape") {
+            event.preventDefault();
+            close();
+          }
+        }}>
+        <ChatIcon />
+        <span className="chat-launcher-label">Chat Assistant</span>
+      </button>
+      {open && createPortal(
+        <ChatPanel key={mobile ? "mobile" : "desktop"} id={panelId} mobile={mobile}
+          arena={belongsTo(pathname, "/arena")} close={close} expand={expand} minimize={minimize} />, document.body,
       )}
-
-      {open && (
-        <>
-          {isMobile && (
-            <div
-              className="chat-backdrop"
-              onClick={closePanel}
-              aria-hidden="true"
-            />
-          )}
-          <section
-            ref={panelRef}
-            className="chat-panel"
-            role="dialog"
-            aria-modal={isMobile ? true : undefined}
-            aria-labelledby="chat-panel-title"
-          >
-            <header className="chat-panel-header">
-              <div className="chat-panel-heading">
-                <p className="chat-eyebrow">BYTEQUEST</p>
-                <h2 id="chat-panel-title">Chat Assistant</h2>
-                <p className="chat-panel-subtitle">Hints &amp; concepts</p>
-              </div>
-              <div className="chat-window-actions">
-                <button
-                  type="button"
-                  className="chat-window-btn"
-                  aria-label="Minimize chat"
-                  data-tooltip="Minimize chat. The conversation is kept."
-                  onClick={closePanel}
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M6 12h12" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  className="chat-window-btn"
-                  aria-label="Open chat full page"
-                  data-tooltip="Open the full chat workspace."
-                  onClick={maximize}
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  className="chat-window-btn"
-                  aria-label="Close panel"
-                  data-tooltip="Close panel. The conversation is kept."
-                  onClick={closePanel}
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M6 6l12 12M18 6L6 18" />
-                  </svg>
-                </button>
-              </div>
-            </header>
-            <ChatConversation variant="compact" />
-          </section>
-        </>
+      {windowMode === "minimized" && createPortal(
+        <button ref={restoreRef} type="button" className="chat-restore-bar" aria-label="Restore Chat Assistant"
+          onClick={() => setWindowMode("open")}><ChatIcon /> Chat Assistant <span aria-hidden="true">↑</span></button>,
+        document.body,
       )}
     </>
   );

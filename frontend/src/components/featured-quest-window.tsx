@@ -123,7 +123,7 @@ export function FeaturedQuestWindow() {
         <span className="preview-xp">✦ {currentSlide.xp} XP</span>
       </div>
 
-      <div className="preview-icon" aria-hidden="true" data-tooltip={currentSlide.badge.includes("CONCEPT") ? "Concept check: review what you learned." : "Code challenge: solve a programming task."}>
+      <div className="preview-icon" aria-hidden="true">
         {currentSlide.badge.includes("CONCEPT") ? "✓" : "</>"}
       </div>
 

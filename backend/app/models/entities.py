@@ -1,11 +1,12 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Enum,
@@ -26,6 +27,30 @@ from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 
 from app.core.database import Base
+
+
+def _starter_username(context) -> str:
+    """Derive the starter handle from the row being inserted.
+
+    Imported lazily: app.services imports app.models, so a module-level import
+    here would be circular.
+    """
+    from app.services.usernames import starter_username
+
+    parameters = context.get_current_parameters()
+    return starter_username(parameters["id"], parameters.get("display_name"))
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware UTC now.
+
+    Every timestamp column in this module is timestamptz (see
+    supabase/migrations/20261111000100_timestamp_and_state_integrity.sql).
+    Returning an aware value keeps ORM-populated defaults comparable with values
+    read back from the database and with the aware columns on the same row.
+    """
+    return datetime.now(timezone.utc)
+
 
 # Supabase owns auth.users. Keep this reference in separate metadata so regular
 # application metadata operations never try to create or migrate the Auth table.
@@ -77,8 +102,13 @@ class Profile(Base):
         default=uuid.uuid4,
     )
     pseudonym_id = Column(String(64), unique=True, nullable=False, index=True)
+    # Defaulted here, not at each call site: scripts, seeds and tests build Profiles
+    # directly and must still get a unique handle that satisfies the NOT NULL column.
+    username = Column(String(44), nullable=False, default=_starter_username)
     role = Column(Enum(UserRole, name="userrole"), nullable=False, default=UserRole.student)
     year_level = Column(Integer, nullable=False, default=1)
+    school_id = Column(String(64), nullable=True)
+    block_section = Column(String(1), nullable=True)
     semester = Column(Integer, nullable=False, default=1)
     enrolled_language = Column(
         Enum(ProgrammingLang, name="programminglang"),
@@ -87,16 +117,31 @@ class Profile(Base):
     )
     xp_points = Column(Integer, nullable=False, default=0)
     current_level = Column(Integer, nullable=False, default=1)
+    # NULL until the student saves their track. enrolled_language cannot answer this:
+    # the signup trigger always writes a default, so it looks chosen from the start.
+    track_selected_at = Column(DateTime(timezone=True), nullable=True)
     account_status = Column(String(20), nullable=False, default="active", server_default=text("'active'"))
     deactivated_at = Column(DateTime(timezone=True), nullable=True)
     display_name = Column(String(120), nullable=True)
     email = Column(String(320), nullable=True)
     avatar_url = Column(Text, nullable=True)
     bio = Column(String(500), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False)
 
     attempts = relationship("ActivityAttempt", back_populates="student", cascade="all, delete-orphan")
+
+    @property
+    def needs_track_setup(self) -> bool:
+        """The server owns this rule so every entry point routes the same way."""
+        return self.role == UserRole.student and self.track_selected_at is None
+
+    @property
+    def handle_chosen(self) -> bool:
+        """False while the account still has its generated starter handle."""
+        from app.services.usernames import is_starter_username  # lazy: avoids the services↔models cycle
+
+        return bool(self.username) and not (self.id is not None and is_starter_username(self.id, self.username))
 
 
 # ============================================================================
@@ -138,7 +183,7 @@ class InstructionalDocument(Base):
     processing_error = Column(Text, nullable=True)
     uploaded_original_name = Column(String(255), nullable=True)
     indexed_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
 
@@ -166,7 +211,7 @@ class DocumentChunk(Base):
     embedding = Column(Vector(768), nullable=False)
     embedding_model = Column(String(50), default="gemini-embedding-2", nullable=False)
     embedding_dim = Column(Integer, default=768, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     document = relationship("InstructionalDocument", back_populates="chunks")
 
@@ -212,9 +257,12 @@ class LearningActivity(Base):
     reference_solution_code = Column(Text, nullable=True)
     quiz_questions_json = Column(JSONB, nullable=True)
     judge0_verified = Column(Boolean, default=False, nullable=False)
+    exam_only = Column(Boolean, nullable=False, server_default=text("false"))
     judge0_verification_log = Column(JSONB, nullable=True)
     reviewed_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=True)
     xp_reward = Column(Integer, default=50, nullable=False)
+    # NULL keeps the default pass rule (see app.services.pass_mark).
+    pass_mark_percent = Column(Integer, nullable=True)
     course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True)
     generation_json = Column(JSONB, nullable=True)
     content_version = Column(Integer, nullable=False, default=1, server_default=text("1"))
@@ -225,41 +273,66 @@ class LearningActivity(Base):
     version_number = Column(Integer, nullable=False, default=1, server_default=text("1"))
     version_of = Column(UUID(as_uuid=True), ForeignKey("learning_activities.id", ondelete="SET NULL"), nullable=True)
     rejection_reason = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     test_cases = relationship("TestCase", back_populates="activity", cascade="all, delete-orphan", order_by="TestCase.order_index")
     attempts = relationship("ActivityAttempt", back_populates="activity", cascade="all, delete-orphan")
 
 
-class QuestGroup(Base):
-    __tablename__ = "quest_groups"
+class Workshop(Base):
+    __tablename__ = "workshops"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(80), nullable=False)
     description = Column(String(500), nullable=True)
     language = Column(Enum(ProgrammingLang, name="programminglang"), nullable=False)
+    block = Column(String(24), nullable=True)
+    year_level = Column(Integer, CheckConstraint("year_level between 1 and 4"), nullable=True)
+    subject = Column(String(80), nullable=True)
+    room = Column(String(40), nullable=True)
     join_code = Column(String(8), unique=True, nullable=False, index=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    joining_enabled = Column(Boolean, nullable=False, server_default=text("true"))
+    archived_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"), onupdate=_utcnow)
 
 
-class QuestGroupMember(Base):
-    __tablename__ = "quest_group_members"
-    __table_args__ = (UniqueConstraint("group_id", "profile_id", name="uq_quest_group_member"),)
+class WorkshopMember(Base):
+    __tablename__ = "workshop_members"
+    __table_args__ = (UniqueConstraint("workshop_id", "profile_id", name="uq_workshop_member"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    group_id = Column(UUID(as_uuid=True), ForeignKey("quest_groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    workshop_id = Column(UUID(as_uuid=True), ForeignKey("workshops.id", ondelete="CASCADE"), nullable=False, index=True)
     profile_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
-    joined_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    joined_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 
-class QuestGroupActivity(Base):
-    __tablename__ = "quest_group_activities"
-    __table_args__ = (UniqueConstraint("group_id", "activity_id", name="uq_quest_group_activity"),)
+class WorkshopActivity(Base):
+    __tablename__ = "workshop_activities"
+    __table_args__ = (UniqueConstraint("workshop_id", "activity_id", name="uq_workshop_activity"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    group_id = Column(UUID(as_uuid=True), ForeignKey("quest_groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    workshop_id = Column(UUID(as_uuid=True), ForeignKey("workshops.id", ondelete="CASCADE"), nullable=False, index=True)
     activity_id = Column(UUID(as_uuid=True), ForeignKey("learning_activities.id", ondelete="CASCADE"), nullable=False, index=True)
+    topic = Column(String(80), nullable=True)
+    position = Column(Integer, nullable=False, server_default=text("0"))
+    added_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class WorkshopAnnouncement(Base):
+    __tablename__ = "workshop_announcements"
+    __table_args__ = (CheckConstraint("char_length(body) BETWEEN 1 AND 2000"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    workshop_id = Column(UUID(as_uuid=True), ForeignKey("workshops.id", ondelete="CASCADE"), nullable=False)
+    author_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True)
+    body = Column(Text, nullable=False)
+    pinned = Column(Boolean, nullable=False, server_default=text("false"))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"), onupdate=_utcnow)
+
+    Index("ix_workshop_announcements_timeline", workshop_id, created_at.desc())
 
 
 
@@ -280,7 +353,7 @@ class TestCase(Base):
     memory_limit_kb = Column(Integer, default=256000, nullable=False)
     is_hidden = Column(Boolean, default=False, nullable=False)
     weight = Column(Float, default=1.0, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     activity = relationship("LearningActivity", back_populates="test_cases")
 
@@ -292,6 +365,14 @@ class ActivityAttempt(Base):
     __tablename__ = "activity_attempts"
 
     __table_args__ = (
+        Index(
+            "ix_activity_attempts_student_first_practice", "student_id", "created_at",
+            postgresql_where=text("exam_attempt_id IS NULL"),
+        ),
+        Index(
+            "ix_activity_attempts_student_success", "student_id", "activity_id", "created_at",
+            postgresql_where=text("is_successful"),
+        ),
         UniqueConstraint(
             "student_id",
             "activity_id",
@@ -322,14 +403,58 @@ class ActivityAttempt(Base):
     error_category = Column(String(50), default="none", nullable=False)
     time_spent_seconds = Column(Integer, default=0, nullable=False)
     xp_awarded = Column(Integer, default=0, nullable=False)
-    submission_job_id = Column(UUID(as_uuid=True), unique=True, nullable=True)
+    submission_job_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("submission_jobs.id", ondelete="SET NULL"),
+        unique=True,
+        nullable=True,
+    )
     result_json = Column(JSONB, nullable=True)
     exam_attempt_id = Column(UUID(as_uuid=True), ForeignKey("exam_attempts.id", ondelete="SET NULL"), nullable=True)
     exam_item_id = Column(UUID(as_uuid=True), ForeignKey("exam_items.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     student = relationship("Profile", back_populates="attempts")
     activity = relationship("LearningActivity", back_populates="attempts")
+
+
+class ConceptReview(Base):
+    __tablename__ = "concept_reviews"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    student_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
+    language = Column(Enum(ProgrammingLang, name="programminglang"), nullable=False)
+    concept = Column(String(100), nullable=False)
+    stage = Column(Integer, nullable=False)
+    status = Column(Text, nullable=False)
+    question_refs = Column(JSONB, nullable=False)
+    answers_json = Column(JSONB(none_as_null=True), nullable=True)
+    correct = Column(Integer, nullable=True)
+    total = Column(Integer, nullable=False)
+    xp_awarded = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()"))
+    submitted_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("stage BETWEEN 0 AND 3", name="ck_concept_reviews_stage"),
+        CheckConstraint("status IN ('open', 'passed', 'not_passed')", name="ck_concept_reviews_status"),
+        CheckConstraint("total > 0 AND correct BETWEEN 0 AND total", name="ck_concept_reviews_scores"),
+        CheckConstraint("xp_awarded >= 0 AND (xp_awarded = 0 OR status = 'passed')", name="ck_concept_reviews_xp"),
+        CheckConstraint(
+            "(status = 'open' AND submitted_at IS NULL AND correct IS NULL AND answers_json IS NULL)"
+            " OR (status IN ('passed', 'not_passed') AND submitted_at IS NOT NULL AND correct IS NOT NULL AND answers_json IS NOT NULL)",
+            name="ck_concept_reviews_submission",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(question_refs) = 'array' AND jsonb_array_length(question_refs) = total",
+            name="ck_concept_reviews_questions",
+        ),
+        Index("ix_concept_reviews_history", "student_id", "language", "concept", submitted_at.desc()),
+        Index("uq_concept_reviews_open", "student_id", "language", "concept", unique=True,
+              postgresql_where=text("status = 'open'")),
+        Index("uq_concept_reviews_passed_stage", "student_id", "language", "concept", "stage", unique=True,
+              postgresql_where=text("status = 'passed' AND xp_awarded > 0")),
+    )
 
 
 class ActivityDraft(Base):
@@ -345,7 +470,17 @@ class ActivityDraft(Base):
 
 class SubmissionJob(Base):
     __tablename__ = "submission_jobs"
-    __table_args__ = (UniqueConstraint("student_id", "idempotency_key", name="uq_submission_job_student_key"),)
+    __table_args__ = (
+        Index(
+            "ix_submission_jobs_student_first_sample", "student_id", "created_at",
+            postgresql_where=text("dry_run_only AND status = 'completed'"),
+        ),
+        UniqueConstraint("student_id", "idempotency_key", name="uq_submission_job_student_key"),
+        Index(
+            "ix_submission_jobs_student_sample_activity", "student_id", "activity_id", "created_at",
+            postgresql_where=text("dry_run_only AND status = 'completed'"),
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     student_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -353,12 +488,15 @@ class SubmissionJob(Base):
     idempotency_key = Column(String(100), nullable=False)
     source_code = Column(Text, nullable=False)
     dry_run_only = Column(Boolean, nullable=False, default=False)
+    time_spent_seconds = Column(Integer, nullable=False, server_default=text("0"))
     status = Column(String(20), nullable=False, default="queued", index=True)
     result_json = Column(JSONB, nullable=True)
     error_message = Column(Text, nullable=True)
     attempts = Column(Integer, nullable=False, server_default=text("0"))
+    claim_token = Column(UUID(as_uuid=True), nullable=True)
     next_attempt_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    # App clock, like activity_attempts: hint, run and attempt order is compared across tables.
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
@@ -383,7 +521,8 @@ class HintUse(Base):
     hint_id = Column(UUID(as_uuid=True), ForeignKey("challenge_hints.id", ondelete="SET NULL"), nullable=True)
     source = Column(String(16), nullable=False)
     body = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    # App clock, like activity_attempts: hint, run and attempt order is compared across tables.
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()"))
 
 
 class ResearchConsent(Base):
@@ -399,6 +538,8 @@ class ResearchConsent(Base):
 
 class Exam(Base):
     __tablename__ = "exams"
+
+    restricted_course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=True)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     created_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=False, index=True)
@@ -425,11 +566,11 @@ class ExamItem(Base):
 
 class ExamAssignment(Base):
     __tablename__ = "exam_assignments"
-    __table_args__ = (UniqueConstraint("exam_id", "group_id", name="uq_exam_assignment_group"),)
+    __table_args__ = (UniqueConstraint("exam_id", "workshop_id", name="uq_exam_assignment_workshop"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     exam_id = Column(UUID(as_uuid=True), ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
-    group_id = Column(UUID(as_uuid=True), ForeignKey("quest_groups.id", ondelete="CASCADE"), nullable=False)
+    workshop_id = Column(UUID(as_uuid=True), ForeignKey("workshops.id", ondelete="CASCADE"), nullable=False)
 
 
 class ExamAttempt(Base):
@@ -444,6 +585,11 @@ class ExamAttempt(Base):
     started_at = Column(DateTime(timezone=True), nullable=False)
     due_at = Column(DateTime(timezone=True), nullable=False)
     submitted_at = Column(DateTime(timezone=True), nullable=True)
+    grading_claimed_at = Column(DateTime(timezone=True), nullable=True)
+    grading_token = Column(UUID(as_uuid=True), nullable=True)
+    grading_attempts = Column(Integer, nullable=False, server_default=text("0"))
+    grading_retry_at = Column(DateTime(timezone=True), nullable=True)
+    result_released_at = Column(DateTime(timezone=True), nullable=True)
     last_saved_at = Column(DateTime(timezone=True), nullable=True)
     answers_json = Column(JSONB, nullable=False, default=dict)
     revision = Column(Integer, nullable=False, default=0)
@@ -536,7 +682,9 @@ class MLPrediction(Base):
     active_sequencer_mode = Column(String(50), nullable=True)
     recommended_action = Column(String(50), nullable=True)
     model_version = Column(String(50), default="v1.0.0", nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    selected_model = Column(String(20), nullable=True)
+    source_exam_attempt_id = Column(UUID(as_uuid=True), ForeignKey("exam_attempts.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 
 # ============================================================================
@@ -548,7 +696,9 @@ class Badge(Base):
     __table_args__ = (UniqueConstraint("code", name="uq_badges_code"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    code = Column(String(64), nullable=True)
+    # NOT NULL: this is the ON CONFLICT target for supabase/seed.sql. A NULL here
+    # would bypass the unique index and duplicate the badge on every seed run.
+    code = Column(String(64), nullable=False)
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=False)
     icon_url = Column(Text, nullable=False)
@@ -566,7 +716,7 @@ class StudentBadge(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     student_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
     badge_id = Column(UUID(as_uuid=True), ForeignKey("badges.id", ondelete="CASCADE"), nullable=False)
-    awarded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    awarded_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
 
 # ============================================================================
@@ -582,6 +732,21 @@ class Course(Base):
     status = Column(String(20), nullable=False, default="active")
     created_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CourseAnnouncement(Base):
+    __tablename__ = "course_announcements"
+    __table_args__ = (Index("ix_course_announcements_course_created", "course_id", text("created_at DESC")),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
+    author_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True)
+    title = Column(Text, nullable=False)
+    body = Column(Text, nullable=False)
+    pinned = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, server_default=text("now()"))
 
 
 class CourseMember(Base):
@@ -616,6 +781,14 @@ class ProcessingJob(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     last_checked_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class GradingWorkerHeartbeat(Base):
+    __tablename__ = "grading_worker_heartbeat"
+    __table_args__ = (CheckConstraint("id = 1"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=False)
+    seen_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class PlatformSetting(Base):

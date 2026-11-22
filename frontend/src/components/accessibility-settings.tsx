@@ -1,6 +1,7 @@
 "use client";
 
 import { useAccessibility, type AccessibilityPreferenceKey } from "@/components/accessibility-provider";
+import { MenuPositionSetting } from "@/components/workspace/dockable-navigation";
 
 interface AccessibilitySettingDefinition {
   key: AccessibilityPreferenceKey;
@@ -36,7 +37,11 @@ const ACCESSIBILITY_SETTINGS: AccessibilitySettingDefinition[] = [
   },
 ];
 
-export function AccessibilitySettings() {
+/**
+ * All display and navigation preferences; `ownerId` scopes the navigation side to that account.
+ * Pass `onClose` when the settings open as a dialog to show a close button in the heading.
+ */
+export function AccessibilitySettings({ ownerId, onClose }: { ownerId: string; onClose?: () => void }) {
   const { preferences, setPreference } = useAccessibility();
 
   return (
@@ -52,6 +57,11 @@ export function AccessibilitySettings() {
             assistive navigation controls.
           </p>
         </div>
+        {onClose && (
+          <button type="button" className="bq-settings-close" aria-label="Close accessibility settings" onClick={onClose}>
+            ×
+          </button>
+        )}
       </div>
 
       <div
@@ -93,6 +103,8 @@ export function AccessibilitySettings() {
           );
         })}
       </div>
+
+      <MenuPositionSetting ownerId={ownerId} />
 
       <section
         className="a11y-keyboard-reference"

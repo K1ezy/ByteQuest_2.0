@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
+from app.api import chat as chat_api
 from app.core import quotas
 from app.core.database import SessionLocal
 from app.core.config import Settings
@@ -21,6 +22,7 @@ from app.core.request_size import RequestSizeLimitMiddleware
 from app.main import app
 from app.services.ai_rag.pdf_processor import extract_chunks_from_pdf
 from app.services.gamification.quiz_content import parse_quiz_questions
+from test_learning_flow_integration import _chat_payload, _enroll_chat_students, _token, flow
 
 
 def test_cors_exact_local_origins_and_retry_header_visibility():
@@ -53,11 +55,34 @@ def test_production_cors_requires_exact_https_origin():
 
 def test_request_body_limit_precedes_authentication():
     with TestClient(app) as client:
-        response = client.post("/api/v1/quest-groups", content=b"x" * (12 * 1024 * 1024 + 1),
+        response = client.post("/api/v1/workshops", content=b"x" * (12 * 1024 * 1024 + 1),
                                headers={"Origin": "http://localhost:3000"})
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "request_too_large"
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_material_upload_accepts_multipart_framing_at_50_mib():
+    files = {"file": ("lesson.pdf", b"%PDF-".ljust(50 * 1024 * 1024, b" "), "application/pdf")}
+    with TestClient(app) as client:
+        response = client.post("/api/v1/faculty/materials", files=files)
+    assert response.status_code == 401
+
+
+def test_streamed_material_upload_over_request_limit_returns_413():
+    def multipart_body():
+        yield (b'--test\r\nContent-Disposition: form-data; name="file"; filename="lesson.pdf"\r\n'
+               b'Content-Type: application/pdf\r\n\r\n%PDF-')
+        chunk = b" " * (1024 * 1024)
+        for _ in range(52):
+            yield chunk
+        yield b"\r\n--test--\r\n"
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/faculty/materials", content=multipart_body(),
+                               headers={"Content-Type": "multipart/form-data; boundary=test"})
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "request_too_large"
 
 
 def test_streamed_body_without_content_length_is_limited():
@@ -154,7 +179,7 @@ def test_global_ai_cap_rejects_without_spending_account_buckets():
         with SessionLocal() as db:
             db.execute(text("insert into public.api_rate_counters "
                 "(scope_kind,scope_id,action,window_kind,window_start,used,expires_at) "
-                "values ('global','*','gemini_generation','day',:start,100,:end)"),
+                "values ('global','*','student_generation','day',:start,300,:end)"),
                 {"start": start, "end": end})
             db.commit()
         with pytest.raises(HTTPException) as raised:
@@ -168,7 +193,7 @@ def test_global_ai_cap_rejects_without_spending_account_buckets():
     finally:
         with SessionLocal() as db:
             db.execute(text("delete from public.api_rate_counters where scope_kind='global' "
-                "and action='gemini_generation' and window_start=:start"), {"start": start})
+                "and action='student_generation' and window_start=:start"), {"start": start})
             db.execute(text("delete from public.api_rate_counters where scope_kind='account' "
                 "and scope_id=:account"), {"account": str(account)})
             db.commit()
@@ -195,13 +220,61 @@ def test_costly_action_pauses_if_quota_storage_is_unavailable(monkeypatch):
 
 
 def test_chat_has_dedicated_account_and_global_quota():
-    rules = quotas.POLICIES["chat_message"]
-    assert any(
-        rule.scope == "account" and rule.bucket == "chat_message"
-        for rule in rules
+    assert quotas.POLICIES["chat_message"] == (
+        quotas.Rule("chat_message", "account", "minute", 10),
+        quotas.Rule("chat_message", "account", "day", 40),
+        quotas.Rule("chat_generation", "global", "day", 1200),
     )
-    assert any(
-        rule.scope == "global" and rule.bucket == "chat_generation"
-        for rule in rules
-    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("full", "available"), [
+    ("student_ai", "instructor_ai"),
+    ("instructor_ai", "student_ai"),
+])
+def test_ai_global_budgets_are_independent(full, available):
+    instant = datetime(2031, 3, 2, 16, 0, tzinfo=timezone.utc)
+    start, end = window_bounds("day", instant)
+    bucket, = (rule for rule in quotas.POLICIES[full] if rule.scope == "global")
+    with SessionLocal() as db:
+        db.execute(text("insert into public.api_rate_counters "
+            "(scope_kind,scope_id,action,window_kind,window_start,used,expires_at) "
+            "values ('global','*',:action,'day',:start,:used,:end)"),
+            {"action": bucket.bucket, "start": start, "used": bucket.limit, "end": end})
+        reserve(available, uuid.uuid4(), now=instant, session=db)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("role", "enrolled", "expected"), [
+    ("student", False, 403),
+    ("student", True, 200),
+    ("instructor", False, 200),
+])
+def test_chat_requires_active_enrollment_only_for_students(flow, monkeypatch, role, enrolled, expected):
+    client, new_session, users = flow
+    user_id = users[role]
+    if enrolled:
+        _enroll_chat_students(new_session, user_id)
+
+    provider_calls = []
+
+    def fake_reply(messages, system_instruction, turn):
+        provider_calls.append(messages)
+        return "Trace the loop one iteration at a time."
+
+    monkeypatch.setattr(chat_api, "_generate_chat_reply", fake_reply)
+    response = client.post("/api/v1/chat/messages", headers=_token(user_id), json=_chat_payload())
+    assert response.status_code == expected, response.text
+    if expected == 403:
+        assert response.json()["detail"] == {
+            "code": "enrollment_required",
+            "message": "The learning assistant is available once your instructor adds you to a class block.",
+        }
+        assert not provider_calls
+        with quotas.SessionLocal() as db:
+            assert db.execute(text("select count(*) from public.api_rate_counters "
+                "where action='chat_message' and scope_id=:account"),
+                {"account": str(user_id)}).scalar_one() == 0
+    else:
+        assert len(provider_calls) == 1
 

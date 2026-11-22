@@ -1,6 +1,7 @@
 "use client";
 
-import { formatDateTime, type StudentPreview } from "@/lib/workspace";
+import { formatManilaDateTime } from "@/lib/activity-date";
+import type { StudentPreview } from "@/lib/workspace";
 
 /** The exact student-visible shape: no answer key, no hidden inputs or outputs. */
 export function StudentPreviewCard({
@@ -25,8 +26,8 @@ export function StudentPreviewCard({
       </p>
       {schedule ? (
         <p className="ws-preview-schedule">
-          {schedule.opens_at ? `Opens ${formatDateTime(schedule.opens_at)}` : "Opens immediately when published"}
-          {schedule.closes_at ? ` · closes ${formatDateTime(schedule.closes_at)}` : " · no closing time"}
+          {schedule.opens_at ? `Opens ${formatManilaDateTime(schedule.opens_at)}` : "Opens immediately when published"}
+          {schedule.closes_at ? ` · closes ${formatManilaDateTime(schedule.closes_at)}` : " · no closing time"}
           {` (${schedule.timezone || "Asia/Manila"})`}
         </p>
       ) : null}

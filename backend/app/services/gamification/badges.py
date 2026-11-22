@@ -8,6 +8,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.models.entities import ActivityAttempt, Badge, Profile, StudentBadge
+from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.gamification.codex import recoveries
 from app.services.gamification.progression import grant_xp
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,8 @@ METRIC_ALIASES = {
     "xp": "xp_points",
     "total_xp": "xp_points",
     "xp_points": "xp_points",
+    "recoveries_total": "recoveries_total",
+    "comebacks": "comebacks",
 }
 
 
@@ -56,13 +60,9 @@ def _requirement_for(badge: Badge) -> Optional[tuple[str, int]]:
     return metric, required
 
 
-def _qualifies(badge: Badge, successful_attempts: int, xp_points: int) -> bool:
-    requirement = _requirement_for(badge)
-    if requirement is None:
-        return False
+def _qualifies(requirement: tuple[str, int], metrics: dict[str, int]) -> bool:
     metric, threshold = requirement
-    current = successful_attempts if metric == "successful_attempts" else xp_points
-    return current >= threshold
+    return metrics[metric] >= threshold
 
 
 def evaluate_and_award_badges(db: Session, student: Profile) -> list[str]:
@@ -83,6 +83,7 @@ def evaluate_and_award_badges(db: Session, student: Profile) -> list[str]:
         .filter(
             ActivityAttempt.student_id == locked_student.id,
             ActivityAttempt.is_successful.is_(True),
+            learner_visible_attempt_clause(),
         )
         .scalar()
         or 0
@@ -99,14 +100,25 @@ def evaluate_and_award_badges(db: Session, student: Profile) -> list[str]:
         .all()
     }
     awarded_names: list[str] = []
+    pending = [
+        (badge, requirement)
+        for badge in badges
+        if badge.id not in awarded_ids and (requirement := _requirement_for(badge)) is not None
+    ]
+    metrics = {"successful_attempts": successful_attempts}
+    if any(rule[0] in {"recoveries_total", "comebacks"} for _, rule in pending):
+        challenges = recoveries(db, locked_student.id)
+        metrics.update(
+            recoveries_total=sum(len(entry.categories) for entry in challenges.values()),
+            comebacks=sum(entry.comeback for entry in challenges.values()),
+        )
 
     # XP badges can become eligible after a different badge's bonus is granted.
     while True:
         awarded_this_pass = False
-        for badge in badges:
-            if badge.id in awarded_ids or not _qualifies(
-                badge, successful_attempts, int(locked_student.xp_points or 0)
-            ):
+        for badge, requirement in pending:
+            metrics["xp_points"] = int(locked_student.xp_points or 0)
+            if badge.id in awarded_ids or not _qualifies(requirement, metrics):
                 continue
 
             statement = (
@@ -138,3 +150,15 @@ def evaluate_and_award_badges(db: Session, student: Profile) -> list[str]:
     if awarded_names:
         db.flush()
     return awarded_names
+
+
+def award_badges(db: Session, student: Profile) -> tuple[list[str], int]:
+    """New badge names and the bonus XP they granted.
+
+    Reward screens show XP earned next to the new total; without the badge bonus
+    the two numbers would not add up.
+    """
+    xp_before = int(student.xp_points or 0)
+    names = evaluate_and_award_badges(db, student)
+    xp_after = int(db.get(Profile, student.id).xp_points or 0)
+    return names, max(0, xp_after - xp_before)

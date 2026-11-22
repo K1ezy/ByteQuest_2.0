@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -22,27 +22,41 @@ from app.models.entities import (
     ProgrammingLang,
     ReviewState,
     StudentBadge,
+    TestCase,
     UserRole,
 )
-from app.services.gamification.badges import evaluate_and_award_badges
+from app.services.gamification.badges import award_badges
+from app.services.gamification.completion_rewards import completed_activity_ids
+from app.services.gamification.codex import CodexResponse, codex_summary
+from app.services.gamification.mastery_map import MasteryMapResponse, first_visible_completions, mastery_map
 from app.services.gamification.progression import grant_xp
+from app.services.gamification.rollout import MechanicState, mechanic_state
+from app.services.gamification.solve_quality import best_challenge_stars
+from app.services.gamification.progress_recap import RECAP_PERIODS, ProgressRecap, progress_recap
+from app.services.workspace_common import as_aware
 from app.services.gamification.quiz_content import (
-    QuizOption,
+    PublicQuizQuestion,
     StoredQuizQuestion,
     parse_quiz_questions,
+    public_question,
 )
 from app.services.gamification.sequencer import (
     QUIZ_MASTERY_SCORE,
     determine_track_recommendation,
     determine_next_task_rule_based,
 )
-from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.attempt_visibility import (
+    activity_is_closed,
+    learner_visible_attempt_clause,
+    published_track_clause,
+)
 from app.services.ml_predictor.audit import record_prediction_outcome
 from app.services.ml_predictor.shadow import record_shadow_prediction
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/quests", tags=["Quests & Gamification"])
+gamification_router = APIRouter(prefix="/api/v1/gamification", tags=["Quests & Gamification"])
 
 
 class QuizSubmissionRequest(BaseModel):
@@ -58,10 +72,9 @@ class QuizSubmissionRequest(BaseModel):
     time_spent_seconds: int = Field(default=0, ge=0, le=86_400)
 
 
-class PublicQuizQuestion(BaseModel):
-    id: str
-    prompt: str
-    options: list[QuizOption]
+class SampleCase(BaseModel):
+    stdin: str
+    expected_stdout: str
 
 
 class QuestCard(BaseModel):
@@ -72,12 +85,22 @@ class QuestCard(BaseModel):
     topic_concept: str
     difficulty_level: int
     sequence_order: int
+    # 1-based place in this learner's own list. sequence_order is global across every
+    # course on the track, so it would number a new class's first quest #10.
+    position: int = 0
+    added_at: datetime
+    added_at_estimated: bool
     xp_reward: int
     problem_statement: Optional[str] = None
     starter_code: Optional[str] = None
     is_completed: bool
+    # Best solve-quality stars (1-3) on a solved code challenge; None otherwise.
+    stars: Optional[int] = None
     is_closed: bool = False
+    pass_mark_percent: int | None = None
     quiz_questions: Optional[list[PublicQuizQuestion]] = None
+    # Visible grading cases only; hidden cases never leave the server.
+    sample_cases: Optional[list[SampleCase]] = None
 
 
 class NextStepRecommendation(BaseModel):
@@ -97,15 +120,37 @@ class QuizSubmissionResponse(BaseModel):
     xp_awarded: int
     new_total_xp: int
     new_level: int
+    level_up: bool = False
     new_badges_unlocked: list[str]
+    badge_xp_awarded: int = 0
     next_step_recommendation: NextStepRecommendation
 
 
 class LeaderboardEntry(BaseModel):
-    pseudonym_id: str
+    """One ranked learner. Only the chosen public handle is shared with classmates:
+    pseudonym ids and generated starter handles both encode the account id."""
+
+    rank: int
+    handle: Optional[str]
     xp_points: int
     current_level: int
     is_me: bool
+
+
+class LeaderboardStanding(BaseModel):
+    """The caller's own position, present even when outside the top entries."""
+
+    rank: Optional[int]  # None until the caller has earned XP on this track
+    handle: Optional[str]
+    xp_points: int
+    current_level: int
+
+
+class LeaderboardResponse(BaseModel):
+    track: ProgrammingLang
+    entries: list[LeaderboardEntry]
+    you: Optional[LeaderboardStanding]  # None for staff, who are never ranked
+    total_ranked: int
 
 
 class ProgressAttempt(BaseModel):
@@ -148,25 +193,63 @@ def _load_quiz_questions(activity: LearningActivity) -> list[StoredQuizQuestion]
     return parse_quiz_questions(activity.quiz_questions_json)
 
 
-def _public_question(question: StoredQuizQuestion) -> PublicQuizQuestion:
-    return PublicQuizQuestion(
-        id=question.id,
-        prompt=question.prompt,
-        options=question.options,
-    )
+@router.get("/codex", response_model=CodexResponse)
+def get_codex(
+    current_user: Profile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CodexResponse:
+    _ensure_student(current_user)
+    state = mechanic_state(db, current_user)
+    if not state.codex.unlocked:
+        return CodexResponse(locked=True, day=state.day, unlock=state.codex)
+    summary = codex_summary(db, current_user.id)
+    return CodexResponse(day=state.day, unlock=state.codex, **summary.model_dump())
+
+
+@router.get("/progress-recap", response_model=ProgressRecap)
+def get_progress_recap(
+    days: int = 7,
+    current_user: Profile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProgressRecap:
+    """The learner against their own recent past: never compared with classmates."""
+    _ensure_student(current_user)
+    if days not in RECAP_PERIODS:
+        raise HTTPException(422, "Choose a period of 3, 7 or 30 days.")
+    return progress_recap(db, current_user, days)
+
+
+@gamification_router.get("/state", response_model=MechanicState)
+def get_gamification_state(
+    current_user: Profile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MechanicState:
+    _ensure_student(current_user)
+    return mechanic_state(db, current_user)
+
+
+@router.get("/mastery-map", response_model=MasteryMapResponse)
+def get_mastery_map(
+    current_user: Profile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MasteryMapResponse:
+    _ensure_student(current_user)
+    return mastery_map(db, current_user)
 
 
 @router.get("", response_model=list[QuestCard])
 def list_published_quests(
     current_user: Profile = Depends(get_current_user),
     db: Session = Depends(get_db),
+    details_for: uuid.UUID | None = None,
 ) -> list[QuestCard]:
-    """List safe published quest details for every signed-in role."""
-    query = db.query(LearningActivity).filter(
-        LearningActivity.review_status == ReviewState.published,
+    """List visible quests with detail for every quest or just the requested one."""
+    now = datetime.now(timezone.utc)
+    visibility = (
+        published_track_clause(current_user, now) if current_user.role == UserRole.student
+        else LearningActivity.review_status == ReviewState.published
     )
-    if current_user.role == UserRole.student:
-        query = query.filter(LearningActivity.language == current_user.enrolled_language)
+    query = db.query(LearningActivity).filter(visibility)
     activities = (
         query
         .order_by(
@@ -178,30 +261,38 @@ def list_published_quests(
     )
     activity_ids = [activity.id for activity in activities]
     if activity_ids and current_user.role == UserRole.student:
-        completed_activity_ids = {
-            activity_id
-            for (activity_id,) in db.query(ActivityAttempt.activity_id)
-            .filter(
-                ActivityAttempt.student_id == current_user.id,
-                ActivityAttempt.activity_id.in_(activity_ids),
-                ActivityAttempt.is_successful.is_(True),
-                learner_visible_attempt_clause(),
-            )
-            .distinct()
-            .all()
-        }
+        completed_activity_ids = first_visible_completions(db, current_user.id, activity_ids)
+        challenge_stars = best_challenge_stars(db, current_user.id, [
+            activity.id for activity in activities if activity.activity_type == ActivityKind.challenge
+        ])
     else:
         completed_activity_ids = set()
+        challenge_stars = {}
+
+    detail_challenge_ids = [
+        activity.id for activity in activities
+        if activity.activity_type == ActivityKind.challenge and (details_for is None or activity.id == details_for)
+    ]
+    samples: dict[uuid.UUID, list[SampleCase]] = {}
+    if detail_challenge_ids:
+        for case in (
+            db.query(TestCase)
+            .filter(TestCase.activity_id.in_(detail_challenge_ids), TestCase.is_hidden.is_(False))
+            .order_by(TestCase.order_index.asc())
+        ):
+            samples.setdefault(case.activity_id, []).append(
+                SampleCase(stdin=case.stdin, expected_stdout=case.expected_stdout)
+            )
 
     quests: list[QuestCard] = []
     for activity in activities:
+        include_detail = details_for is None or activity.id == details_for
         public_questions = None
         if activity.activity_type == ActivityKind.quiz:
             try:
-                public_questions = [
-                    _public_question(question)
-                    for question in _load_quiz_questions(activity)
-                ]
+                questions = _load_quiz_questions(activity)
+                if include_detail:
+                    public_questions = [public_question(question) for question in questions]
             except ValueError:
                 logger.warning(
                     "Skipping published quiz with invalid content (activity_id=%s)",
@@ -209,6 +300,11 @@ def list_published_quests(
                 )
                 continue
 
+        published_at = as_aware(activity.published_at)
+        added_at = published_at or as_aware(activity.created_at)
+        opens_at = as_aware(activity.opens_at)
+        if opens_at is not None and opens_at > added_at:
+            added_at = opens_at
         quests.append(
             QuestCard(
                 id=activity.id,
@@ -218,14 +314,21 @@ def list_published_quests(
                 topic_concept=activity.topic_concept,
                 difficulty_level=activity.difficulty_level,
                 sequence_order=activity.sequence_order,
+                added_at=added_at,
+                added_at_estimated=published_at is None,
                 xp_reward=activity.xp_reward,
-                problem_statement=activity.problem_statement,
-                starter_code=activity.starter_code,
+                problem_statement=activity.problem_statement if include_detail else None,
+                starter_code=activity.starter_code if include_detail else None,
                 is_completed=activity.id in completed_activity_ids,
-                is_closed=activity.closed_at is not None,
+                stars=challenge_stars.get(activity.id),
+                is_closed=activity_is_closed(activity, now),
+                pass_mark_percent=(activity.pass_mark_percent or 100) if activity.activity_type == ActivityKind.challenge else None,
                 quiz_questions=public_questions,
+                sample_cases=samples.get(activity.id, []) if activity.id in detail_challenge_ids else None,
             )
         )
+    for position, quest in enumerate(quests, start=1):
+        quest.position = position
     return quests
 
 
@@ -238,13 +341,13 @@ def submit_conceptual_quiz(
 ) -> QuizSubmissionResponse:
     """Grade an enrolled student's quiz and record the result atomically."""
     _ensure_student(current_user)
+    accepted_at = datetime.now(timezone.utc)
     activity = (
         db.query(LearningActivity)
         .filter(
             LearningActivity.id == payload.activity_id,
-            LearningActivity.language == current_user.enrolled_language,
             LearningActivity.activity_type == ActivityKind.quiz,
-            LearningActivity.review_status == ReviewState.published,
+            published_track_clause(current_user, accepted_at),
         )
         .first()
     )
@@ -253,6 +356,8 @@ def submit_conceptual_quiz(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Published quiz activity not found.",
         )
+    if activity_is_closed(activity, accepted_at):
+        raise HTTPException(status_code=409, detail="This quiz is closed for submissions.")
 
     try:
         questions = _load_quiz_questions(activity)
@@ -282,7 +387,9 @@ def submit_conceptual_quiz(
                 detail="An answer contains an invalid option key.",
             )
 
-    reserve("quiz_submit", current_user.id)
+    # The authenticated request already holds a connection. Reserve quota and
+    # persist the grade together so simultaneous submissions need only one.
+    reserve("quiz_submit", current_user.id, session=db)
 
     correct_count = sum(
         1
@@ -312,20 +419,9 @@ def submit_conceptual_quiz(
         .scalar()
         or 0
     )
-    prior_success = (
-        db.query(ActivityAttempt.id)
-        .filter(
-            ActivityAttempt.student_id == student.id,
-            ActivityAttempt.activity_id == activity.id,
-            ActivityAttempt.is_successful.is_(True),
-            learner_visible_attempt_clause(),
-        )
-        .first()
-        is not None
-    )
     xp_earned = (
         max(0, int(activity.xp_reward or 0))
-        if is_successful and not prior_success
+        if is_successful and not completed_activity_ids(db, student.id, {activity.id})
         else 0
     )
 
@@ -342,6 +438,7 @@ def submit_conceptual_quiz(
         xp_awarded=xp_earned,
     )
     db.add(new_attempt)
+    level_before = student.current_level
     grant_xp(student, xp_earned)
     db.flush()
     record_prediction_outcome(
@@ -352,7 +449,7 @@ def submit_conceptual_quiz(
         is_successful=new_attempt.is_successful,
     )
 
-    new_badges = evaluate_and_award_badges(db, student)
+    new_badges, badge_xp = award_badges(db, student)
     recommendation = determine_next_task_rule_based(
         db, student, activity, new_attempt
     )
@@ -369,7 +466,9 @@ def submit_conceptual_quiz(
         xp_awarded=xp_earned,
         new_total_xp=student.xp_points,
         new_level=student.current_level,
+        level_up=student.current_level > level_before,
         new_badges_unlocked=new_badges,
+        badge_xp_awarded=badge_xp,
         next_step_recommendation=NextStepRecommendation(**recommendation),
     )
     record_shadow_prediction(
@@ -383,36 +482,70 @@ def submit_conceptual_quiz(
     return response_payload
 
 
-@router.get("/leaderboard", response_model=list[LeaderboardEntry])
+LEADERBOARD_SIZE = 10
+
+
+@router.get("/leaderboard", response_model=LeaderboardResponse)
 def get_gamification_leaderboard(
     current_user: Profile = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[LeaderboardEntry]:
-    """Return the top ten students by XP in the current language track."""
-    top_students = (
-        db.query(Profile)
-        .filter(
-            Profile.role == UserRole.student,
-            Profile.enrolled_language == current_user.enrolled_language,
-        )
-        .order_by(
-            Profile.xp_points.desc(),
-            Profile.current_level.desc(),
-            Profile.pseudonym_id.asc(),
-            Profile.id.asc(),
-        )
-        .limit(10)
+) -> LeaderboardResponse:
+    """Rank active students on the caller's track who have earned XP.
+
+    Ties share a rank (1, 2, 2, 4). The caller's own standing is always returned,
+    so a learner outside the top entries still sees where they are.
+    """
+    track = current_user.enrolled_language
+    ranked = (
+        Profile.role == UserRole.student,
+        Profile.enrolled_language == track,
+        Profile.account_status == "active",
+        Profile.xp_points > 0,
+    )
+    rank = func.rank().over(order_by=Profile.xp_points.desc()).label("rank")
+    top = (
+        db.query(Profile, rank)
+        .filter(*ranked)
+        .order_by(Profile.xp_points.desc(), Profile.id.asc())
+        .limit(LEADERBOARD_SIZE)
         .all()
     )
-    return [
-        LeaderboardEntry(
-            pseudonym_id=student.pseudonym_id,
-            xp_points=student.xp_points,
-            current_level=student.current_level,
-            is_me=student.id == current_user.id,
+    total_ranked = db.query(func.count(Profile.id)).filter(*ranked).scalar() or 0
+
+    def public_handle(profile: Profile) -> Optional[str]:
+        return profile.username if profile.handle_chosen else None
+
+    you = None
+    if current_user.role == UserRole.student:
+        own_rank = None
+        if current_user.xp_points > 0 and current_user.account_status == "active":
+            own_rank = next((int(r) for student, r in top if student.id == current_user.id), None)
+            if own_rank is None:
+                ahead = db.query(func.count(Profile.id)).filter(
+                    *ranked, Profile.xp_points > current_user.xp_points).scalar() or 0
+                own_rank = ahead + 1
+        you = LeaderboardStanding(
+            rank=own_rank,
+            handle=public_handle(current_user),
+            xp_points=current_user.xp_points,
+            current_level=current_user.current_level,
         )
-        for student in top_students
-    ]
+
+    return LeaderboardResponse(
+        track=track,
+        entries=[
+            LeaderboardEntry(
+                rank=int(r),
+                handle=public_handle(student),
+                xp_points=student.xp_points,
+                current_level=student.current_level,
+                is_me=student.id == current_user.id,
+            )
+            for student, r in top
+        ],
+        you=you,
+        total_ranked=total_ranked,
+    )
 
 
 @router.get("/progress", response_model=StudentProgress)

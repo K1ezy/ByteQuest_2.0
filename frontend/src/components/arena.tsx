@@ -1,17 +1,34 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { loader } from "@monaco-editor/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { apiRequest, getErrorMessage } from "@/lib/api";
-import { getSupabase } from "@/lib/supabase";
-import type { ErrorExplanation, Evaluation, Profile, Quest } from "@/lib/types";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useShellProfile } from "@/components/app-shell";
+import { ConfirmDialog, StatusChip } from "@/components/workspace/ui";
+import { ApiError, apiRequest, getErrorMessage } from "@/lib/api";
+import { splitProblemStatement } from "@/lib/problem-statement";
+import { newRequestId } from "@/lib/network";
+import type { Evaluation, EvaluationTestResult, Quest } from "@/lib/types";
 
 const Editor = dynamic(() => import("@monaco-editor/react"), {
   ssr: false,
   loading: () => <div className="editor-loading">Loading code editor…</div>,
 });
+loader.config({ paths: { vs: "/monaco/vs" } });
+
+const TOUCH_EDITOR_QUERY = "(max-width: 1023px) and (pointer: coarse)";
+
+function subscribeToTouchEditor(onChange: () => void) {
+  const query = window.matchMedia?.(TOUCH_EDITOR_QUERY);
+  query?.addEventListener("change", onChange);
+  return () => query?.removeEventListener("change", onChange);
+}
+
+function usesTouchEditor() {
+  return window.matchMedia?.(TOUCH_EDITOR_QUERY).matches ?? false;
+}
 
 function draftKey(userId: string, activityId: string): string {
   return `bytequest:draft:${userId}:${activityId}`;
@@ -38,17 +55,38 @@ interface SubmissionResponse {
   attempt_id?: string;
   attempt_number?: number;
   xp_awarded?: number;
-  new_total_xp?: number;
-  new_level?: number;
-  new_badges_unlocked?: string[];
   evaluation: Evaluation;
 }
 
 interface SubmissionJob {
   id: string;
+  activity_id: string;
+  dry_run_only: boolean;
   status: "queued" | "running" | "completed" | "failed";
+  attempts: number;
   result: SubmissionResponse | null;
   error: string | null;
+}
+
+type SampleRun = { key: string; id: string; sourceCode: string };
+
+function readSampleRun(key: string): SampleRun | null {
+  try {
+    const run = JSON.parse(window.sessionStorage.getItem(key) || "null");
+    if (typeof run?.id === "string" && run.id && typeof run.sourceCode === "string") {
+      return { key, id: run.id, sourceCode: run.sourceCode };
+    }
+  } catch { /* Continue when session storage is unavailable. */ }
+  return null;
+}
+
+function removeStoredRun(key: string) {
+  try { window.sessionStorage.removeItem(key); } catch { /* Continue without session storage. */ }
+}
+
+function sampleRunStatus(job: SubmissionJob) {
+  if (job.status === "running") return "Grading sample run";
+  return job.attempts > 0 ? "Sample grading will retry" : "Sample run queued";
 }
 
 interface HintStatus {
@@ -56,6 +94,9 @@ interface HintStatus {
   reviewed: { id: string; slot: number; body: string | null }[];
   ai_hints: { id: string; body: string }[];
 }
+
+const MAX_HINTS = 5;
+const LANGUAGE_NAMES: Record<string, string> = { python: "Python", cpp: "C++", java: "Java" };
 
 function starterCode(language: string): string {
   if (language === "cpp") return '#include <iostream>\nusing namespace std;\n\nint main() {\n    // Write your solution here\n    return 0;\n}\n';
@@ -67,54 +108,180 @@ function getActivityHref(quest: Quest): string {
   return quest.activity_type === "quiz" ? `/quiz/${quest.id}` : `/arena/${quest.id}`;
 }
 
+function savedAt(): string {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+// Judge0 reports Python syntax errors as runtime errors; the traceback says what really happened.
+const PYTHON_SYNTAX_ERROR = /^(SyntaxError|IndentationError|TabError)\b/m;
+
+function caseVerdict(test: EvaluationTestResult): string {
+  if (test.passed) return "Passed";
+  if (test.error_category === "syntax_error") return "Compile error";
+  if (PYTHON_SYNTAX_ERROR.test(test.stderr || "")) return "Syntax error";
+  if (test.error_category === "runtime_error") return "Runtime error";
+  if (test.error_category === "timeout") return "Time limit exceeded";
+  if (test.error_category === "logic_error") return "Wrong answer";
+  return test.status_description || "Did not pass";
+}
+
+function nextStep(test: EvaluationTestResult | undefined): string {
+  if (!test) return "Check your code, then run the sample again.";
+  if (test.compile_output || test.error_category === "syntax_error") {
+    return "Read the compiler message below. Its line number points to where your code needs fixing.";
+  }
+  if (PYTHON_SYNTAX_ERROR.test(test.stderr || "")) {
+    return "Python couldn't read your code. Check the line in the error message, and the line just above it, for a missing bracket, colon, or quote.";
+  }
+  if (test.error_category === "runtime_error") {
+    return "Your program stopped with an error. Read the last line of the error message, fix that line, and run again.";
+  }
+  if (test.error_category === "timeout") {
+    return "Your program took too long. Look for a loop that never ends or input that is read the wrong way.";
+  }
+  return "Compare the expected output with yours, fix the difference, and run the sample again.";
+}
+
+function OutputBlock({ label, text, empty, tone }: { label: string; text?: string; empty?: string; tone?: "error" }) {
+  return (
+    <div className={`arena-output${tone ? ` ${tone}` : ""}`}>
+      <span className="arena-output-label">{label}</span>
+      {text ? (
+        <pre tabIndex={0} aria-label={label}>{text}</pre>
+      ) : (
+        <p className="arena-output-empty">{empty}</p>
+      )}
+    </div>
+  );
+}
+
 export default function Arena({ activityId }: { activityId: string }) {
+  const touchEditor = useSyncExternalStore(subscribeToTouchEditor, usesTouchEditor, () => false);
   const router = useRouter();
   const [quest, setQuest] = useState<Quest | null>(null);
   const [trackActivities, setTrackActivities] = useState<Quest[]>([]);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const { id: userId, role, enrolled_language: language } = useShellProfile();
   const [code, setCode] = useState("");
-  type SyncState = "synced" | "saving" | "offline-local" | "saved-local" | "error";
+  const [starter, setStarter] = useState("");
+  type SyncState = "synced" | "saving" | "saved-local" | "error";
   const [syncState, setSyncState] = useState<SyncState>("synced");
-  const [isOnline, setIsOnline] = useState(() => typeof navigator !== "undefined" ? navigator.onLine : true);
-  const [showSolution, setShowSolution] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [draftLoaded, setDraftLoaded] = useState(false);
-  const [draftStatus, setDraftStatus] = useState("Loading draft…");
+  const [draftStatus, setDraftStatus] = useState("Loading your code…");
   const latestCodeRef = useRef("");
+  const workedMsRef = useRef(0);
+  const segmentStartRef = useRef<number | null>(null);
   const lastSyncedCodeRef = useRef<string | null>(null);
   const savingRef = useRef(false);
   const [result, setResult] = useState<SubmissionResponse | null>(null);
-  const [busy, setBusy] = useState<"run" | "submit" | "">("");
+  const [resultCode, setResultCode] = useState("");
+  const [runError, setRunError] = useState("");
+  const [sending, setSending] = useState<"run" | "submit" | "">("");
+  const [sampleRun, setSampleRun] = useState<SampleRun | null>(null);
+  const [sampleStatus, setSampleStatus] = useState("");
+  const submissionRequest = useRef<AbortController | null>(null);
   const [loading, setLoading] = useState(true);
+  const [needsSignIn, setNeedsSignIn] = useState(false);
   const [message, setMessage] = useState("");
-  const [isError, setIsError] = useState(false);
-  const [aiExplaining, setAiExplaining] = useState(false);
-  const [aiExplanation, setAiExplanation] = useState<ErrorExplanation | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiHint, setAiHint] = useState("");
   const [aiError, setAiError] = useState("");
+  const pendingHintRef = useRef<{ activityId: string; userId: string; key: string } | null>(null);
   const [hintStatus, setHintStatus] = useState<HintStatus | null>(null);
   const [hintBusy, setHintBusy] = useState(false);
+  const [hintError, setHintError] = useState("");
+  const [hintsOpen, setHintsOpen] = useState(false);
   const [solution, setSolution] = useState("");
-  const [terminalView, setTerminalView] = useState<"console" | "testcases">("console");
   const [activeCaseIndex, setActiveCaseIndex] = useState(0);
-  const [terminalCleared, setTerminalCleared] = useState(false);
-  const [terminalCopied, setTerminalCopied] = useState(false);
-  const [terminalError, setTerminalError] = useState("");
-  const initialStarterCodeRef = useRef("");
+  const [copyState, setCopyState] = useState<"" | "copied" | "failed">("");
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const questId = quest?.id;
-  const userId = profile?.id;
+  const sampleKey = userId && `bytequest:sample-job:${userId}:${activityId}`;
+  const pendingSample = sampleRun?.key === sampleKey ? sampleRun : null;
+  const busy = sending || (pendingSample ? "run" : "");
+
+  const showSampleResult = useCallback((response: SubmissionResponse, source: string) => {
+    const visible = response.evaluation.test_results?.filter((test) => !test.is_hidden) ?? [];
+    setResult(response);
+    setResultCode(source);
+    setActiveCaseIndex(Math.max(0, visible.findIndex((test) => !test.passed)));
+    setAnnouncement(`Sample run finished: ${runHeadline(response.evaluation, visible)}. No attempt was recorded.`);
+  }, []);
+
+  useEffect(() => {
+    const cancel = () => submissionRequest.current?.abort();
+    const signedOut = () => {
+      cancel();
+      setSending("");
+      setSampleRun(null);
+      setResult(null);
+    };
+    window.addEventListener("bytequest:auth-cleared", signedOut);
+    return () => {
+      window.removeEventListener("bytequest:auth-cleared", signedOut);
+      cancel();
+    };
+  }, [activityId]);
+
+  useEffect(() => {
+    if (!pendingSample) return;
+    const run = pendingSample;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    let delay = 1500;
+
+    function stop() {
+      controller.abort();
+      clearTimeout(timer);
+    }
+
+    async function checkStatus() {
+      try {
+        const job = await apiRequest<SubmissionJob>(`/submission-jobs/${encodeURIComponent(run.id)}`, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        if (job.id !== run.id || job.activity_id !== activityId || !job.dry_run_only) {
+          throw new Error("This saved sample run does not match the current challenge.");
+        }
+        if (job.status === "queued" || job.status === "running") {
+          setSampleStatus(sampleRunStatus(job));
+          timer = setTimeout(checkStatus, delay);
+          delay = Math.min(8000, Math.round(delay * 1.4));
+          return;
+        }
+        if (job.status === "failed" || !job.result) throw new Error(job.error || "Sample grading failed. Try again.");
+        showSampleResult(job.result, run.sourceCode);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (error instanceof ApiError && (error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500)) {
+          setSampleStatus("Connection interrupted. Checking this sample run again soon.");
+          timer = setTimeout(checkStatus, Math.max(6000, (error.retryAfterSeconds ?? 0) * 1000));
+          return;
+        }
+        setRunError(getErrorMessage(error));
+        setAnnouncement(`Sample run failed: ${getErrorMessage(error)}`);
+      }
+      removeStoredRun(run.key);
+      setSampleRun(null);
+    }
+
+    // Give the accepted state time to render before the first status check.
+    timer = setTimeout(checkStatus, delay);
+    window.addEventListener("bytequest:auth-cleared", stop);
+    return () => {
+      stop();
+      window.removeEventListener("bytequest:auth-cleared", stop);
+    };
+  }, [activityId, pendingSample, showSampleResult]);
 
   const flushDraftToServer = useCallback(
     async (nextCode: string) => {
       if (!questId || !userId) return;
 
-      if (typeof navigator !== "undefined" && !navigator.onLine) {
-        setSyncState("offline-local");
-        setDraftStatus("Offline — saved to device");
-        return;
-      }
-
       setSyncState("saving");
-      setDraftStatus("Saving draft…");
+      setDraftStatus("Saving…");
       try {
         await apiRequest(`/pilot/drafts/${questId}`, {
           method: "PUT",
@@ -125,32 +292,49 @@ export default function Arena({ activityId }: { activityId: string }) {
           const key = draftKey(userId, questId);
           if (readLocalDraft(userId, questId) === nextCode) window.localStorage.removeItem(key);
         } catch { /* Storage may be blocked. */ }
-        const nowStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
         setSyncState("synced");
-        setDraftStatus(`Synced to server at ${nowStr}`);
+        setDraftStatus(`Saved to your account at ${savedAt()}`);
+        if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+        return true;
       } catch {
         setSyncState("saved-local");
-        setDraftStatus("Saved locally");
+        setDraftStatus("Saved on this device · retrying sync");
+        return false;
       }
     },
     [userId, questId]
   );
 
-  useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-    };
-    const handleOffline = () => {
-      setIsOnline(false);
-      setSyncState("offline-local");
-      setDraftStatus("Offline — saved to device");
-    };
+  useEffect(() => () => {
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+  }, []);
 
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
+  // Count only the time this tab is actually in front, so a challenge left open
+  // overnight does not report eight hours of work. Both handlers are idempotent.
+  useEffect(() => {
+    function startSegment() {
+      if (segmentStartRef.current === null) segmentStartRef.current = Date.now();
+    }
+    function endSegment() {
+      if (segmentStartRef.current !== null) {
+        workedMsRef.current += Date.now() - segmentStartRef.current;
+        segmentStartRef.current = null;
+      }
+    }
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") startSegment();
+      else endSegment();
+    }
+    onVisibilityChange();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", startSegment);
+    window.addEventListener("blur", endSegment);
     return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
+      endSegment();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", startSegment);
+      window.removeEventListener("blur", endSegment);
     };
   }, []);
 
@@ -158,78 +342,78 @@ export default function Arena({ activityId }: { activityId: string }) {
     let active = true;
     async function load() {
       try {
-        const { data } = await getSupabase().auth.getSession();
-        if (!data.session) { if (active) setMessage("Sign in to open the coding arena."); return; }
-        const [me, activities] = await Promise.all([apiRequest<Profile>("/profile/me"), apiRequest<Quest[]>("/quests")]);
+        if (role !== "student") throw new Error("Code submissions are available to student accounts.");
+        const activities = await apiRequest<Quest[]>(`/quests?details_for=${encodeURIComponent(activityId)}`);
         if (!active) return;
-        setProfile(me);
-        if (me.role !== "student") throw new Error("Code submissions are available to student accounts.");
         setTrackActivities(activities);
         const target = activities.find((item) => item.id === activityId && item.activity_type === "challenge");
         if (!target) throw new Error("This published challenge is not available on your selected language track.");
         setQuest(target);
+        const savedRun = readSampleRun(`bytequest:sample-job:${userId}:${target.id}`);
+        setSampleRun(savedRun);
+        setSampleStatus(savedRun ? "Checking saved sample run" : "");
+        setHintStatus(null);
+        setHintError("");
         if (target.is_completed || target.is_closed) {
           void apiRequest<{ source_code: string }>(`/pilot/activities/${target.id}/solution`)
             .then((value) => { if (active) setSolution(value.source_code || ""); })
             .catch(() => {});
         }
         void apiRequest<HintStatus>(`/pilot/activities/${target.id}/hints`).then((value) => {
-          if (active) setHintStatus(value);
-        }).catch(() => {});
+          if (!active) return;
+          setHintStatus(value);
+          if (value.reviewed.some((hint) => hint.body) || value.ai_hints.length) setHintsOpen(true);
+        }).catch((error) => { if (active) setHintError(getErrorMessage(error)); });
 
-        const defaultCode = target.starter_code || starterCode(me.enrolled_language);
-        initialStarterCodeRef.current = defaultCode;
+        const defaultCode = target.starter_code || starterCode(language);
+        setStarter(defaultCode);
 
         // Restore any unsynced account-scoped backup before the server draft.
         let restoredCode = defaultCode;
         try {
-          const cachedLocal = readLocalDraft(me.id, target.id);
+          const cachedLocal = readLocalDraft(userId, target.id);
           const savedDraft = await apiRequest<{ source_code: string } | null>(`/pilot/drafts/${target.id}`);
           const serverCode = savedDraft?.source_code ?? defaultCode;
           lastSyncedCodeRef.current = serverCode;
           if (cachedLocal === serverCode) {
-            try { window.localStorage.removeItem(draftKey(me.id, target.id)); }
+            try { window.localStorage.removeItem(draftKey(userId, target.id)); }
             catch { /* Storage may be blocked. */ }
           }
           restoredCode = cachedLocal ?? serverCode;
-          if (cachedLocal !== null) {
-            setDraftStatus("Saved locally — syncing to your account");
-            setSyncState("saved-local");
-          }
         } catch {
-          const cachedLocal = readLocalDraft(me.id, target.id);
+          const cachedLocal = readLocalDraft(userId, target.id);
           restoredCode = cachedLocal ?? defaultCode;
           latestCodeRef.current = restoredCode;
           setCode(restoredCode);
-          setDraftStatus("Could not load server draft — refresh to retry");
+          setDraftStatus("Saved on this device only");
           setSyncState("error");
-          setIsError(true);
-          setMessage("Your edits are saved on this device. Refresh when the connection returns to load your server draft before syncing.");
+          setMessage("We couldn't load the code saved to your account. Edits stay on this device, and Run and Submit are paused until a reload loads your saved code.");
           return;
         }
         latestCodeRef.current = restoredCode;
         setCode(restoredCode);
-        if (readLocalDraft(me.id, target.id) !== null) {
-          setDraftStatus("Saved locally — syncing to your account");
+        if (readLocalDraft(userId, target.id) !== null) {
+          setDraftStatus("Recovered from this device · syncing");
           setSyncState("saved-local");
-        } else if (restoredCode !== defaultCode) {
-          const nowStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-          setDraftStatus(`Synced to server at ${nowStr}`);
-          setSyncState("synced");
         } else {
-          setDraftStatus("Synced to server");
+          setDraftStatus(restoredCode !== defaultCode ? "Saved to your account" : "Starter code");
           setSyncState("synced");
         }
         setDraftLoaded(true);
-      } catch (error) { if (active) { setIsError(true); setMessage(getErrorMessage(error)); } }
+      } catch (error) {
+        if (active) {
+          setNeedsSignIn(error instanceof ApiError && error.status === 401);
+          setMessage(getErrorMessage(error));
+        }
+      }
       finally { if (active) setLoading(false); }
     }
     void load();
     return () => { active = false; };
-  }, [activityId]);
+  }, [activityId, language, role, userId]);
 
   useEffect(() => {
-    if (!questId || !draftLoaded || !isOnline) return;
+    if (!questId || !draftLoaded) return;
     latestCodeRef.current = code;
     const timer = window.setTimeout(() => {
       if (savingRef.current) return;
@@ -239,7 +423,12 @@ export default function Arena({ activityId }: { activityId: string }) {
           let lastSaved = lastSyncedCodeRef.current;
           while (lastSaved !== latestCodeRef.current) {
             const next = latestCodeRef.current;
-            await flushDraftToServer(next);
+            const saved = await flushDraftToServer(next);
+            if (!saved) {
+              if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+              retryTimerRef.current = setTimeout(() => setRetryTick((tick) => tick + 1), 5000);
+              break;
+            }
             lastSaved = next;
           }
         } finally {
@@ -248,42 +437,47 @@ export default function Arena({ activityId }: { activityId: string }) {
       })();
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [code, draftLoaded, isOnline, questId, flushDraftToServer]);
+  }, [code, draftLoaded, questId, flushDraftToServer, retryTick]);
+
+  function workedSeconds(): number {
+    const openSegment = segmentStartRef.current === null ? 0 : Date.now() - segmentStartRef.current;
+    return Math.min(86_400, Math.max(0, Math.round((workedMsRef.current + openSegment) / 1000)));
+  }
 
   function handleCodeChange(newCode: string | undefined) {
     const updated = newCode ?? "";
     setCode(updated);
-    if (questId && profile?.id) writeLocalDraft(profile.id, questId, updated);
+    if (questId) writeLocalDraft(userId, questId, updated);
     if (!draftLoaded) {
       setSyncState("error");
-      setDraftStatus("Saved on this device — refresh to load server draft");
+      setDraftStatus("Saved on this device only");
       return;
     }
-    if (typeof navigator !== "undefined" && !navigator.onLine) {
-      setSyncState("offline-local");
-      setDraftStatus("Offline — saved to device");
-    } else {
-      setSyncState("saving");
-      setDraftStatus("Saving draft…");
-    }
+    setSyncState("saving");
+    setDraftStatus("Saving…");
   }
 
-  function handleResetCode() {
-    if (!initialStarterCodeRef.current) return;
-    setCode(initialStarterCodeRef.current);
-    if (questId && userId) writeLocalDraft(userId, questId, initialStarterCodeRef.current);
+  function confirmResetCode() {
+    setConfirmReset(false);
+    handleCodeChange(starter);
+    setAnnouncement("Your code was replaced with the starter code.");
   }
 
   async function runCode(dryRun: boolean) {
-    if (!quest) return;
-    setBusy(dryRun ? "run" : "submit"); setMessage(""); setIsError(false); setResult(null);
-    setAiExplanation(null);
+    if (!quest || !userId || !sampleKey || busy || submissionRequest.current) return;
+    const request = new AbortController();
+    submissionRequest.current = request;
+    setSending(dryRun ? "run" : "submit");
+    setSampleStatus(dryRun ? "Sending sample run" : "");
+    setResult(null);
+    setRunError("");
+    setAiHint("");
     setAiError("");
-    setTerminalCleared(false);
-    setTerminalError("");
+    setCopyState("");
+    setAnnouncement(dryRun ? "" : "Submitting your code for official grading.");
     try {
-      const pendingKey = `bytequest:pending-job:${quest.id}:${dryRun ? "sample" : "official"}`;
-      let idempotencyKey = crypto.randomUUID();
+      const pendingKey = `bytequest:pending-job:${userId}:${quest.id}:${dryRun ? "sample" : "official"}`;
+      let idempotencyKey = newRequestId();
       try {
         const previous = JSON.parse(window.sessionStorage.getItem(pendingKey) || "null") as
           { sourceCode?: string; key?: string } | null;
@@ -292,737 +486,570 @@ export default function Arena({ activityId }: { activityId: string }) {
       } catch { /* Continue without session storage if the browser blocks it. */ }
       const accepted = await apiRequest<SubmissionJob>("/submission-jobs", {
         method: "POST",
+        signal: request.signal,
         headers: { "Idempotency-Key": idempotencyKey },
-        body: JSON.stringify({ activity_id: quest.id, source_code: code, dry_run_only: dryRun }),
+        body: JSON.stringify({
+          activity_id: quest.id,
+          source_code: code,
+          dry_run_only: dryRun,
+          time_spent_seconds: workedSeconds(),
+        }),
       });
-      try { window.sessionStorage.removeItem(pendingKey); } catch { /* Storage may be blocked. */ }
+      if (request.signal.aborted) return;
       if (!dryRun) {
+        removeStoredRun(pendingKey);
         router.push(`/submissions/${accepted.id}`);
         return;
       }
-      let job = accepted;
-      for (let tries = 0; tries < 90 && job.status !== "completed" && job.status !== "failed"; tries++) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        job = await apiRequest<SubmissionJob>(`/submission-jobs/${accepted.id}`);
-      }
-      if (job.status === "failed") throw new Error(job.error || "Sample run failed. Try again.");
-      if (!job.result) throw new Error("Sample run is still pending. Return to this challenge shortly.");
-      const response = job.result;
-      setResult(response);
-      const failedIdx = response.evaluation.test_results?.findIndex((t) => !t.passed && !t.is_hidden) ?? -1;
-      if (failedIdx >= 0) {
-        setActiveCaseIndex(failedIdx);
+      if (accepted.status === "queued" || accepted.status === "running") {
+        const run = { key: sampleKey, id: accepted.id, sourceCode: code };
+        try { window.sessionStorage.setItem(sampleKey, JSON.stringify(run)); } catch { /* Keep watching in this tab. */ }
+        setSampleRun(run);
+        setSampleStatus(sampleRunStatus(accepted));
+      } else if (accepted.status === "completed" && accepted.result) {
+        showSampleResult(accepted.result, code);
       } else {
-        setActiveCaseIndex(0);
+        removeStoredRun(pendingKey);
+        throw new Error(accepted.error || "Sample grading failed. Try again.");
       }
-      if (dryRun) {
-        setMessage("Sample run finished. It did not create an attempt.");
-      } else {
-        const completionMessage = response.evaluation.is_successful
-          ? response.xp_awarded
-            ? `Challenge complete: +${response.xp_awarded} XP.`
-            : "Challenge passed. Completion XP was already awarded on an earlier attempt."
-          : "No XP awarded. Review the visible results and try again.";
-        setMessage(`Submission ${response.attempt_number} saved. ${completionMessage}`);
-        if (response.new_total_xp !== undefined || response.new_level !== undefined) {
-          setProfile((current) => current ? {
-            ...current,
-            xp_points: response.new_total_xp ?? current.xp_points,
-            current_level: response.new_level ?? current.current_level,
-          } : current);
-        }
-        if (response.evaluation.is_successful) {
-          setQuest((current) => current ? { ...current, is_completed: true } : current);
-        }
-      }
+      removeStoredRun(pendingKey);
     } catch (error) {
+      if (request.signal.aborted) return;
       const reason = getErrorMessage(error);
-      setIsError(true);
-      setMessage(reason);
-      setTerminalError(reason);
+      setRunError(reason);
+      setAnnouncement(`${dryRun ? "Sample run" : "Submission"} failed: ${reason}`);
     }
-    finally { setBusy(""); }
+    finally {
+      submissionRequest.current = null;
+      if (!request.signal.aborted) setSending("");
+    }
   }
 
-  async function requestErrorExplanation() {
-    if (!quest || !evaluation || evaluation.is_successful) return;
-    setAiExplaining(true);
+  async function requestAiHint() {
+    if (!quest || !userId || !evaluation || evaluation.is_successful) return;
+    if (!navigator.onLine) {
+      setAiError("AI hints need a connection. Your draft stays on this device.");
+      return;
+    }
+    const previous = pendingHintRef.current;
+    const pending = previous?.activityId === quest.id && previous.userId === userId
+      ? previous
+      : { activityId: quest.id, userId, key: newRequestId() };
+    pendingHintRef.current = pending;
+    setAiBusy(true);
     setAiError("");
     try {
       const hint = await apiRequest<{ body: string; remaining: number }>(`/pilot/activities/${quest.id}/hints/reveal`, {
         method: "POST",
-        body: JSON.stringify({
-          source: "ai", request_key: crypto.randomUUID(),
-        }),
+        body: JSON.stringify({ source: "ai", request_key: pending.key }),
       });
-      setAiExplanation({ title: "A guiding hint", summary: hint.body,
-        concept_explanation: "Use this clue to inspect your own approach.",
-        hints: [hint.body], pedagogical_tip: "Try another sample run after making a change." });
-      setHintStatus(await apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`));
+      if (pendingHintRef.current === pending) pendingHintRef.current = null;
+      setAiHint(hint.body);
+      setAnnouncement(`AI hint ready. ${hint.remaining} hint ${hint.remaining === 1 ? "use" : "uses"} left.`);
+      try {
+        setHintStatus(await apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`));
+        setHintError("");
+      } catch (err) {
+        setHintStatus(null);
+        setHintError(getErrorMessage(err));
+      }
     } catch (err) {
       setAiError(getErrorMessage(err));
+      if (err instanceof ApiError && err.code === "exam_in_progress") {
+        setHintStatus(null);
+        setHintError(err.message);
+      }
     } finally {
-      setAiExplaining(false);
+      setAiBusy(false);
+    }
+  }
+
+  async function retryHintStatus() {
+    if (!quest) return;
+    setHintBusy(true);
+    setHintError("");
+    try {
+      setHintStatus(await apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`));
+    } catch (error) {
+      setHintError(getErrorMessage(error));
+    } finally {
+      setHintBusy(false);
     }
   }
 
   async function revealReviewedHint(hintId: string) {
     if (!quest) return;
     setHintBusy(true);
-    setAiError("");
-    setHintStatus((prev) =>
-      prev
-        ? {
-            ...prev,
-            remaining: Math.max(0, prev.remaining - 1),
-          }
-        : prev
-    );
+    setHintError("");
     try {
       await apiRequest(`/pilot/activities/${quest.id}/hints/reveal`, {
         method: "POST",
-        body: JSON.stringify({ source: "reviewed", hint_id: hintId, request_key: crypto.randomUUID() }),
+        body: JSON.stringify({ source: "reviewed", hint_id: hintId, request_key: newRequestId() }),
       });
-      setHintStatus(await apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`));
+      const next = await apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`);
+      setHintStatus(next);
+      setAnnouncement(`Hint revealed. ${next.remaining} hint ${next.remaining === 1 ? "use" : "uses"} left.`);
     } catch (cause) {
-      setAiError(getErrorMessage(cause));
-      void apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`).then(setHintStatus).catch(() => {});
+      setHintError(getErrorMessage(cause));
+      if (cause instanceof ApiError && cause.code === "exam_in_progress") setHintStatus(null);
+      else void apiRequest<HintStatus>(`/pilot/activities/${quest.id}/hints`).then(setHintStatus).catch(() => {});
     } finally {
       setHintBusy(false);
     }
   }
 
-  const maxHints = 5;
-  const hintsUsed = hintStatus ? Math.max(0, maxHints - hintStatus.remaining) : 0;
-  const canViewSolution = Boolean((quest?.is_completed || quest?.is_closed) && solution);
-
-  const language = profile?.enrolled_language || "python";
+  const languageName = LANGUAGE_NAMES[language] ?? language;
   const monacoLanguage = language === "cpp" ? "cpp" : language;
   const evaluation = result?.evaluation;
   const visibleResults = evaluation?.test_results?.filter((test) => !test.is_hidden) ?? [];
-  const hiddenTestsRan = Boolean(evaluation && result?.mode === "official_submit" && evaluation.total_test_cases > visibleResults.length);
+  const activeCase = visibleResults[activeCaseIndex] ?? visibleResults[0];
+  const firstFailed = visibleResults.find((test) => !test.passed);
+  const resultIsStale = Boolean(evaluation) && resultCode !== code;
+  const hintsLeft = hintStatus?.remaining;
+  const canViewSolution = Boolean((quest?.is_completed || quest?.is_closed) && solution);
+  const codeChanged = draftLoaded && code !== starter;
+  // Busy buttons stay focusable (aria-disabled) so a keyboard run keeps focus in place.
+  const actionsBlocked = !draftLoaded || !code.trim();
 
-  function getShellCommand(lang: string): string {
-    if (lang === "cpp") return "g++ -O2 solution.cpp -o solution && ./solution";
-    if (lang === "java") return "javac Main.java && java Main";
-    return "python3 solution.py";
-  }
-
-  function handleCopyTerminal() {
-    const activeCase = visibleResults[activeCaseIndex] || visibleResults[0];
-    let text = `$ ${getShellCommand(language)}\n`;
-    if (terminalError) text += `[Run failed]\n${terminalError}\n\n`;
-    if (activeCase) {
-      if (activeCase.stdin) text += `[Input (stdin)]\n${activeCase.stdin}\n\n`;
-      if (activeCase.stdout) text += `[Standard Output (stdout)]\n${activeCase.stdout}\n\n`;
-      if (activeCase.stderr) text += `[Standard Error (stderr)]\n${activeCase.stderr}\n\n`;
-      if (activeCase.compile_output) text += `[Compiler Diagnostics]\n${activeCase.compile_output}\n\n`;
-      text += `[Status: ${activeCase.status_description} | Time: ${activeCase.execution_time_ms}ms | Memory: ${activeCase.memory_used_kb}KB]\n`;
-    } else {
-      text += `ByteQuest Interactive Sandbox [v2.0]\nRuntime: ${language.toUpperCase()}\nStatus: Ready to execute\n`;
+  async function handleCopyOutput() {
+    if (!activeCase) return;
+    // Only the selected visible case is copied; hidden tests never reach this list.
+    const parts = [`Case ${visibleResults.indexOf(activeCase) + 1}: ${caseVerdict(activeCase)}`];
+    const add = (label: string, value: string | undefined) => { if (value) parts.push(`${label}:\n${value.replace(/\n+$/, "")}`); };
+    add("Compiler message", activeCase.compile_output);
+    add("Error message", activeCase.stderr);
+    add("Input", activeCase.stdin);
+    add("Expected output", activeCase.expected_stdout);
+    parts.push(`Your output:\n${activeCase.stdout.replace(/\n+$/, "") || "(nothing printed)"}`);
+    try {
+      await navigator.clipboard.writeText(parts.join("\n\n"));
+      setCopyState("copied");
+      setAnnouncement("Output copied.");
+    } catch {
+      setCopyState("failed");
     }
-    void navigator.clipboard.writeText(text);
-    setTerminalCopied(true);
-    setTimeout(() => setTerminalCopied(false), 2000);
+    setTimeout(() => setCopyState(""), 2000);
   }
 
-  // Compute activity navigation in the student track
   const currentActivityIndex = trackActivities.findIndex((a) => a.id === activityId);
   const prevActivity = currentActivityIndex > 0 ? trackActivities[currentActivityIndex - 1] : null;
   const nextActivity = currentActivityIndex >= 0 && currentActivityIndex < trackActivities.length - 1 ? trackActivities[currentActivityIndex + 1] : null;
 
-  return (
-    <div className="page-shell">
-      {/* Offline/Network Reconnect Banner */}
-      {!isOnline && (
-        <div
-          role="status"
-          aria-live="assertive"
-          className="mb-4 flex items-center justify-between rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-xs font-semibold text-amber-900 shadow-xs"
-        >
-          <span>Connection lost — your code is being saved safely on this device and will sync automatically when reconnected.</span>
-          <span className="font-mono uppercase font-bold text-[10px] tracking-wider bg-amber-200/80 px-2 py-0.5 rounded">
-            Offline Mode
-          </span>
-        </div>
-      )}
-
-      {/* Top Activity Navigation Bar */}
-      <nav className="activity-topbar" aria-label="Activity navigation">
-        <Link href="/quests" className="button button-quiet small">
-          ← Back to quest map
-        </Link>
-        <div className="activity-nav-group">
-          {prevActivity ? (
-            <Link href={getActivityHref(prevActivity)} className="button button-outline small">
-              ← Previous activity
+  if (loading || !quest) {
+    return (
+      <div className="page-shell">
+        {loading ? (
+          <section className="panel" role="status">Loading your challenge…</section>
+        ) : (
+          <section className="panel">
+            <p className="notice error" role="alert">{message || "This challenge could not be opened."}</p>
+            <Link className="button button-primary" href={needsSignIn ? "/onboarding" : "/quests"} style={{ marginTop: 16 }}>
+              {needsSignIn ? "Sign in" : "Back to quest map"}
             </Link>
-          ) : (
-            <button type="button" className="button button-outline small" disabled>
-              ← Previous activity
-            </button>
-          )}
-          {nextActivity ? (
-            <Link href={getActivityHref(nextActivity)} className="button button-outline small">
-              Next activity →
-            </Link>
-          ) : (
-            <button type="button" className="button button-outline small" disabled>
-              Next activity →
-            </button>
-          )}
-        </div>
-      </nav>
-
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow-label">CODING ARENA · {language.toUpperCase()}</p>
-          <h1>{quest?.title || "Your coding challenge"}</h1>
-          <p>{quest ? `${quest.topic_concept} · ${quest.xp_reward} XP on first completion` : "Write, run a sample, then submit your solution."}</p>
-        </div>
-        {quest && (
-          <div className="quest-meta" style={{ margin: 0 }}>
-            <span className="tag">{quest.topic_concept}</span>
-            <span className="tag">Difficulty {quest.difficulty_level}</span>
-            <span className="tag xp">✦ {quest.xp_reward} XP</span>
-            {quest.is_completed && <span className="completion">✓ Completed</span>}
-          </div>
+          </section>
         )}
       </div>
+    );
+  }
 
-      {loading ? (
-        <section className="panel" role="status">Loading your challenge…</section>
-      ) : message && !quest ? (
-        <section className="panel">
-          <p className={`notice ${isError ? "error" : ""}`} role="status">{message}</p>
-          <Link className="button button-primary" href="/onboarding">Sign in</Link>
-        </section>
-      ) : quest && (
-        <div className="arena-layout">
-          <section className="panel problem-panel">
-            <div className="quest-meta">
-              <span className="tag">{quest.topic_concept}</span>
-              <span className="tag">Difficulty {quest.difficulty_level}</span>
-              <span className="tag xp">✦ {quest.xp_reward} XP</span>
-            </div>
-            <h2>Problem</h2>
-            <div className="problem-text">{quest.problem_statement || "Read the prompt and write a program that satisfies the sample and hidden test cases."}</div>
-            <div className="divider" style={{ margin: "22px 0" }} />
-            <div className="callout">
-              <h3>Submissions & Grading</h3>
-              <p>Run sample checks as often as you like with sample test cases. Official submissions evaluate the complete test suite and record your progress.</p>
-            </div>
-            {quest.is_closed && <p className="notice warning" role="status">This challenge is closed for new submissions.</p>}
+  const statement = splitProblemStatement(
+    quest.problem_statement || "Read the prompt and write a program that satisfies the sample and hidden test cases."
+  );
+  // The saved visible grading cases are what Run sample checks, so they win over examples typed into the prose.
+  const samples = quest.sample_cases?.length
+    ? quest.sample_cases.map((sample) => ({ input: sample.stdin, output: sample.expected_stdout }))
+    : statement.samples;
+  const revealedReviewed = hintStatus?.reviewed.filter((hint) => hint.body) ?? [];
+  const lockedReviewed = hintStatus?.reviewed.filter((hint) => !hint.body) ?? [];
+  const runBlockedReason = !draftLoaded ? "Waiting for your saved code to load." : !code.trim() ? "Write some code first." : "";
 
-            {/* Guarded Reference Solution Display */}
-            {canViewSolution && (
-              <div className="pilot-card" style={{ marginTop: 14 }}>
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-[#156046]">Instructor Reference Solution</h3>
-                  <button
-                    type="button"
-                    onClick={() => setShowSolution((v) => !v)}
-                    className="button button-outline small"
-                  >
-                    {showSolution ? "Hide Solution" : "View Reference Solution"}
-                  </button>
-                </div>
-                <p className="text-xs text-slate-600">Unlocked after completing the challenge or instructor release.</p>
-                {showSolution && (
-                  <pre className="mono mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs text-emerald-100">
-                    {solution}
-                  </pre>
+  return (
+    <div className="page-shell arena-page">
+      <p className="arena-sr-only" role="status" aria-live="polite">{busy === "run" ? sampleStatus : announcement}</p>
+      <p className="arena-sr-only" role="status" aria-live="polite">
+        {syncState === "saved-local"
+          ? "Your code is saved on this device and will sync to your account when the connection returns."
+          : syncState === "error"
+            ? "Your code is saved on this device only. Reload to load the code saved to your account."
+            : ""}
+      </p>
+
+      {/* Shown only when the layout stacks: the editor then sits below the problem. */}
+      <nav className="arena-jump" aria-label="Jump to section">
+        <a href="#arena-problem-title">Problem</a>
+        <a href="#arena-editor">Editor</a>
+        <a href="#arena-results-title">Results</a>
+      </nav>
+
+      <div className="arena-workspace">
+        <section className="arena-brief" aria-labelledby="arena-title">
+          <nav className="arena-nav" aria-label="Challenge navigation">
+            <div className="arena-nav-steps">
+              {prevActivity ? (
+                <Link href={getActivityHref(prevActivity)} className="button button-outline small" aria-label={`Previous activity: ${prevActivity.title || "untitled"}`}>← Previous</Link>
+              ) : (
+                <button type="button" className="button button-outline small" disabled>← Previous</button>
+              )}
+              {nextActivity ? (
+                <Link href={getActivityHref(nextActivity)} className="button button-outline small" aria-label={`Next activity: ${nextActivity.title || "untitled"}`}>Next →</Link>
+              ) : (
+                <button type="button" className="button button-outline small" disabled>Next →</button>
+              )}
+            </div>
+          </nav>
+
+          <header className="arena-head">
+            <p className="eyebrow-label">Quest #{quest.position ?? quest.sequence_order} · Code challenge · {languageName}</p>
+            <h1 id="arena-title">{quest.title || "Untitled challenge"}</h1>
+            <ul className="arena-facts" aria-label="Challenge details">
+              <li className="tag">{quest.topic_concept}</li>
+              <li className="tag">Difficulty {quest.difficulty_level}</li>
+              <li className="tag xp">{quest.xp_reward} XP</li>
+              <li>
+                {quest.is_completed ? (
+                  <StatusChip state="complete" label="Completed" />
+                ) : quest.is_closed ? (
+                  <StatusChip state="closed" label="Closed" />
+                ) : (
+                  <StatusChip state="todo" tone="muted" label="Not completed yet" />
                 )}
-              </div>
+              </li>
+            </ul>
+            {quest.is_closed && (
+              <p className="notice warning">This challenge is closed, so it can no longer be submitted for grading. You can still practise with sample runs.</p>
             )}
+          </header>
 
-            {/* Progressive Hints Panel with Counter */}
-            <div className="pilot-card" style={{ marginTop: 18 }}>
-              <div className="flex items-center justify-between mb-2">
-                <h3>Guiding hints</h3>
-                <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-bold text-slate-700">
-                  💡 Hints ({hintsUsed} / {maxHints})
-                </span>
-              </div>
-              <p>{hintStatus ? `${hintStatus.remaining} of ${maxHints} uses left` : "Loading hint availability…"}. Revealed hints stay available for free.</p>
-              {hintStatus?.reviewed.map((hint) => <div key={hint.id} className="row">
-                <strong>Instructor hint {hint.slot}</strong>
-                {hint.body ? <p>{hint.body}</p> : <button type="button" className="button button-outline small"
-                  disabled={hintBusy || hintStatus.remaining === 0 || hintsUsed >= maxHints}
-                  onClick={() => void revealReviewedHint(hint.id)}>Reveal hint</button>}
-              </div>)}
-              {hintStatus?.ai_hints.map((hint) => <p key={hint.id} className="notice">AI hint: {hint.body}</p>)}
-              {aiError && <p className="notice error" role="alert">{aiError}</p>}
-            </div>
+          <section className="arena-section" aria-labelledby="arena-problem-title">
+            <h2 id="arena-problem-title">Problem</h2>
+            <div className="arena-statement">{statement.body}</div>
           </section>
 
-          <section className="panel">
-            <div className="editor-toolbar">
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span className="role-pill">{language}</span>
-                {/* Live Synced Draft Status Pill */}
-                <div
-                  role="status"
-                  aria-live="polite"
-                  className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs"
-                >
-                  <span
-                    className={`inline-block h-2 w-2 rounded-full ${
-                      syncState === "synced"
-                        ? "bg-emerald-600"
-                        : syncState === "saving"
-                        ? "bg-amber-500 animate-pulse"
-                        : syncState === "offline-local"
-                        ? "bg-amber-600"
-                        : "bg-slate-400"
-                    }`}
-                  />
-                  <span className="font-semibold text-slate-700">{draftStatus}</span>
+          {samples.length > 0 && (
+            <section className="arena-section" aria-labelledby="arena-sample-title">
+              <h2 id="arena-sample-title">{samples.length === 1 ? "Example" : "Examples"}</h2>
+              {samples.map((sample, index) => (
+                <dl className="arena-sample" key={index}>
+                  <div><dt>Input</dt><dd><pre>{sample.input || "(no input)"}</pre></dd></div>
+                  <div><dt>Expected output</dt><dd><pre>{sample.output}</pre></dd></div>
+                </dl>
+              ))}
+            </section>
+          )}
+
+          <details className="arena-disclosure" open={hintsOpen} onToggle={(event) => setHintsOpen(event.currentTarget.open)}>
+            <summary>
+              <span className="arena-disclosure-title">Stuck? Hints</span>
+              <span className="arena-disclosure-meta">
+                {hintStatus ? `${hintStatus.remaining} of ${MAX_HINTS} uses left` : hintError ? "Unavailable" : "Loading…"}
+              </span>
+            </summary>
+            <div className="arena-disclosure-body">
+              <p className="arena-help">
+                Each new hint uses 1 of your {MAX_HINTS} hint uses for this challenge. Hints you have revealed stay here for free.
+              </p>
+              {hintStatus && (revealedReviewed.length > 0 || hintStatus.ai_hints.length > 0) && (
+                <ol className="arena-hint-list" aria-label="Revealed hints">
+                  {revealedReviewed.map((hint) => (
+                    <li key={hint.id}><strong>Instructor hint {hint.slot}</strong><p>{hint.body}</p></li>
+                  ))}
+                  {hintStatus.ai_hints.map((hint) => (
+                    <li key={hint.id}><strong>AI hint</strong><p>{hint.body}</p></li>
+                  ))}
+                </ol>
+              )}
+              {lockedReviewed.length > 0 && (
+                <div className="arena-hint-actions">
+                  {lockedReviewed.map((hint) => (
+                    <button
+                      key={hint.id}
+                      type="button"
+                      className="button button-outline small"
+                      disabled={hintBusy || hintStatus?.remaining === 0}
+                      onClick={() => void revealReviewedHint(hint.id)}
+                    >
+                      Reveal instructor hint {hint.slot}
+                    </button>
+                  ))}
                 </div>
+              )}
+              {hintStatus && hintStatus.reviewed.length === 0 && hintStatus.remaining > 0 && (
+                <p className="arena-help">
+                  Your instructor hasn&apos;t added hints here. If a sample run fails, you can ask for an AI hint from the results.
+                </p>
+              )}
+              {hintStatus?.remaining === 0 && (
+                <p className="arena-help">You&apos;ve used all {MAX_HINTS} hint uses for this challenge.</p>
+              )}
+              {hintError && <p className="notice error" role="status">{hintError}</p>}
+              {hintError && !hintStatus && (
+                <button type="button" className="button button-outline small" disabled={hintBusy} onClick={() => void retryHintStatus()}>
+                  Reload hints
+                </button>
+              )}
+            </div>
+          </details>
+
+          {canViewSolution && (
+            <details className="arena-disclosure">
+              <summary>
+                <span className="arena-disclosure-title">Reference solution</span>
+                <span className="arena-disclosure-meta">{quest.is_completed ? "Unlocked: completed" : "Unlocked: closed"}</span>
+              </summary>
+              <div className="arena-disclosure-body">
+                <p className="arena-help">Your instructor&apos;s solution. Compare it with your own approach.</p>
+                <pre className="arena-code-block" tabIndex={0} aria-label="Reference solution code">{solution}</pre>
               </div>
-              <button type="button" className="text-button" style={{ fontSize: "var(--text-xs)" }} onClick={handleResetCode}>
-                Reset to starter code
-              </button>
+            </details>
+          )}
+        </section>
+
+        <section className="arena-work" id="arena-editor" aria-label="Your code">
+          <div className="arena-editor-bar">
+            <span className="role-pill" title="Your enrolled language">{languageName}</span>
+            <span className={`arena-save ${syncState}`}>
+              <span className="arena-save-dot" aria-hidden="true" />
+              {draftStatus}
+            </span>
+            <button
+              type="button"
+              className="text-button arena-reset"
+              onClick={() => { if (codeChanged) setConfirmReset(true); }}
+              aria-disabled={!codeChanged}
+              title={codeChanged ? undefined : "Your code already matches the starter code."}
+            >
+              Reset code
+            </button>
+          </div>
+
+          {message && (
+            <div className="notice error arena-load-error" role="alert">
+              <span>{message}</span>
+              <button type="button" className="button button-outline small" onClick={() => window.location.reload()}>Reload saved code</button>
             </div>
+          )}
 
-
-            <div className="editor-frame">
-              <Editor
-                height="440px"
-                language={monacoLanguage}
-                theme="vs-dark"
+          <div className="arena-editor">
+            {touchEditor ? (
+              <textarea
+                className="arena-touch-editor"
+                aria-label={`${languageName} code editor for ${quest.title || "this challenge"}`}
                 value={code}
-                onChange={handleCodeChange}
-                options={{
-                  minimap: { enabled: false },
-                  fontSize: 14,
-                  lineHeight: 22,
-                  lineNumbers: "on",
-                  scrollBeyondLastLine: false,
-                  tabSize: 4,
-                  automaticLayout: true,
-                  wordWrap: "on",
-                  padding: { top: 16, bottom: 16 },
-                }}
+                onChange={(event) => handleCodeChange(event.currentTarget.value)}
+                readOnly={!draftLoaded}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                maxLength={50_000}
+                wrap="off"
               />
-            </div>
+            ) : (
+              <>
+                <Editor
+                  height="100%"
+                  language={monacoLanguage}
+                  theme="vs-dark"
+                  value={code}
+                  onChange={handleCodeChange}
+                  options={{
+                    ariaLabel: `${languageName} code editor for ${quest.title || "this challenge"}`,
+                    minimap: { enabled: false },
+                    readOnly: !draftLoaded,
+                    fontSize: 14,
+                    lineHeight: 22,
+                    lineNumbers: "on",
+                    scrollBeyondLastLine: false,
+                    tabSize: 4,
+                    automaticLayout: true,
+                    wordWrap: "on",
+                    padding: { top: 14, bottom: 14 },
+                  }}
+                />
+                <p className="arena-editor-tip">Tab indents code. Press Ctrl+M (Ctrl+Shift+M on Mac), then Tab, to move out of the editor.</p>
+              </>
+            )}
+          </div>
 
-            <div className="editor-actions">
+          <div className="arena-actions">
+            <div className="arena-action">
               <button
                 className="button button-outline"
                 type="button"
                 onClick={() => void runCode(true)}
-                disabled={!draftLoaded || busy !== "" || !code.trim()}
+                disabled={actionsBlocked}
+                aria-disabled={busy !== ""}
+                aria-describedby="arena-run-help"
+                data-tooltip="Check the example test cases without recording an attempt."
               >
-                {busy === "run" ? "Running sample…" : "Run sample"}
+                {busy === "run" ? "Running…" : "Run sample"}
               </button>
+              <p id="arena-run-help"><strong>Practice.</strong> Checks the example cases. No attempt recorded.</p>
+            </div>
+            <div className="arena-action">
               <button
                 className="button button-primary"
                 type="button"
                 onClick={() => void runCode(false)}
-                disabled={!draftLoaded || busy !== "" || !code.trim() || Boolean(quest.is_closed)}
+                disabled={actionsBlocked || Boolean(quest.is_closed)}
+                aria-disabled={busy !== ""}
+                aria-describedby="arena-submit-help"
+                data-tooltip={quest.is_closed ? undefined : "Check all test cases and record an official attempt."}
               >
-                {busy === "submit" ? "Grading…" : "Submit for grading"}
+                {busy === "submit" ? "Submitting…" : "Submit for grading"}
               </button>
+              <p id="arena-submit-help">
+                <strong>Official.</strong>{" "}
+                {quest.is_closed
+                  ? "Closed for new submissions."
+                  : `Grades all tests and records an attempt. ${quest.pass_mark_percent != null && quest.pass_mark_percent < 100
+                    ? `Score at least ${quest.pass_mark_percent}% to pass.`
+                    : "Pass every test to complete the quest."}`}
+              </p>
+            </div>
+            {runBlockedReason && !busy && <p className="arena-action-note">{runBlockedReason}</p>}
+          </div>
+
+          <section className="arena-results" aria-labelledby="arena-results-title" aria-busy={busy !== ""}>
+            <div className="arena-results-head">
+              <h2 id="arena-results-title">Results</h2>
+              {activeCase && !busy && (
+                <button type="button" className="text-button" onClick={() => void handleCopyOutput()}>
+                  {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy output"}
+                </button>
+              )}
             </div>
 
-            {message && <p className={`notice ${isError ? "error" : ""}`} role="status">{message}{syncState === "error" && <button type="button" className="button button-outline small" onClick={() => window.location.reload()}>Retry loading draft</button>}</p>}
-
-            {evaluation && (
+            {busy === "run" ? (
+              <p className="arena-state running"><span className="arena-spinner" aria-hidden="true" />{sampleStatus}</p>
+            ) : busy === "submit" ? (
+              <p className="arena-state running"><span className="arena-spinner" aria-hidden="true" />Submitting for official grading. Your results page will open next.</p>
+            ) : runError ? (
+              <div className="arena-verdict bad">
+                <p className="arena-verdict-title"><span aria-hidden="true">!</span>Your code couldn&apos;t be run</p>
+                <p className="arena-verdict-detail">{runError}</p>
+                <p className="arena-verdict-detail">Your code is still saved. Try the sample run again in a moment.</p>
+                <button type="button" className="button button-outline small" onClick={() => void runCode(true)} disabled={actionsBlocked}>
+                  Run sample again
+                </button>
+              </div>
+            ) : !evaluation ? (
+              <p className="arena-state">Run a sample to test your code on the example cases. Your output and any error messages will appear here.</p>
+            ) : (
               <>
-                <div className="evaluation-summary">
-                  <span className={`tag ${evaluation.is_successful ? "pass" : ""}`}>
-                    {evaluation.is_successful ? "PASS" : "NEEDS WORK"}
-                  </span>
-                  <span className="tag">{evaluation.passed_test_cases}/{evaluation.total_test_cases} tests passed</span>
-                  <span className="tag">{Number(evaluation.score_percentage).toFixed(1)}%</span>
-                  {result?.attempt_number && <span className="tag">Attempt #{result.attempt_number}</span>}
-                  {result?.xp_awarded !== undefined && <span className="tag xp">+{result.xp_awarded} XP</span>}
-                </div>
-                {hiddenTestsRan && (
-                  <p className="hidden-test-note">
-                    Hidden tests were included in the official score. Their inputs and individual results stay private.
+                <div className={`arena-verdict ${evaluation.is_successful ? "good" : "bad"}`}>
+                  <p className="arena-verdict-title">
+                    <span aria-hidden="true">{evaluation.is_successful ? "✓" : "✕"}</span>
+                    {runHeadline(evaluation, visibleResults)}
                   </p>
+                  <p className="arena-verdict-detail">
+                    {visibleResults.length > 0 && `${visibleResults.filter((test) => test.passed).length} of ${visibleResults.length} example cases passed · `}
+                    Practice run, no attempt recorded.
+                  </p>
+                  <p className="arena-verdict-detail">
+                    {evaluation.is_successful
+                      ? "When you're ready, submit for grading. Official grading also runs hidden tests."
+                      : nextStep(firstFailed)}
+                  </p>
+                </div>
+                {resultIsStale && (
+                  <p className="arena-stale">You&apos;ve changed your code since this run. Run the sample again to check the new version.</p>
+                )}
+
+                {visibleResults.length > 1 && (
+                  <div className="arena-case-picker" role="group" aria-label="Choose an example case">
+                    {visibleResults.map((test, index) => (
+                      <button
+                        key={test.order_index}
+                        type="button"
+                        className={`arena-case-button ${test.passed ? "passed" : "failed"}`}
+                        aria-pressed={activeCase === test}
+                        onClick={() => setActiveCaseIndex(index)}
+                      >
+                        <span aria-hidden="true">{test.passed ? "✓" : "✕"}</span>
+                        Case {index + 1}
+                        <span className="arena-sr-only">, {caseVerdict(test)}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {activeCase ? (
+                  <div className="arena-case">
+                    <p className="arena-case-status">
+                      Case {visibleResults.indexOf(activeCase) + 1}: <strong>{caseVerdict(activeCase)}</strong>
+                      <span> · {activeCase.execution_time_ms} ms</span>
+                    </p>
+                    {activeCase.compile_output && <OutputBlock label="Compiler message" text={activeCase.compile_output} tone="error" />}
+                    {activeCase.stderr && <OutputBlock label="Error message" text={activeCase.stderr} tone="error" />}
+                    {activeCase.stdin && <OutputBlock label="Input" text={activeCase.stdin} />}
+                    <div className="arena-compare">
+                      {activeCase.expected_stdout !== undefined && (
+                        <OutputBlock label="Expected output" text={activeCase.expected_stdout} empty="Nothing should be printed." />
+                      )}
+                      <OutputBlock label="Your output" text={activeCase.stdout} empty="Your program printed nothing." />
+                    </div>
+                  </div>
+                ) : (
+                  <p className="arena-state">No example output was returned for this run.</p>
+                )}
+
+                {!evaluation.is_successful && (
+                  <div className="arena-stuck">
+                    {aiHint ? (
+                      <div className="arena-ai-hint">
+                        <strong>AI hint</strong>
+                        <p>{aiHint}</p>
+                        <span className="arena-help">Saved under Hints for this challenge.</span>
+                      </div>
+                    ) : (
+                      <>
+                        <p>
+                          <strong>Still stuck?</strong>{" "}
+                          {hintsLeft === 0
+                            ? `You've used all ${MAX_HINTS} hint uses for this challenge.`
+                            : `An AI hint sends your sample code, visible diagnostics, and relevant course excerpts to Gemini. It uses 1 hint${hintsLeft !== undefined ? ` (${hintsLeft} left)` : ""}.`}
+                        </p>
+                        {hintsLeft !== 0 && (
+                          <button
+                            type="button"
+                            className="button button-outline small"
+                            onClick={() => void requestAiHint()}
+                            disabled={aiBusy || resultIsStale}
+                          >
+                            {aiBusy ? "Getting hint…" : "Get an AI hint"}
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {aiError && <p className="notice error">{aiError}</p>}
+                  </div>
                 )}
               </>
             )}
-
-            {/* Interactive Code Sandbox Terminal */}
-            <div className="sandbox-terminal" role="region" aria-label="Interactive Sandbox Terminal">
-              <div className="terminal-header">
-                <div className="terminal-left-group">
-                  <div className="terminal-title-bar">
-                    <span className="terminal-prompt-icon" aria-hidden="true" data-tooltip="Code output and test results appear here.">&gt;_</span>
-                    <span>TERMINAL OUTPUT</span>
-                  </div>
-
-                  {busy ? (
-                    <span className="terminal-status-badge running">
-                      <span className="pulse-dot" /> Executing in sandbox…
-                    </span>
-                  ) : terminalError ? (
-                    <span className="terminal-status-badge failed">✕ Run failed</span>
-                  ) : evaluation ? (
-                    evaluation.is_successful ? (
-                      <span className="terminal-status-badge passed">✓ All Sample Cases Passed</span>
-                    ) : (
-                      <span className="terminal-status-badge failed">
-                        ✕ {evaluation.dominant_error_category === "syntax_error"
-                          ? "Compilation Error"
-                          : evaluation.dominant_error_category === "timeout"
-                          ? "Time Limit Exceeded"
-                          : evaluation.dominant_error_category === "runtime_error"
-                          ? "Runtime Error"
-                          : "Test Failed"}
-                      </span>
-                    )
-                  ) : (
-                    <span className="terminal-status-badge idle">● Ready</span>
-                  )}
-                </div>
-
-                <div className="terminal-controls">
-                  <div className="terminal-view-tabs" role="tablist" aria-label="Terminal views">
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={terminalView === "console"}
-                      className={`terminal-view-tab ${terminalView === "console" ? "is-active" : ""}`}
-                      onClick={() => setTerminalView("console")}
-                    >
-                      &gt;_ Console
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={terminalView === "testcases"}
-                      className={`terminal-view-tab ${terminalView === "testcases" ? "is-active" : ""}`}
-                      onClick={() => setTerminalView("testcases")}
-                    >
-                      📋 Test Cases ({visibleResults.length})
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="terminal-btn"
-                    onClick={handleCopyTerminal}
-                    data-tooltip="Copy the terminal output to your clipboard."
-                    disabled={!evaluation && !busy && !terminalError}
-                  >
-                    {terminalCopied ? "Copied!" : "Copy"}
-                  </button>
-                  <button
-                    type="button"
-                    className="terminal-btn"
-                    onClick={() => setTerminalCleared(true)}
-                    data-tooltip="Clear the visible terminal output."
-                  >
-                    Clear
-                  </button>
-                </div>
-              </div>
-
-              {/* Sample Test Case Subtabs when multiple cases exist */}
-              {terminalView === "console" && visibleResults.length > 1 && !terminalCleared && (
-                <div className="terminal-case-tabs" role="tablist" aria-label="Sample test case tabs">
-                  {visibleResults.map((test, idx) => (
-                    <button
-                      key={test.order_index}
-                      type="button"
-                      role="tab"
-                      aria-selected={activeCaseIndex === idx}
-                      className={`case-tab-btn ${activeCaseIndex === idx ? "is-active" : ""}`}
-                      onClick={() => setActiveCaseIndex(idx)}
-                    >
-                      <span className={`case-indicator-dot ${test.passed ? "passed" : "failed"}`} />
-                      Case {test.order_index} {test.passed ? "✓" : "✕"}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={activeCaseIndex === -1}
-                    className={`case-tab-btn ${activeCaseIndex === -1 ? "is-active" : ""}`}
-                    onClick={() => setActiveCaseIndex(-1)}
-                  >
-                    All Cases View
-                  </button>
-                </div>
-              )}
-
-              {/* Terminal Screen Output */}
-              {terminalView === "console" ? (
-                <div className="terminal-screen" tabIndex={0} aria-live="polite">
-                  {busy ? (
-                    <div className="terminal-running-state">
-                      <div className="terminal-cmd-line">$ {getShellCommand(language)}</div>
-                      <div className="terminal-stream-msg">
-                        <span className="terminal-spinner" /> Compiling and executing in isolated Judge0 sandbox…
-                      </div>
-                    </div>
-                  ) : terminalCleared ? (
-                    <div className="terminal-idle-state">
-                      <div className="terminal-cmd-line">$ clear</div>
-                      <div className="terminal-idle-msg">Console cleared. Click &quot;Run sample&quot; or &quot;Submit for grading&quot; to execute code.</div>
-                    </div>
-                  ) : terminalError ? (
-                    <div className="terminal-failure-state" role="alert">
-                      <div className="terminal-cmd-line">$ {getShellCommand(language)}</div>
-                      <div className="terminal-stream-block">
-                        <span className="terminal-stream-label error">Run failed — no output was returned</span>
-                        <pre className="terminal-stream-stderr">{terminalError}</pre>
-                      </div>
-                      <div className="terminal-failure-hint">
-                        Your draft is saved. Check the service notice above, then run the sample again.
-                      </div>
-                      <button
-                        type="button"
-                        className="terminal-btn"
-                        onClick={() => void runCode(true)}
-                        disabled={busy !== ""}
-                      >
-                        Run sample again
-                      </button>
-                    </div>
-                  ) : !evaluation ? (
-                    <div className="terminal-idle-state">
-                      <div className="terminal-banner-title">ByteQuest Interactive Sandbox [v2.0]</div>
-                      <div className="terminal-banner-sub">Target Runtime: {language.toUpperCase()} ({monacoLanguage})</div>
-                      <div className="terminal-cmd-line">$ ready</div>
-                      <div className="terminal-idle-msg">
-                        • Press &quot;Run sample&quot; to test your code against visible sample inputs.<br />
-                        • Output from print(), cout, or System.out statements will appear here.<br />
-                        • If an error or exception occurs, your printed output and traceback will be clearly displayed here for debugging.
-                      </div>
-                    </div>
-                  ) : visibleResults.length === 0 ? (
-                    <div>
-                      <div className="terminal-cmd-line">$ {getShellCommand(language)}</div>
-                      <div className="terminal-stream-empty">No visible test outputs returned.</div>
-                    </div>
-                  ) : (
-                    <div className="terminal-output-container">
-                      {(activeCaseIndex === -1 ? visibleResults : [visibleResults[activeCaseIndex] || visibleResults[0]]).map((testCase) => (
-                        <div key={testCase.order_index} className="terminal-case-block">
-                          {visibleResults.length > 1 && (
-                            <div className="terminal-case-header-divider">
-                              ─── Sample Case {testCase.order_index} [{testCase.status_description}] ───
-                            </div>
-                          )}
-
-                          <div className="terminal-cmd-line">
-                            $ {getShellCommand(language)} {testCase.stdin ? "< input.txt" : ""}
-                          </div>
-
-                          {testCase.stdin && (
-                            <div className="terminal-stream-block">
-                              <span className="terminal-stream-label">Standard Input (stdin)</span>
-                              <pre className="terminal-stream-stdin">{testCase.stdin}</pre>
-                            </div>
-                          )}
-
-                          {/* Stdout (What the student printed) */}
-                          <div className="terminal-stream-block">
-                            <span className="terminal-stream-label">Standard Output (stdout)</span>
-                            {testCase.stdout ? (
-                              <pre className="terminal-stream-stdout">{testCase.stdout}</pre>
-                            ) : (
-                              <div className="terminal-stream-empty">
-                                [No standard output was printed by your program]
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Stderr (Traceback / Runtime Error) */}
-                          {testCase.stderr && (
-                            <div className="terminal-stream-block">
-                              <span className="terminal-stream-label error">Standard Error / Traceback (stderr)</span>
-                              <pre className="terminal-stream-stderr">{testCase.stderr}</pre>
-                            </div>
-                          )}
-
-                          {/* Compile Output (Compilation Diagnostics) */}
-                          {testCase.compile_output && (
-                            <div className="terminal-stream-block">
-                              <span className="terminal-stream-label error">Compiler Diagnostics</span>
-                              <pre className="terminal-stream-compile">{testCase.compile_output}</pre>
-                            </div>
-                          )}
-
-                          {/* Evaluation comparison if Wrong Answer */}
-                          {!testCase.passed && !testCase.stderr && !testCase.compile_output && (
-                            <div className="terminal-comparison-box">
-                              <span className="terminal-stream-label warning">Test Case Mismatch</span>
-                              <div className="comparison-row">
-                                <span className="comp-label">Expected:</span>
-                                <code>{testCase.expected_stdout || "<expected value not specified>"}</code>
-                              </div>
-                              <div className="comparison-row">
-                                <span className="comp-label">Actual:</span>
-                                <code>{testCase.stdout || "<no output>"}</code>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Process completed metrics */}
-                          <div className="terminal-meta-footer">
-                            <span>
-                              {testCase.passed ? "✓ Status: Accepted" : `✕ Status: ${testCase.status_description}`}
-                            </span>
-                            <span>Time: {testCase.execution_time_ms}ms</span>
-                            <span>Memory: {testCase.memory_used_kb} KB</span>
-                          </div>
-                        </div>
-                      ))}
-
-                      {/* Error Alert inside terminal */}
-                      {!evaluation.is_successful && (
-                        <div className="terminal-error-callout" role="alert">
-                          <div className="terminal-error-callout-text">
-                            <strong>Execution Error Detected:</strong> Review your printed output and traceback above.
-                          </div>
-                          {!aiExplanation && (
-                            <button
-                              type="button"
-                              className="terminal-inline-help-btn"
-                              onClick={() => void requestErrorExplanation()}
-                              disabled={aiExplaining}
-                            >
-                              {aiExplaining ? "Analyzing…" : "Learn about error"}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                /* Test Cases structured view */
-                <div className="terminal-testcases-view">
-                  <ol className="test-results" aria-label="Visible test results">
-                    {visibleResults.map((test) => (
-                      <li className={`test-result ${test.passed ? "passed" : "failed"}`} key={`${test.order_index}-${test.status_description}`}>
-                        <div className="test-result-heading">
-                          <strong>Sample Case {test.order_index}</strong>
-                          <span>{test.status_description}</span>
-                        </div>
-                        {test.stdin && (
-                          <div className="test-case-detail-row">
-                            <span className="muted-label">Input:</span>
-                            <code>{test.stdin}</code>
-                          </div>
-                        )}
-                        {test.expected_stdout && (
-                          <div className="test-case-detail-row">
-                            <span className="muted-label">Expected:</span>
-                            <code>{test.expected_stdout}</code>
-                          </div>
-                        )}
-                        <div className="test-case-detail-row">
-                          <span className="muted-label">Your Output:</span>
-                          <code>{test.stdout || "(empty)"}</code>
-                        </div>
-                        {(test.stderr || test.compile_output) && (
-                          <pre>{test.compile_output || test.stderr}</pre>
-                        )}
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              )}
-            </div>
-
-            {evaluation && !evaluation.is_successful && (
-              <div className="ai-tutor-container">
-                {!aiExplanation && (
-                  <div className="ai-tutor-trigger-card">
-                    <div className="ai-tutor-trigger-info">
-                      <span className="ai-tutor-pill">✦ AI Debugging Tutor</span>
-                      <h4>Stuck on this error?</h4>
-                      <p>Ask Gemini to analyze your code and explain the issue in plain terms, with guiding hints to help you fix it.</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="button button-primary ai-tutor-btn"
-                      onClick={() => void requestErrorExplanation()}
-                      disabled={aiExplaining}
-                      data-label="Learn about the errror with Gemini"
-                    >
-                      {aiExplaining ? "Analyzing your code…" : "Learn about the error with Gemini"}
-                    </button>
-                  </div>
-                )}
-
-                {aiError && (
-                  <p className="notice error" style={{ marginTop: 12 }}>
-                    {aiError}
-                  </p>
-                )}
-
-                {aiExplanation && (
-                  <section className="ai-tutor-panel" aria-label="AI Tutor Explanation">
-                    <div className="ai-tutor-header">
-                      <div className="ai-tutor-pill">
-                        <span>✦</span> ByteQuest AI Tutor
-                      </div>
-                      <button
-                        type="button"
-                        className="text-button"
-                        style={{ fontSize: "var(--text-xs)" }}
-                        onClick={() => void requestErrorExplanation()}
-                        disabled={aiExplaining}
-                        data-tooltip="Ask the AI tutor to explain this error again."
-                      >
-                        {aiExplaining ? "Refreshing…" : "↻ Re-explain"}
-                      </button>
-                    </div>
-
-                    <h3 className="ai-tutor-title">{aiExplanation.title}</h3>
-                    <p className="ai-tutor-summary">{aiExplanation.summary}</p>
-
-                    <div className="ai-tutor-section">
-                      <span className="ai-tutor-section-label">Why this happens in {language.toUpperCase()}</span>
-                      <p>{aiExplanation.concept_explanation}</p>
-                    </div>
-
-                    <div className="ai-tutor-section">
-                      <span className="ai-tutor-section-label">Guiding Hints to Fix It</span>
-                      <ol className="ai-tutor-hints">
-                        {aiExplanation.hints.map((hint, idx) => (
-                          <li key={idx}>
-                            <span className="hint-num">{idx + 1}</span>
-                            <span className="hint-text">{hint}</span>
-                          </li>
-                        ))}
-                      </ol>
-                    </div>
-
-                    {aiExplanation.pedagogical_tip && (
-                      <div className="ai-tutor-tip">
-                        <strong>Concept Tip:</strong> {aiExplanation.pedagogical_tip}
-                      </div>
-                    )}
-                  </section>
-                )}
-              </div>
-            )}
           </section>
-        </div>
-      )}
-
-      {result?.new_badges_unlocked?.length ? (
-        <section className="panel badge-unlocks" aria-live="polite">
-          <h2>New badge{result.new_badges_unlocked.length === 1 ? "" : "s"} unlocked</h2>
-          <p>{result.new_badges_unlocked.join(" · ")}</p>
         </section>
-      ) : null}
+      </div>
 
-      {profile && (
-        <p className="footer-note">
-          Signed in as {profile.pseudonym_id} · Level {profile.current_level} · {profile.xp_points} XP · Your code is saved safely with official attempts.
-        </p>
-      )}
+      <ConfirmDialog
+        open={confirmReset}
+        title="Replace your code?"
+        confirmLabel="Replace with starter code"
+        cancelLabel="Keep my code"
+        tone="danger"
+        onConfirm={confirmResetCode}
+        onCancel={() => setConfirmReset(false)}
+      >
+        <p>Your current code will be replaced with the starter code. This can&apos;t be undone.</p>
+      </ConfirmDialog>
     </div>
   );
+}
+
+function runHeadline(evaluation: Evaluation, visible: EvaluationTestResult[]): string {
+  if (evaluation.is_successful) {
+    return visible.length > 1 ? `All ${visible.length} example cases passed` : "Example case passed";
+  }
+  const failedIndex = visible.findIndex((test) => !test.passed);
+  if (failedIndex < 0) return "Your code did not pass the example cases";
+  return `${caseVerdict(visible[failedIndex])} on case ${failedIndex + 1}`;
 }

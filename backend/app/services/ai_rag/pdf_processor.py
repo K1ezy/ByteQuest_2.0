@@ -1,7 +1,9 @@
 """PDF text extraction and bounded, overlapping chunking for RAG."""
 
+import asyncio
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pymupdf
@@ -11,6 +13,14 @@ logger = logging.getLogger(__name__)
 CHARS_PER_TOKEN_ESTIMATE = 4
 MAX_PDF_PAGES = 100
 MAX_EXTRACTED_CHARACTERS = 200_000
+
+# Keep MuPDF calls serial and off the API event loop.
+_pdf_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pdf-extraction")
+
+
+async def extract_pdf_chunks(pdf_bytes: bytes) -> list[dict[str, Any]]:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_pdf_executor, extract_chunks_from_pdf, pdf_bytes)
 
 
 def extract_chunks_from_pdf(

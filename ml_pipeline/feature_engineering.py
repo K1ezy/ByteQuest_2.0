@@ -10,13 +10,6 @@ if str(BACKEND_DIR) not in sys.path:
 from app.services.ml_predictor.feature_engineering import (  # noqa: E402
     FEATURE_NAMES,
     extract_features_from_dataframe,
-    extract_student_features,
-    feature_dict_to_vector,
 )
 
-__all__ = [
-    "FEATURE_NAMES",
-    "extract_features_from_dataframe",
-    "extract_student_features",
-    "feature_dict_to_vector",
-]
+__all__ = ["FEATURE_NAMES", "extract_features_from_dataframe"]

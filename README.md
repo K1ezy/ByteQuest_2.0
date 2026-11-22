@@ -2,19 +2,21 @@
 
 ByteQuest is a gamified programming-learning platform for undergraduate computer science students. Students practice **Python, C++, and Java**, instructors publish and grade coursework, and administrators manage course access and monitor the services. ByteQuest is a thesis system for North Eastern Mindanao State University (NEMSU).
 
-**Current development.** The architecture and setup below describe the latest weekly update on `fix/ml-pr-auc-student-disjoint-split`. Use that branch for the runnable version documented here. [Browse the current source](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split)
+**Development branch.** The 21 November 2026 snapshot covers `fix/ml-pr-auc-student-disjoint-split` on the development PC. It records the committed revision, the working-tree changes, and the local runtime. [Development PC snapshot](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md) · [GitHub branch](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split)
 
-**Release status.** The core learning workflows have local verification. Hosted classroom acceptance is pending, including capacity, security, and recovery checks on the intended deployment. [System status and verification](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md)
+**Release status.** Core learning workflows have local verification. Hosted classroom acceptance is pending, including capacity, security, and recovery on the intended deployment. [Release gates](docs/SYSTEM_STATUS_AND_RELEASE_PLAN.md#5-six-gates-before-a-live-classroom-pilot)
 
 ## What each role can do
 
 | Role | Workflows |
 | --- | --- |
-| Student | Open the Quest Map, join Workshops, answer quizzes, and solve coding challenges in the Monaco editor. Run visible samples before submitting for grading. Take timed exams, read released results, and track progress, XP, and badges. |
-| Instructor | Upload and version lesson PDFs, create or generate activities, review the student preview, and schedule or publish coursework. Verify coding challenges with Judge0 and provide a visible sample. Manage exams, announcements, gradebooks, exports, and course analytics. |
-| Administrator | Manage accounts, course assignments, and platform settings. Investigate application, database, grading-worker, and sandbox health from the monitoring workspace. |
+| Student | Open the Quest Map, join Workshops, answer quizzes, and solve coding challenges. Read and run visible samples before submitting for grading. Take timed exams, read released results, track XP and badges, and open topic practice from the profile and Debugger’s Codex. |
+| Instructor | Upload and version lesson PDFs, generate drafts in Authoring Studio, and edit, verify and publish through Review drafts and Activities. Manage exams and announcements. Inspect class trends, learner history, Gradebook, activity health, released exam summaries, and model evaluation. |
+| Administrator | Manage accounts, course assignments, materials and platform settings. See aggregate Course health on System Overview and investigate API, database, grading-worker and sandbox health in Monitoring. |
 
-The optional Gemini tutor supports course-aware chat, Temporary Chat, saved history where enabled, and hints after failed coding samples. ByteQuest pauses tutor access during active exams. [Tutor evaluation](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/verification/gemini-tutor-evaluation-2026-11-20.md)
+The optional Gemini tutor supports course-aware chat, Temporary Chat, saved history where enabled, and hints after failed coding samples. Saved chat turns can recover replies after a disconnected send. ByteQuest pauses tutor access during active exams. [Tutor evaluation](docs/verification/gemini-tutor-evaluation-2026-11-20.md)
+
+Phones and tablets use the side rail where the handheld layout applies. Hold and drag to move it, or open **Account → Accessibility → Menu position**. The instructor rail adds **More** for the full navigation. [Handheld requirements](docs/prompts/chatgpt-handheld-layout.md)
 
 ## Architecture
 
@@ -41,7 +43,8 @@ flowchart LR
 
 - **Sign-in and authorization.** Supabase Auth issues the session. FastAPI validates it and checks the active profile, role, and course membership before accessing protected data. Student self-registration verifies a school-issued ID and matching roster email.
 - **Grading and exams.** The API records durable jobs. An independent worker claims jobs, calls Judge0, and saves grades. Sample runs use visible cases. Official submissions use the full grading set, with hidden inputs and expected outputs withheld from students. Exam content is frozen for the attempt and results follow the instructor’s release workflow.
-- **Materials and AI.** Uploaded PDFs are stored privately. Searchable passages are indexed in pgvector with Gemini Embedding 2. Gemini 3.5 Flash-Lite uses relevant authorized excerpts for tutoring and activity generation. Instructors review and publish generated drafts.
+- **Materials and AI.** Uploaded PDFs are stored privately. Searchable passages are indexed in pgvector with Gemini Embedding 2. Gemini 3.5 Flash-Lite uses relevant authorized excerpts for tutoring and activity generation. The Studio creates drafts and assigned instructors publish them through the course workspace. The shared Materials screen calls separate instructor and admin APIs.
+- **Insights.** Shared charts and definitions support role-specific views. Activity health and Gradebook share grouped practice data. Student Progress links class history to learner detail. Course health summarizes enrollment, activity and current consent with small-cohort suppression.
 - **Research and ML.** Deterministic rules drive live recommendations. The offline pipeline compares Logistic Regression and Random Forest on student-disjoint splits. Forecasting requires approved data, a reviewed model run, and appropriate consent. [ML evaluation and activation](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/ml_pipeline/README.md)
 
 [Architecture blueprint](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/BYTEQUEST_ARCHITECTURE_BLUEPRINT.md) · [API security and privacy](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/LOCAL_API_SECURITY.md)
@@ -73,6 +76,8 @@ ByteQuest_2.0/
 ├── frontend/
 │   ├── src/app/                 Next.js routes and shared layouts
 │   ├── src/components/          Coding Arena, chat, and role workspaces
+│   │   ├── insights/            Shared charts, measures, and data states
+│   │   └── workspace/           Workspace controls and dockable navigation
 │   ├── src/lib/                 API client, Auth, and shared types
 │   ├── public/                  Static assets
 │   └── scripts/                 Editor preparation and browser QA
@@ -91,6 +96,8 @@ ByteQuest_2.0/
 ├── infra/                       Launchers, Judge0 setup, VPS Compose, and preflight
 ├── ml_pipeline/                 Feature engineering and offline model evaluation
 ├── docs/                        Architecture, runbooks, reviews, and evidence
+│   ├── prompts/                 Handheld and role Insights implementation briefs
+│   └── verification/            Dated acceptance and provider evidence
 ├── graphify-out/                Generated codebase knowledge graph
 ├── .github/workflows/           GitHub Actions regression checks
 └── *-BYTEQUEST*.bat              Windows launch and offline verification shortcuts
@@ -115,6 +122,8 @@ Set-Location ByteQuest_2.0
 
 For hot reload, run `pwsh -NoProfile -File .\infra\start-bytequest.ps1 -Development` after setup. The manual setup and offline acceptance procedure are in the local guide. [Local setup and troubleshooting](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/LOCAL_E2E.md)
 
+To open the PC's local build from an authorized phone, use the private ZeroTier relay. [Phone setup](docs/LOCAL_E2E.md#open-bytequest-on-a-phone-over-zerotier)
+
 ## Test and verify
 
 With local Supabase and the development dependencies available, run the following from the repository root.
@@ -132,7 +141,7 @@ npm run build
 Pop-Location
 ```
 
-The regression workflow runs the backend suite plus frontend lint, typechecking, tests, and build. The local Judge0 language check is `backend/scripts/verify_all_languages.py`. The 20 November 2026 verification recorded **260 backend tests** and **178 frontend tests** passing on the weekly update. [GitHub Actions workflow](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/.github/workflows/regression.yml) · [Dated verification](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split/docs/verification)
+The regression workflow runs the backend suite plus frontend lint, typechecking, tests, and build. Local QA includes a Judge0 language check, a synthetic multi-role rehearsal, and a handheld browser matrix. Test results and incomplete checks are recorded in the dated snapshot. [Local verification](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md#verification-and-remaining-checks) · [GitHub Actions workflow](.github/workflows/regression.yml)
 
 ## Configuration and security
 
@@ -142,7 +151,8 @@ The regression workflow runs the backend suite plus frontend lint, typechecking,
 
 ## Documentation
 
-- [Current system status and weekly change log](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md)
+- [Current system status and PC snapshot](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md)
+- [20 November weekly change log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md)
 - [Release readiness and classroom acceptance gates](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/SYSTEM_STATUS_AND_RELEASE_PLAN.md)
 - [KVM 2 live pilot setup](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/KVM2_LIVE_PILOT_CHECKLIST.md)
 - [System design and roadmap](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/MASTER_PLAN.md)

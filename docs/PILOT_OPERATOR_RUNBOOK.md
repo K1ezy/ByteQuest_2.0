@@ -45,6 +45,8 @@ When a student finishes a session:
 ### Idempotent Submissions & Double-Click Protection
 - The browser retains an idempotency key in session storage until the server acknowledges the job. The API also deduplicates identical work submitted within 15 seconds.
 - Submissions queue into `submission_jobs`. A worker retries transient failures with bounded backoff, up to `SUBMISSION_MAX_RETRIES`; stale running jobs are recovered after 120 seconds.
+- Open **Admin → Monitoring** to check the **ByteQuest grading worker**, **Judge0 sandbox**, and **Submission queue** separately. The worker writes a heartbeat every 15 seconds. A heartbeat older than 60 seconds is stale. The Judge0 check runs a small Python program and shares its result across Admin Overview and Monitoring for 15 seconds. Refresh after that interval to recheck it.
+- Students can leave the results page and return to the same submission. If automatic retries are exhausted, **Retry grading** uses the original code and acceptance time, including after the challenge closes. If Judge0 is waiting through a cooldown, the worker schedules the next attempt after it ends.
 
 ---
 
@@ -53,13 +55,15 @@ When a student finishes a session:
 ### Instructor Workflow (`/instructor/exams`)
 1. **Creation & Freeze:** Select reviewed activities and specify Manila time (`Asia/Manila`) window. Publishing freezes immutable snapshots (`snapshot_json`) on all `exam_items`. Mid-exam activity edits do not corrupt active student attempts.
 2. **Retake Grants:** Instructors can grant individual student retakes (`allowed_attempts`) and custom retake windows for students who experienced verified technical issues.
-3. **Score Release:** Scores and full test results are withheld from students until the instructor clicks **Release results** after the exam closes.
+3. **Score Release:** After the exam window closes and grading finishes, choose **Release results**. Students receive their score and points for each item. Exam answer keys, reference code, and hidden cases remain private. Instructors can use **Results and retakes** to review each attempt’s score, release state, and exam XP.
+4. **Retake Release:** After the retake closes and grading finishes, use **Refresh exams** if the page was already open. Select **Release results** again to release the retake. The original score stays visible, and first-pass XP is awarded only once per activity.
 
 ### Student Exam Mode (`/exams/[id]`)
 - Synchronized countdown timer driven by server time offset (`server_now`).
 - 5-second debounced autosaves continuously persist answers.
 - `visibilitychange` listener immediately flushes in-memory drafts when a student tabs away or minimizes the browser.
-- Background worker sweeps expired attempts (`NOW() >= due_at`) and marks them for grading.
+- The background worker marks expired attempts for grading after the final autosave grace period.
+- ByteQuest pauses student chat and practice hints during timed exams and retakes. Help resumes after submission or at the server's answer-saving cutoff, with the student's practice hints still available.
 
 ---
 
@@ -92,5 +96,5 @@ python tests/load_test_pilot.py
 | Symptom | Cause | Remedy |
 | :--- | :--- | :--- |
 | Student sees `409 Exam is not currently open` | Exam window is closed or retake window has not opened | Check the schedule in the instructor console; server time is authoritative. |
-| Submission stuck in `queued` or `running` | Judge0 container or worker paused | Stale-job reaper auto-recovers after 120s. Confirm `submission_worker` process is running. |
+| Submission stuck in `queued` or `running` | ByteQuest worker unavailable, Judge0 unavailable, or grading delayed | Check **Admin → Monitoring**. Restart the ByteQuest worker if its heartbeat is stale. Check the sandbox service and queue if the Judge0 test fails. Stale running jobs are eligible for recovery after 120 seconds. |
 | Student cannot reset password | Supabase Auth email delivery is not configured | Configure institutional SMTP and approved redirect URLs before enabling email recovery; use an authorized Supabase admin process for urgent account recovery. |

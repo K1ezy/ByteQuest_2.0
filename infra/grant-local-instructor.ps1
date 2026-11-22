@@ -1,13 +1,17 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string]$Email
+    [string]$Email,
+
+    [ValidateSet('instructor', 'admin')]
+    [string]$Role = 'instructor'
 )
 
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 
 $normalizedEmail = $Email.Trim().ToLowerInvariant()
+$Role = $Role.ToLowerInvariant()
 try {
     $parsedEmail = [System.Net.Mail.MailAddress]::new($normalizedEmail)
     if ($parsedEmail.Address -ne $normalizedEmail) { throw "Enter one valid email address." }
@@ -26,7 +30,7 @@ if ($container -notcontains $containerName) {
 
 $sql = @'
 UPDATE public.profiles AS p
-SET role = 'instructor'
+SET role = :'role'::public.userrole
 FROM auth.users AS u
 WHERE p.id = u.id
   AND lower(u.email) = lower(:'email')
@@ -39,14 +43,17 @@ JOIN public.profiles AS p ON p.id = u.id
 WHERE lower(u.email) = lower(:'email');
 '@
 
-$output = $sql | & docker exec -i $containerName psql -X -v ON_ERROR_STOP=1 -v "email=$normalizedEmail" -U postgres -d postgres
+$output = $sql | & docker exec -i $containerName psql -X -At -v ON_ERROR_STOP=1 -v "email=$normalizedEmail" -v "role=$Role" -U postgres -d postgres
 if ($LASTEXITCODE -ne 0) {
     throw "Local role setup failed. Confirm you have signed into ByteQuest once so the profile exists, then retry."
 }
 
 $outputText = $output -join [Environment]::NewLine
-if ($outputText -notmatch '(?im)\b(instructor|admin)\b') {
+if ($outputText -notmatch '(?m)\|(student|instructor|admin)\r?$') {
     throw "No ByteQuest profile was found for that email. Sign in to the app once to create the profile, then rerun this command."
 }
+if ($Role -eq 'admin' -and $outputText -notmatch '(?m)\|admin\r?$') {
+    throw "Local administrator access requires an account that has signed up as a student."
+}
 
-Write-Output "Local instructor access is enabled for $normalizedEmail. Sign out of ByteQuest and sign back in."
+Write-Output "Local $Role access is enabled for $normalizedEmail. Sign out of ByteQuest and sign back in."

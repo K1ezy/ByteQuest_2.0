@@ -1,5 +1,7 @@
 # ByteQuest local end-to-end flow
 
+For the development PC's checked ports, running services and verification, see the [21 November system snapshot](BYTEQUEST_SYSTEM_STATUS_2026-11-21.md).
+
 This setup uses local Supabase and the private Ubuntu VM on D: running Judge0 Extra CE 1.13.1. It writes local Supabase settings to ignored `backend/.env.local` and `frontend/.env.local`; frontend configuration contains only the local Supabase anon key. The setup preserves the configured Judge0 URL/token and optional backend AI key. It does not write to the configured cloud database or start a second local Judge0 stack.
 
 `infra/docker-compose.yml` is a later VPS template and requires the explicit `vps` profile. It is not part of this local setup.
@@ -8,13 +10,15 @@ This setup uses local Supabase and the private Ubuntu VM on D: running Judge0 Ex
 
 ### One-click Windows startup
 
-From the repository root, double-click `START-BYTEQUEST.bat`. It starts Docker Desktop if needed and starts the `ByteQuest-Judge0-Install` Hyper-V VM while Docker initializes. Once Docker is ready, local Supabase initializes while Ubuntu continues booting. The Next.js frontend then starts while the launcher discovers the VM's current IP and checks Judge0. It updates the ignored local Judge0 endpoint, starts FastAPI and waits for the frontend to respond, then opens the sign-in screen. Each BAT launch creates a unique startup marker and signs out the current local browser session, so the app lands on authentication even when that browser was previously signed in. The account, database records, and sessions on other devices are not deleted. Sign-in is selected by default; the same screen lets you switch to account creation. Startup step headings include elapsed time so a slow cold-start stage is visible.
+Run `PREPARE-BYTEQUEST-OFFLINE.bat` once while connected and plugged in, then use `START-BYTEQUEST.bat` for normal launches. Preparation installs missing packages, starts and caches the local Supabase containers, builds the production frontend and Monaco editor locally, verifies local learning content and Judge0's Python/C++/Java runtimes, and configures a host-only Hyper-V link at `172.30.95.2`. SSH and sudo may request the Ubuntu VM password. It sets the default browser and Docker Desktop window to Windows Power saving graphics; restart those applications to apply the preference. The normal launcher starts Docker Desktop, the local Supabase services needed by ByteQuest, the Judge0 VM, FastAPI, the grading worker, and the prebuilt frontend. It checks database and Judge0 readiness before opening the sign-in screen. The local database and VM disk are preserved. AI chat and Gemini generation need internet; the local learning and grading flow does not.
 
-The launcher does not reset the local database, delete virtual disks, or modify VM checkpoints. It requests Windows administrator access before starting services because this machine requires elevated Hyper-V permissions both to manage the VM and read its guest IP. Approve the UAC prompt; if it was canceled, rerun the batch file and approve it. The launcher first checks Hyper-V's reported guest IP, then the Windows neighbor table using the VM NIC's MAC address. If neither has an address after 45 seconds, it pauses with clear instructions instead of waiting indefinitely: in the VM Connection window, sign in to Ubuntu and run `ip -4 -brief addr show eth0`, then enter the IPv4 address before `/` in the launcher window. Press Enter at that prompt to retry automatic discovery, or type `Q` to stop. If Judge0 needs to be started inside Ubuntu, the launcher opens an SSH session in its console; accept the VM host key if asked, then enter the Ubuntu password at the prompts. The password and Judge0 token are not written to the launcher or displayed. If Ubuntu is still booting or has no address, resolve that in the VM console before entering an IP. The launcher starts the separate grading worker after FastAPI becomes healthy and reuses it on later launches. Worker errors are written to `logs/submission-worker.err.log`.
+The launcher does not reset the local database, delete virtual disks, or modify VM checkpoints. It requests Windows administrator access for Hyper-V. The prepared host-only link works without a physical network adapter; the legacy VM IP discovery remains available during preparation. If Judge0 needs its containers started inside Ubuntu, SSH may prompt for the VM password. The password and Judge0 token are not printed. The launcher checks the database through `/readyz`, verifies all three Judge0 runtimes, and reports failure details in `logs/startup-diagnostics.log`, `logs/api.err.log`, `logs/frontend.err.log`, or `logs/submission-worker.err.log`.
 
-Keep Docker Desktop and the Judge0 VM running while using ByteQuest. The VM Connection console window can be closed after Ubuntu has booted; it is only a display for the VM. FastAPI and Next.js each have a separate PowerShell window with logs; leave both open and press Ctrl+C in each to stop those development servers. The grading worker runs in the background and is reused on the next launch. Supabase runs in Docker and can be stopped later with `supabase stop` from the repository root.
+Keep Docker Desktop and the Judge0 VM running while using ByteQuest. FastAPI, the grading worker, and the production Next.js server run in the background with logs under `logs/`. For frontend development, run the launcher with `-Development`; this uses `next dev` and Uvicorn reload. Supabase can be stopped later with `supabase stop` from the repository root.
 
-The batch file requires PowerShell 7, Node.js 20.9 or newer with npm, the Supabase CLI, Docker Desktop, the backend virtual environment, and the installed frontend dependencies. It does not install missing prerequisites. If it reports an existing server has an outdated endpoint, stop that server window with Ctrl+C and run the batch file again. If it reports port 3000 is occupied, stop the process you recognize (usually an older Next.js terminal) and run the batch file again.
+After a successful production launch, subsequent runs can reuse the same FastAPI and grading worker processes if they are still running and their source and local settings match. Startup still checks the database, Judge0 and the browser assets. Changed frontend source can trigger a production rebuild, and backend changes restart the API and worker so the site serves the new code.
+
+The batch files require PowerShell 7, Node.js 20.9 or newer with npm, Supabase CLI v2, Docker Desktop, and Python 3.11. Preparation installs missing application packages but does not install those system prerequisites. The prepared browser graphics preference is Power saving, which affects the default Edge or Chrome browser outside ByteQuest too; restart the browser to apply it. If port 3000 is occupied by another application, stop that application and rerun the launcher.
 
 ### Manual startup
 
@@ -45,7 +49,15 @@ The batch file requires PowerShell 7, Node.js 20.9 or newer with npm, the Supaba
    npm run dev
    ```
 
-7. Open `http://localhost:3000/onboarding` to create a local student account and select its language track. This manual URL preserves a saved browser session; the BAT launcher adds its one-time startup marker to show authentication on launch. Supabase local email confirmation is disabled; if confirmation is enabled in a local override, email is viewable through Inbucket at `http://127.0.0.1:54324`.
+7. Open `http://localhost:3000/onboarding` to create a local student account and select its language track. This manual URL preserves a saved browser session; the BAT launcher adds its one-time startup marker to show authentication on launch. Supabase local email confirmation is disabled; the launcher keeps Mailpit running, so password-reset emails (and confirmation emails, if a local override enables them) can be opened at `http://127.0.0.1:15434`.
+
+## Open ByteQuest on a phone over ZeroTier
+
+1. Join the PC and phone to the same authorized ZeroTier network. Start ByteQuest on the PC and keep it awake.
+2. On the PC, run [OPEN-ON-PHONE-ZEROTIER.bat](../OPEN-ON-PHONE-ZEROTIER.bat) for the configured network. For a different network, pass its ID to [start-zerotier-relay.ps1](../infra/start-zerotier-relay.ps1) with `-NetworkId`.
+3. Open the URL printed by the launcher in the phone's browser. Sign in and open **Account → Accessibility → Menu position**, or hold and drag the side rail on the page.
+
+The relay forwards traffic to services already running on the PC. The development PC has a separate Windows logon task for the relay. On a fresh setup, start it manually after reboot. Use [CLOSE-PHONE-ACCESS-ZEROTIER.bat](../CLOSE-PHONE-ACCESS-ZEROTIER.bat) to stop the relay.
 
 ## Local Quest Map demos
 
@@ -57,7 +69,7 @@ Use two synthetic student accounts on the same language track and a published qu
 
 This check currently uses local Supabase on this computer. A cloud-hosted project must be configured, migrated, and checked separately before calling it cloud saving.
 
-The regular Supabase seed currently includes badges only. After a local instructor account exists, run these commands from the repository root to add the curated C++ quiz and Python quiz/challenge journeys with their quest groups. Start the Judge0 VM before the Python seed; its challenge must pass real reference-solution validation before publication:
+The regular Supabase seed currently includes badges only. After a local instructor account exists, run these commands from the repository root to add the curated C++ quiz and Python quiz/challenge journeys with their workshops. Start the Judge0 VM before the Python seed; its challenge must pass real reference-solution validation before publication:
 
 ```powershell
 .\backend\.venv\Scripts\python.exe .\backend\scripts\seed_local_quest_demo.py
@@ -69,7 +81,15 @@ Each script refuses non-local databases, creates a draft quiz, passes it through
 
 The Python fundamentals expansion script is idempotent and depends on the Python demo group above. It adds three reviewed quizzes (**Python Data Types Check**, **Python Conditionals & Loops Check**, **Python Lists & Strings Check**) and three Judge0-verified challenges (**Even or Odd**, **Count Vowels**, **Sum from 1 to N**) to the same group. It interleaves them in track sequence and prints the resulting group activity count. Rerunning it reuses the existing published activities and never resets attempts or XP.
 
-Sign in with a **C++ or Python student account**, open `/quests`, select **Join Workshop**, and enter the matching printed code. Open the group card, start the **C++ Fundamentals Check** or **Python Fundamentals Check**, answer the three questions, and submit. For the Python journey, continue to **Add Two Numbers**, run the visible examples, then submit the solution officially. Return to `/dashboard` and refresh to see the completed activities, XP, recent attempts, and next recommendation. The instructor who owns the group can open it and use **Copy code** to share the invite code. Student **Create Workshop** remains a preview; saving groups requires instructor or admin access.
+Sign in with a **C++ or Python student account**, open `/workshops`, select **Join Workshop**, and enter the matching code. You can also follow a workshop invite link. After sign-in, confirm **Join Workshop**. Open the workshop’s **Activities** tab, start the **C++ Fundamentals Check** or **Python Fundamentals Check**, answer the three questions, and submit. For Python, continue to **Add Two Numbers**, run the visible examples, then submit the solution officially. Return to `/dashboard` to see completed activities, XP, recent attempts, and the next recommendation.
+
+### Workshop walkthrough (11/21/26)
+
+1. As an instructor, open **Workshops** under **Teach**, create a Python workshop and share one published quiz from **Add → Published activity**. Add a topic, assign a second activity to it and try the move buttons with the keyboard.
+2. On **Board**, post and pin an announcement. Check **Upcoming** against a shared activity closing within seven days or a published exam window. Use **Copy invite link** or **Show full screen** to give students the code.
+3. As a signed-out student, follow the invite and sign in. Confirm the join, then check the announcement, activity and People list at 375 px. Classmates appear by username. The instructor sees student details and can open **Progress** to see practice outcomes.
+4. Turn off joining in **Settings** and confirm that a new join is refused. Turn it back on, reset the code and verify that the previous code stops working. Try leaving or removing a student during an active workshop exam, then repeat after submission.
+5. Archive the workshop and confirm it moves to the **Archived** filter. Current members can still read the Board and open activities. Restore the workshop from **Settings**.
 
 For automated local checks that do not retain test membership, attempts, or XP, run `.\backend\.venv\Scripts\python.exe .\backend\scripts\smoke_local_quest_demo.py` and `.\backend\.venv\Scripts\python.exe .\backend\scripts\smoke_local_python_quest_demo.py` from the repository root. They check join, duplicate join, quiz grading, XP, and completion after reload inside rolled-back transactions. The Python check also calls real Judge0 for a sample run and an official submission, verifies hidden-case privacy, and reads the resulting dashboard and progress before rolling back. The Python smoke check needs a running Judge0 VM and a local Python student account.
 
@@ -87,11 +107,13 @@ This helper only targets the project's running local Supabase container (`supaba
 
 Upload a lesson PDF, generate a challenge, confirm Judge0 reports the reference solution as verified, and publish it. The server rejects publishing if the reference solution did not pass.
 
+To grant local administrator access, sign up as a student, then run `.\infra\grant-local-instructor.ps1 -Role admin -Email 'your-login-email@example.test'` from the repository root. Sign out and back in after the grant.
+
 ## Student submission flow
 
 Sign back in with the student account, select the same language as the challenge, and open the published challenge from `/quests`. Edit the starter in Monaco, run the visible samples, then submit officially. A sample run evaluates visible cases only and does not create an `activity_attempts` row. An official submission evaluates the full test suite and appends an attempt with an increasing attempt number. Completion XP is awarded on the first passing official attempt only; failures and later passes are still recorded without duplicating that completion XP. The arena updates the displayed XP/level and quest completion after grading, shows visible case feedback and newly unlocked badges, and does not reveal hidden-case inputs or per-case results.
 
-The verified local flow and recorded database evidence are in [the Milestone 1A–1C verification log](verification/milestone-1a-1b-2026-10-24.md). The corrected Py4E Functions lesson was also followed from retained PDF through published quiz/challenge to student attempts and progress; see [the corrected-lesson verification log](verification/corrected-lesson-workflow-2026-10-25.md). The Judge0 address is assigned dynamically by Hyper-V's Default Switch; confirm the current VM address and port 2358 before testing after a VM restart.
+The verified local flow and recorded database evidence are in [the Milestone 1A–1C verification log](verification/milestone-1a-1b-2026-10-24.md). The corrected Py4E Functions lesson was also followed from retained PDF through published quiz/challenge to student attempts and progress; see [the corrected-lesson verification log](verification/corrected-lesson-workflow-2026-10-25.md). After offline preparation, Judge0 uses the fixed host-only address `172.30.95.2`; the Default Switch address may still change after a VM restart.
 
 ## Retained instructor documents and progress
 

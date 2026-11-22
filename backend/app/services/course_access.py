@@ -11,9 +11,10 @@ import uuid
 from typing import Iterable
 
 from fastapi import HTTPException, status
+from sqlalchemy import exists, or_
 from sqlalchemy.orm import Session
 
-from app.models.entities import Course, CourseMember, Profile, UserRole
+from app.models.entities import Course, CourseMember, Exam, Profile, UserRole
 
 
 def is_admin(user: Profile) -> bool:
@@ -63,6 +64,16 @@ def active_membership_course_ids(db: Session, profile_id: uuid.UUID, member_role
     return [row[0] for row in rows]
 
 
+def student_exam_course_clause(student_id: uuid.UUID):
+    """A restricted exam also requires enrollment in its course."""
+    return or_(Exam.restricted_course_id.is_(None), exists().where(
+        CourseMember.course_id == Exam.restricted_course_id,
+        CourseMember.profile_id == student_id,
+        CourseMember.member_role == "student",
+        CourseMember.status == "active",
+    ))
+
+
 def default_instructor_course_id(db: Session, profile_id: uuid.UUID) -> uuid.UUID | None:
     """First active teaching assignment, used when a legacy route omits a course."""
     ids = active_membership_course_ids(db, profile_id, "instructor")
@@ -91,6 +102,15 @@ def has_course_role(db: Session, user: Profile, course_id: uuid.UUID | None, mem
 def may_manage_course(db: Session, user: Profile, course_id: uuid.UUID | None) -> bool:
     """Authorization for the shared instructor generation and publish pipeline."""
     return has_course_role(db, user, course_id, "instructor")
+
+
+def may_manage_instructional_content(db: Session, user: Profile, course_id: uuid.UUID | None,
+                                     owner_id: uuid.UUID | None) -> bool:
+    if not is_instructor(user) or (user.account_status or "active") != "active":
+        return False
+    if course_id is None:
+        return is_admin(user) or owner_id == user.id
+    return may_manage_course(db, user, course_id)
 
 
 def require_course_instructor(user: Profile) -> Profile:

@@ -9,7 +9,6 @@ student progress, or any non-demo activity.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 import uuid
 from pathlib import Path
@@ -33,25 +32,21 @@ if (
 ):
     raise SystemExit("Refusing to seed outside the local development Supabase database on port 54322.")
 
-from app.api.quest_groups import (  # noqa: E402
-    AddGroupActivities,
-    CreateQuestGroup,
-    add_group_activities,
-    create_quest_group,
+from app.api.workshops import (  # noqa: E402
+    AddWorkshopActivities,
+    CreateWorkshop,
+    add_workshop_activities,
+    create_workshop,
 )
-from app.api.rag_instructor import (  # noqa: E402
-    ActivityReviewUpdate,
-    publish_learning_activity,
-    update_activity_review,
-)
+from app.services.activity_publishing import apply_publish_rules  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.models.entities import (  # noqa: E402
     ActivityKind,
     LearningActivity,
     Profile,
     ProgrammingLang,
-    QuestGroup,
-    QuestGroupActivity,
+    Workshop,
+    WorkshopActivity,
     ReviewState,
     UserRole,
 )
@@ -148,28 +143,27 @@ def seed_demo_quest(
             db.commit()
 
         if activity.review_status == ReviewState.draft:
-            if activity.reviewed_by is None:
-                update_activity_review(activity_id, ActivityReviewUpdate(reviewed=True), owner, db)
-            asyncio.run(publish_learning_activity(activity_id, owner, db))
+            apply_publish_rules(db, activity, owner)
+            db.commit()
         elif activity.review_status != ReviewState.published:
             raise SystemExit("The demo quiz is not a draft or published activity; no group was created.")
 
         group = (
-            db.query(QuestGroup)
-            .filter(QuestGroup.name == group_name, QuestGroup.created_by == owner.id)
+            db.query(Workshop)
+            .filter(Workshop.name == group_name, Workshop.created_by == owner.id)
             .first()
         )
         if group is None:
             request = Request({
                 "type": "http",
                 "method": "POST",
-                "path": "/api/v1/quest-groups",
+                "path": "/api/v1/workshops",
                 "headers": [],
                 "client": ("127.0.0.1", 0),
             })
-            created = create_quest_group(
+            created = create_workshop(
                 request,
-                CreateQuestGroup(
+                CreateWorkshop(
                     name=group_name,
                     description=group_description,
                     language=language,
@@ -178,14 +172,14 @@ def seed_demo_quest(
                 owner,
                 db,
             )
-            group = db.get(QuestGroup, created.id)
-        elif not db.query(QuestGroupActivity).filter(
-            QuestGroupActivity.group_id == group.id,
-            QuestGroupActivity.activity_id == activity_id,
+            group = db.get(Workshop, created.id)
+        elif not db.query(WorkshopActivity).filter(
+            WorkshopActivity.workshop_id == group.id,
+            WorkshopActivity.activity_id == activity_id,
         ).first():
-            add_group_activities(
+            add_workshop_activities(
                 group.id,
-                AddGroupActivities(activity_ids=[activity_id]),
+                AddWorkshopActivities(activity_ids=[activity_id]),
                 owner,
                 db,
             )

@@ -2,9 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { useShellProfile } from "@/components/app-shell";
 import { apiRequest, getErrorMessage } from "@/lib/api";
-import { getSupabase } from "@/lib/supabase";
-import type { Profile, Quest, QuizQuestion } from "@/lib/types";
+import type { Quest, QuizQuestion } from "@/lib/types";
+
+// Display mirror of backend QUIZ_MASTERY_SCORE (app/services/gamification/sequencer.py); the server decides pass/fail.
+const QUIZ_PASS_PERCENT = 75;
 
 interface QuizResult {
   score_percentage: number;
@@ -15,7 +18,9 @@ interface QuizResult {
   attempt_number?: number;
   new_total_xp?: number;
   new_level?: number;
+  level_up?: boolean;
   new_badges_unlocked?: string[];
+  badge_xp_awarded?: number;
 }
 
 function getActivityHref(quest: Quest): string {
@@ -25,7 +30,7 @@ function getActivityHref(quest: Quest): string {
 export default function QuizView({ activityId }: { activityId: string }) {
   const [quest, setQuest] = useState<Quest | null>(null);
   const [trackActivities, setTrackActivities] = useState<Quest[]>([]);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const { role, enrolled_language: language } = useShellProfile();
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [isReviewing, setIsReviewing] = useState(false);
@@ -40,20 +45,11 @@ export default function QuizView({ activityId }: { activityId: string }) {
     let active = true;
     async function load() {
       try {
-        const { data } = await getSupabase().auth.getSession();
-        if (!data.session) {
-          if (active) setMessage("Sign in to open this concept quiz.");
-          return;
-        }
-        const [me, activities] = await Promise.all([
-          apiRequest<Profile>("/profile/me"),
-          apiRequest<Quest[]>("/quests"),
-        ]);
-        if (!active) return;
-        setProfile(me);
-        if (me.role !== "student") {
+        if (role !== "student") {
           throw new Error("Concept check quizzes are available to student accounts.");
         }
+        const activities = await apiRequest<Quest[]>(`/quests?details_for=${encodeURIComponent(activityId)}`);
+        if (!active) return;
         setTrackActivities(activities);
         const target = activities.find(
           (item) => item.id === activityId && item.activity_type === "quiz"
@@ -85,7 +81,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
     return () => {
       active = false;
     };
-  }, [activityId]);
+  }, [activityId, language, role]);
 
   function handleSelectOption(questionId: string, optionKey: string) {
     setAnswers((prev) => {
@@ -147,22 +143,11 @@ export default function QuizView({ activityId }: { activityId: string }) {
         }),
       });
       setResult(response);
-      setQuest((current) => (current ? { ...current, is_completed: true } : current));
+      setQuest((current) => current && { ...current, is_completed: current.is_completed || response.is_successful });
       try {
         window.sessionStorage.removeItem(`bytequest:quiz-answers:${quest.id}`);
       } catch {
         // ignore
-      }
-      if (response.new_total_xp !== undefined || response.new_level !== undefined) {
-        setProfile((curr) =>
-          curr
-            ? {
-                ...curr,
-                xp_points: response.new_total_xp ?? curr.xp_points,
-                current_level: response.new_level ?? curr.current_level,
-              }
-            : curr
-        );
       }
       setMessage(
         response.is_successful
@@ -208,9 +193,6 @@ export default function QuizView({ activityId }: { activityId: string }) {
     <div className="page-shell">
       {/* Top Activity Navigation Bar */}
       <nav className="activity-topbar" aria-label="Activity navigation">
-        <Link href="/quests" className="button button-quiet small">
-          ← Back to quest map
-        </Link>
         <div className="activity-nav-group">
           {prevActivity ? (
             <Link href={getActivityHref(prevActivity)} className="button button-outline small">
@@ -236,7 +218,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
       {/* Page Heading */}
       <div className="page-heading">
         <div>
-          <p className="eyebrow-label">CONCEPT CHECK · {profile?.enrolled_language?.toUpperCase() || ""}</p>
+          <p className="eyebrow-label">{quest && `Quest #${quest.position ?? quest.sequence_order} · `}Concept check · {language.toUpperCase()}</p>
           <h1>{quest?.title || "Concept knowledge check"}</h1>
           <p>{quest ? `${quest.topic_concept} · ${quest.xp_reward} XP on first completion` : "Test your understanding of core concepts."}</p>
         </div>
@@ -279,12 +261,21 @@ export default function QuizView({ activityId }: { activityId: string }) {
               <h2>{result.is_successful ? "Great work!" : "Keep practicing"}</h2>
               <p className="panel-subtitle">
                 You scored <strong>{result.score_percentage}%</strong> ({result.correct_answers} of {result.total_questions} questions correct).
-                {result.xp_awarded > 0 ? ` +${result.xp_awarded} XP awarded!` : " Completion XP was previously recorded."}
+                {result.xp_awarded > 0
+                  ? ` +${result.xp_awarded} XP awarded!`
+                  : result.is_successful
+                    ? " Completion XP was previously recorded."
+                    : ` Score ${QUIZ_PASS_PERCENT}% or higher to complete this quest and earn its XP.`}
               </p>
+
+              {result.level_up && result.new_level ? (
+                <p className="reward-news is-level" role="status">Level up! You reached Level {result.new_level}.</p>
+              ) : null}
 
               {result.new_badges_unlocked && result.new_badges_unlocked.length > 0 && (
                 <div className="notice" role="status">
                   <strong>✦ New Badge Unlocked:</strong> {result.new_badges_unlocked.join(", ")}
+                  {result.badge_xp_awarded ? ` (+${result.badge_xp_awarded} bonus XP)` : null}
                 </div>
               )}
 

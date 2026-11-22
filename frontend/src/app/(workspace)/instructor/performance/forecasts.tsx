@@ -1,0 +1,127 @@
+import { InsightLineChart } from "@/components/insights/line-chart";
+import { formatDateTime } from "@/lib/workspace";
+import { isLegacy, type SavedForecast, type StudentRow, type TrendPoint, type Detail, FORECAST_REASONS, TEACHING_ACTIONS } from "../ml/types";
+
+const scoreSeries = [
+  { key: "quiz", label: "Quiz", token: "var(--chart-series)" },
+  { key: "challenge", label: "Coding challenge", token: "var(--chart-series-2)", dash: "7 4" },
+  { key: "exam", label: "Released exam", token: "var(--chart-series-3)", dash: "2 4" },
+];
+export function Trend({ points, events, timezone, label }: {points: TrendPoint[]; events:number; timezone:string; label:string}) {
+  if (!points.length) return <p>No graded results in this period.</p>;
+  return <InsightLineChart rows={points.map(p => ({ ...p, x: Date.parse(p.date) }))}
+    label={label} summary={events + " recorded results, daily averages in " + timezone + ". Repeated attempts count as separate recorded results."}
+    series={scoreSeries} numericX domain={[0,100]} xLabel="Date" formatX={x => new Date(Number(x)).toISOString().slice(0,10)} />;
+}
+export function outlookOf(row?: StudentRow): string {
+  if (!row?.forecast) return "unavailable";
+  if (row.forecast.label === "May need support") return "support";
+  if (row.forecast.label === "Continue practicing") return "practicing";
+  return "likely";
+}
+
+export function forecastTone(label: string): "bad" | "wait" | "good" {
+  if (label === "May need support") return "bad";
+  if (label === "Continue practicing") return "wait";
+  return "good";
+}
+
+/** Missing numbers sort last whichever direction the column runs. */
+export function compareNumbers(a: number | null, b: number | null, descending: boolean): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return descending ? b - a : a - b;
+}
+
+function ForecastDetails({ forecast }: { forecast: NonNullable<StudentRow["forecast"]> }) {
+  return (
+    <dl className="ws-summary-list">
+      <div>
+        <dt>Target activity</dt>
+        <dd>{forecast.target_activity}</dd>
+      </div>
+      <div>
+        <dt>Estimated chance of passing this activity</dt>
+        <dd>
+          {Math.round(forecast.probability * 100)}% · {forecast.label}
+        </dd>
+      </div>
+      <div>
+        <dt>Predicted outcome</dt>
+        <dd>{forecast.predicted_pass ? "Pass" : "Not pass"}</dd>
+      </div>
+      <div>
+        <dt>Model</dt>
+        <dd>
+          {forecast.selected_model === "logreg" ? "Logistic regression" : "Random forest"} ·{" "}
+          {forecast.model_version}
+        </dd>
+      </div>
+      {forecast.probabilities && (
+        <div>
+          <dt>Both models</dt>
+          <dd>
+            Logistic regression {Math.round(forecast.probabilities.logreg * 100)}%
+            {forecast.selected_model === "logreg" ? " (used)" : ""} · Random forest{" "}
+            {Math.round(forecast.probabilities.random_forest * 100)}%
+            {forecast.selected_model === "random_forest" ? " (used)" : ""}
+          </dd>
+        </div>
+      )}
+      <div>
+        <dt>Forecast date</dt>
+        <dd>{formatDateTime(forecast.as_of)}</dd>
+      </div>
+      <div>
+        <dt>Observed outcome</dt>
+        <dd>
+          {forecast.actual_outcome === null
+            ? "Pending"
+            : forecast.actual_outcome
+              ? "Passed"
+              : "Not passed"}
+        </dd>
+      </div>
+      <div>
+        <dt>Use</dt>
+        <dd>{forecast.advisory}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function SavedForecastItem({ forecast }: { forecast: SavedForecast }) {
+  return (
+    <li>
+      <strong>
+        {forecast.target_activity}:{" "}
+        {isLegacy(forecast) ? forecast.label : `${Math.round(forecast.probability * 100)}%`}
+      </strong>
+      <span>
+        {formatDateTime(forecast.as_of)} · {forecast.model_version}
+        {forecast.is_current ? " · current forecast" : " · earlier forecast"}
+        {!forecast.is_current && !forecast.from_active_model ? " (not the active model)" : ""} ·{" "}
+        {forecast.actual_outcome === null
+          ? "Outcome pending"
+          : forecast.actual_outcome
+            ? "Passed"
+            : "Not passed"}
+      </span>
+    </li>
+  );
+}
+
+
+export function LearnerForecast({ detail }: { detail: Detail }) {
+  const {student, evidence, predictions} = detail;
+  const forecast = student.forecast;
+  return <section><h3>Forecast</h3>
+    {forecast ? <><ForecastDetails forecast={forecast}/><p>{TEACHING_ACTIONS[forecast.label]}</p></> :
+      <p>{FORECAST_REASONS[student.forecast_status] || "Unavailable"}</p>}
+    {student.target_activity && <p>Next challenge · {student.target_activity}</p>}
+    <p>{evidence.prior_tasks_attempted} of {evidence.prior_tasks_required} earlier course activities attempted.</p>
+    <p className="ws-muted">These historical results are not explanations of the model output.</p>
+    <h4>Saved forecast history</h4>{predictions.length ? <ul className="ws-compact-list">{predictions.map(p => <SavedForecastItem key={p.id} forecast={p}/>)}</ul> : <p>No eligible saved forecasts.</p>}
+  </section>;
+}

@@ -92,8 +92,10 @@ services:
       - ./backend.prod.env
     environment:
       JUDGE0_BASE_URL: http://judge0-server:2358
-      DB_POOL_SIZE: "1"
-      DB_MAX_OVERFLOW: "1"
+      # One connection per concurrent grading job plus the claim loop;
+      # fewer made jobs time out waiting for a connection and re-queue.
+      DB_POOL_SIZE: "5"
+      DB_MAX_OVERFLOW: "5"
       ML_SHADOW_ENABLED: "false"
       PYTHONDONTWRITEBYTECODE: "1"
     command: ["python", "-m", "app.services.submission_worker"]
@@ -145,6 +147,29 @@ services:
         condition: service_healthy
     networks:
       - judge0_data
+
+  judge0-pruner:
+    profiles: ["vps"]
+    image: ${JUDGE0_POSTGRES_IMAGE:?Set JUDGE0_POSTGRES_IMAGE to a reviewed digest-pinned image in infra/.env}
+    restart: unless-stopped
+    env_file:
+      - ./judge0.prod.conf
+    # ByteQuest stores results in its own database and never reads Judge0's
+    # copies, which otherwise grow until the disk is full.
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          PGPASSWORD="$$POSTGRES_PASSWORD" psql -h "$$POSTGRES_HOST" -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "DELETE FROM submissions WHERE created_at < now() - interval '60 days';"
+          sleep 86400
+        done
+    depends_on:
+      judge0-db:
+        condition: service_healthy
+    networks:
+      - judge0_data
+    logging: *default-logging
 
   judge0-db:
     profiles: ["vps"]

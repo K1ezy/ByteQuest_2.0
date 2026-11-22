@@ -14,6 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.entities import Course, InstructionalDocument, LearningActivity, ReviewState, TestCase
+from app.services.challenge_verification import verification_status
 
 
 def as_aware(value: datetime | None) -> datetime | None:
@@ -215,16 +216,19 @@ def activity_detail(activity: LearningActivity, *, include_grading: bool, attemp
     payload = {
         "activity_id": str(activity.id),
         "activity_type": activity_type,
+        "language": getattr(activity.language, "value", activity.language),
         "course_id": str(activity.course_id) if activity.course_id else None,
         "title": activity.title,
         "topic_concept": activity.topic_concept,
         "problem_statement": activity.problem_statement,
         "difficulty_level": activity.difficulty_level,
         "xp_reward": activity.xp_reward,
+        "pass_mark_percent": activity.pass_mark_percent,
         "review_status": review_status,
         "draft_state": draft_state(activity),
         "state": activity_state(activity),
-        "judge0_verified": bool(activity.judge0_verified),
+        "judge0_verified": verification_status(activity),
+        "exam_only": activity.exam_only,
         "reviewed_by": str(activity.reviewed_by) if activity.reviewed_by else None,
         "rejection_reason": activity.rejection_reason,
         "content_version": activity.content_version or 1,

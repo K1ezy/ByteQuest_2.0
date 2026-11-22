@@ -52,6 +52,7 @@ htmlcov/
 # Node.js & Next.js
 frontend/node_modules/
 frontend/.next/
+frontend/public/monaco/
 frontend/out/
 frontend/build/
 frontend/.turbo/
@@ -79,6 +80,7 @@ ml_pipeline/data/raw/
 
 # Logs & Temporary Files
 logs/
+/output/
 *.log
 tmp/
 temp/
@@ -94,3 +96,13 @@ supabase/.temp/
 !.vscode/extensions.json
 *.sublime-project
 *.sublime-workspace
+
+# Pytest temporary directories created under the backend during test runs
+backend/pytest-of-*/
+
+# graphify: graph.json and the report are committed; the cache and HTML viewer are regenerated
+graphify-out/cache/
+graphify-out/graph.html
+
+# Local Claude Code settings (hooks point at paths on one PC)
+.claude/
