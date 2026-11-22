@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { getErrorMessage } from "@/lib/api";
@@ -151,7 +150,6 @@ function AdminActivities() {
 
   return (
     <>
-      <Link href="/admin/materials">Materials</Link>
       <PageHeading
         eyebrow="ADMINISTRATION"
         title="Content & Track Repository"

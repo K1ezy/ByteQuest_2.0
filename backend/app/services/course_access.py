@@ -51,6 +51,11 @@ def require_administrator(user: Profile) -> Profile:
     return user
 
 
+def _member_course_is_active():
+    """An archived course is visible to administrators only, so memberships in it grant nothing."""
+    return exists().where(Course.id == CourseMember.course_id, Course.status == "active").correlate_except(Course)
+
+
 def active_membership_course_ids(db: Session, profile_id: uuid.UUID, member_role: str) -> list[uuid.UUID]:
     rows = (
         db.query(CourseMember.course_id)
@@ -58,6 +63,7 @@ def active_membership_course_ids(db: Session, profile_id: uuid.UUID, member_role
             CourseMember.profile_id == profile_id,
             CourseMember.member_role == member_role,
             CourseMember.status == "active",
+            _member_course_is_active(),
         )
         .all()
     )
@@ -93,6 +99,7 @@ def has_course_role(db: Session, user: Profile, course_id: uuid.UUID | None, mem
             CourseMember.profile_id == user.id,
             CourseMember.member_role == member_role,
             CourseMember.status == "active",
+            _member_course_is_active(),
         )
         .first()
         is not None
@@ -162,6 +169,11 @@ def require_course_access(
         )
     if allow_admin and is_admin(user):
         return course
+    if course.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "course_archived", "message": "That course is archived. Ask an administrator to restore it."},
+        )
     membership = (
         db.query(CourseMember)
         .filter(

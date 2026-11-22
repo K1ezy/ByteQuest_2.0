@@ -394,7 +394,7 @@ it("links recorded topics, shows badge descriptions and provides a score trend t
   expect((await screen.findByRole("link",{name:"Practise Strings & files"})).getAttribute("href")).toBe("/quests?concept=Strings%20%26%20files");
   expect(screen.queryByRole("link",{name:"Practise General"})).toBeNull();
   expect(screen.getByText("Finish one quest.")).toBeTruthy();
-  expect(screen.getByRole("img",{name:/From 40% to 85% across 2 attempts/})).toBeTruthy();
+  expect(screen.getByRole("figure",{name:/From 40% to 85% across 2 attempts/})).toBeTruthy();
   fireEvent.click(screen.getByText("View as table"));
   expect(screen.getByRole("table",{name:"Recent score trend"})).toBeTruthy();
 });

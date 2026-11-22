@@ -7,11 +7,26 @@ const scoreSeries = [
   { key: "challenge", label: "Coding challenge", token: "var(--chart-series-2)", dash: "7 4" },
   { key: "exam", label: "Released exam", token: "var(--chart-series-3)", dash: "2 4" },
 ];
+const counted: Record<string, string> = { quiz: "attempt", challenge: "attempt", exam: "exam submission" };
+/** "66.7% average · 12 attempts". The tooltip and the table share it so they always agree. */
+export function scoreText(kind: string, point: Record<string, unknown>): string {
+  const average = point[kind];
+  const count = Number(point[kind + "_count"] ?? 0);
+  return average == null ? "no results" : `${average}% average · ${count} ${counted[kind]}${count === 1 ? "" : "s"}`;
+}
+
 export function Trend({ points, events, timezone, label }: {points: TrendPoint[]; events:number; timezone:string; label:string}) {
   if (!points.length) return <p>No graded results in this period.</p>;
+  const day = (x: string | number) => new Date(Number(x)).toLocaleDateString("en-US",
+    { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: timezone }) + ` (${timezone} day)`;
   return <InsightLineChart rows={points.map(p => ({ ...p, x: Date.parse(p.date) }))}
     label={label} summary={events + " recorded results, daily averages in " + timezone + ". Repeated attempts count as separate recorded results."}
-    series={scoreSeries} numericX domain={[0,100]} xLabel="Date" formatX={x => new Date(Number(x)).toISOString().slice(0,10)} />;
+    series={scoreSeries} numericX domain={[0,100]} xLabel="Date" formatX={x => new Date(Number(x)).toISOString().slice(0,10)}
+    tooltip={{ title: row => day(row.x), value: (s, row) => scoreText(s.key, row) }}
+    table={<table className="ws-table analysis-table"><caption>{label}</caption>
+      <thead><tr><th scope="col">Date ({timezone})</th>{scoreSeries.map(s => <th scope="col" key={s.key}>{s.label}</th>)}</tr></thead>
+      <tbody>{points.map(p => <tr key={p.date}><th scope="row">{p.date}</th>
+        {scoreSeries.map(s => <td key={s.key}>{scoreText(s.key, p)}</td>)}</tr>)}</tbody></table>} />;
 }
 export function outlookOf(row?: StudentRow): string {
   if (!row?.forecast) return "unavailable";
