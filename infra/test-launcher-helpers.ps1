@@ -474,6 +474,15 @@ Write-Host "`n[10] Supabase readiness and local settings"
 }
 
 # --------------------------------------------------------------------------
+Write-Host "`n[watchdog] Get-WatchdogNotice speaks only when the result changes"
+Assert-That 'first failure is announced with its detail'   { (Get-WatchdogNotice -Previous 'ok' -Healthy $false -Detail 'worker stale') -eq 'ByteQuest needs attention: worker stale' }
+Assert-That 'failure on the very first run is announced'   { (Get-WatchdogNotice -Previous $null -Healthy $false -Detail 'x') -like 'ByteQuest needs attention*' }
+Assert-That 'a continuing failure stays quiet'             { $null -eq (Get-WatchdogNotice -Previous 'fail' -Healthy $false -Detail 'x') }
+Assert-That 'recovery is announced once'                   { (Get-WatchdogNotice -Previous 'fail' -Healthy $true) -like 'ByteQuest recovered*' }
+Assert-That 'staying healthy stays quiet'                  { $null -eq (Get-WatchdogNotice -Previous 'ok' -Healthy $true) }
+Assert-That 'healthy on the very first run stays quiet'    { $null -eq (Get-WatchdogNotice -Previous $null -Healthy $true) }
+
+# --------------------------------------------------------------------------
 Write-Host ""
 if ($script:Failures -gt 0) {
     Write-Host "$script:Failures check(s) failed." -ForegroundColor Red

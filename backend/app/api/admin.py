@@ -57,7 +57,7 @@ from app.services.materials import (
     serialize_material,
     upload_material,
 )
-from app.services.ml_predictor.consent import consented_student_ids
+from app.services.ml_predictor.consent import consent_open, current_consent_choices
 from app.services.monitoring import (
     audit_query,
     job_query,
@@ -572,9 +572,14 @@ def course_health(request: Request, user: Profile = Depends(admin_user), db: Ses
         enrolled = snapshot["active_learners"]
         reportable = enrolled >= 5
         names = instructors.get(course.id, [])
-        consent = None
+        consent = unanswered = None
         if reportable:
-            consent = len(consented_student_ids(db, [s.id for s in enrolled_students(db, course.id)]))
+            student_ids = [s.id for s in enrolled_students(db, course.id)]
+            choices = current_consent_choices(db, student_ids)
+            consent = sum(choice == "accepted" for choice in choices.values())
+            # Totals only, never names: who answered what stays out of every staff screen.
+            if consent_open():
+                unanswered = len(student_ids) - len(choices)
         rows.append({
             "id": str(course.id), "code": course.code, "title": course.title, "course_status": course.status,
             "status": "available" if reportable else "insufficient_data",
@@ -584,6 +589,7 @@ def course_health(request: Request, user: Profile = Depends(admin_user), db: Ses
             "not_started": snapshot["need_follow_up"] if reportable else None,
             "activities_passed": snapshot["average_completion_percent"] if reportable else None,
             "research_consent": consent,
+            "research_consent_unanswered": unanswered,
         })
     return {"courses": rows, "generated_at": iso(now),
             "forecast_status": getattr(request.app.state, "ml_shadow_status", "disabled")}

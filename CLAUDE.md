@@ -1,6 +1,6 @@
 ## Current system status
 
-For feature coverage, local runtime, Git state and release evidence, read the [21 November PC and checkout snapshot](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md).
+For feature coverage, local runtime, Git state and release evidence, read the [system status log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md). When you change behaviour, update that log as it says at its top: one dated row per area, with stale rows replaced rather than duplicated.
 
 ## graphify
 

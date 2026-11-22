@@ -288,11 +288,7 @@ foreach ($requiredCommand in @("pwsh.exe", "node", "npm", "supabase")) {
 
 # Resolve Docker CLI path if missing
 if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
-    $dockerCliPaths = @(
-        (Join-Path $env:ProgramFiles "Docker\Docker\resources\bin\docker.exe"),
-        (Join-Path $env:LOCALAPPDATA "Programs\DockerDesktop\resources\bin\docker.exe")
-    )
-    $dockerExe = $dockerCliPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    $dockerExe = Get-DockerDesktopFile -RelativePath 'resources\bin\docker.exe'
     if ($dockerExe) {
         $env:PATH = "$(Split-Path -Parent $dockerExe);$env:PATH"
     }
@@ -390,11 +386,7 @@ else {
 
 & docker.exe info *> $null
 if ($LASTEXITCODE -ne 0) {
-    $dockerDesktopPaths = @(
-        (Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"),
-        (Join-Path $env:LOCALAPPDATA "Programs\DockerDesktop\Docker Desktop.exe")
-    )
-    $dockerDesktop = $dockerDesktopPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    $dockerDesktop = Get-DockerDesktopFile -RelativePath 'Docker Desktop.exe'
     if (-not $dockerDesktop) {
         throw "Docker Desktop application not found."
     }
@@ -730,6 +722,16 @@ if ($PrepareOnly) {
     if ($contentExitCode -ne 0) {
         throw 'Local learning content check failed. Publish at least one activity to this laptop before offline use.'
     }
+}
+
+Write-Step 'Check grading end to end'
+# The same checks as Admin > Monitoring, including one real Judge0 run. A failure here warns
+# instead of stopping, because some (an exam waiting for a grading retry) are admin work, not a broken stack.
+Push-Location $backendPath
+try { & $backendPython -m scripts.check_stack_health --judge0; $stackExitCode = $LASTEXITCODE }
+finally { Pop-Location }
+if ($stackExitCode -ne 0) {
+    Write-Host 'ByteQuest started, but a grading check failed (see above). Open Admin > Monitoring before class.' -ForegroundColor Red
 }
 
 Write-Step "ByteQuest is ready"

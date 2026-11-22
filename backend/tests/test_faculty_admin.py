@@ -790,12 +790,18 @@ def test_activity_analysis_totals_and_practice_scope(workspace, monkeypatch):
         return next(r for r in rows if r["id"] == str(ids["course_a"]))
     aggregate = admin_row()
     assert aggregate["research_consent"] == 1
+    assert aggregate["research_consent_unanswered"] == aggregate["enrolled"] - 1
     assert (aggregate["active_7d"], aggregate["not_started"], aggregate["activities_passed"]) == (
         snapshot["active_7d"], snapshot["need_follow_up"], snapshot["average_completion_percent"])
     with db_session() as db:
         db.add(ResearchConsent(student_id=ids["student"], document_version="test-v1", choice="declined"))
         db.commit()
-    assert admin_row()["research_consent"] == 0
+    declined = admin_row()
+    assert (declined["research_consent"], declined["research_consent_unanswered"]) == (0, aggregate["enrolled"] - 1)
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_VERSION", "test-v2")
+    assert admin_row()["research_consent_unanswered"] == aggregate["enrolled"]
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_ACTIVE", False)
+    assert admin_row()["research_consent_unanswered"] is None
     progress = client.get(
         f"/api/v1/faculty/performance?course_id={ids['course_a']}&activity_id={ids['published']}&stuck_only=true",
         headers=headers,
@@ -1900,9 +1906,11 @@ def test_admin_course_health_suppresses_small_groups_and_restricts_access(worksp
     assert set(result) == {"generated_at", "forecast_status", "courses"}
     row = next(r for r in result["courses"] if r["id"] == str(ids["course_a"]))
     assert set(row) == {"id","code","title","course_status","status","instructor_count","instructors",
-                        "enrolled","published_activities","active_7d","not_started","activities_passed","research_consent"}
+                        "enrolled","published_activities","active_7d","not_started","activities_passed","research_consent",
+                        "research_consent_unanswered"}
     assert row["enrolled"] == 1 and row["published_activities"] > 0 and row["status"] == "insufficient_data"
-    assert all(row[k] is None for k in ("active_7d","not_started","activities_passed","research_consent"))
+    assert all(row[k] is None for k in ("active_7d","not_started","activities_passed","research_consent",
+                                         "research_consent_unanswered"))
     assert str(ids["student"]) not in str(result)
     created = client.post("/api/v1/admin/courses", headers=_token(ids["admin"]),
                           json={"code": "QA-" + uuid.uuid4().hex[:8], "title": "Empty course"}).json()["course"]
