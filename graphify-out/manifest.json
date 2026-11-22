@@ -2782,5 +2782,11 @@
     "seen": 1795315392.9022126,
     "ast_hash": "078d9a3e0e6dc6bea63f35d61cb2a83a",
     "semantic_hash": ""
+  },
+  "backend/scripts/seed_local_showcase_activity.py": {
+    "mtime": 1795316571.3773837,
+    "seen": 1795316672.9832058,
+    "ast_hash": "b57f8bfee3c5dec4663c5243a870810e",
+    "semantic_hash": ""
   }
 }
