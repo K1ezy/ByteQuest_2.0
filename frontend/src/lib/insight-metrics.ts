@@ -57,7 +57,7 @@ export const metrics = {
   },
   "consent_coverage": {
     "label": "Research consent",
-    "definition": "Enrolled learners with current research consent"
+    "definition": "Enrolled learners with current research consent, and how many haven't answered the current form yet"
   }
 } as const;
 

@@ -2,7 +2,7 @@
 
 ByteQuest is a gamified programming-learning platform for undergraduate computer science students. Students practice **Python, C++, and Java**, instructors publish and grade coursework, and administrators manage course access and monitor the services. ByteQuest is a thesis system for North Eastern Mindanao State University (NEMSU).
 
-**Development branch.** The 21 November 2026 snapshot covers `fix/ml-pr-auc-student-disjoint-split` on the development PC. It records the committed revision, the working-tree changes, and the local runtime. [Development PC snapshot](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md) · [GitHub branch](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split)
+**Development branch.** Current work is in open pull requests built on `fix/ml-pr-auc-student-disjoint-split`. The [system status log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md) records which branch holds what, the merge order, the local runtime and the latest verification. [GitHub branch](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split)
 
 **Release status.** Core learning workflows have local verification. Hosted classroom acceptance is pending, including capacity, security, and recovery on the intended deployment. [Release gates](docs/SYSTEM_STATUS_AND_RELEASE_PLAN.md#5-six-gates-before-a-live-classroom-pilot)
 
@@ -151,7 +151,8 @@ The regression workflow runs the backend suite plus frontend lint, typechecking,
 
 ## Documentation
 
-- [Current system status and PC snapshot](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md)
+- [System status log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md)
+- [ML evidence, operations and methodology readiness plan](docs/ML_AND_OPERATIONS_READINESS_PLAN.md)
 - [20 November weekly change log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md)
 - [Release readiness and classroom acceptance gates](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/SYSTEM_STATUS_AND_RELEASE_PLAN.md)
 - [KVM 2 live pilot setup](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/KVM2_LIVE_PILOT_CHECKLIST.md)

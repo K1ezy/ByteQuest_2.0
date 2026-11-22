@@ -28,6 +28,32 @@ function Test-TcpPort {
     }
 }
 
+function Get-DockerDesktopFile {
+    # Docker Desktop installs per machine or per user; return the first copy of a file under it that exists.
+    param([Parameter(Mandatory)][string]$RelativePath)
+
+    @(
+        (Join-Path $env:ProgramFiles "Docker\Docker\$RelativePath"),
+        (Join-Path $env:LOCALAPPDATA "Programs\DockerDesktop\$RelativePath")
+    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
+
+function Get-WatchdogNotice {
+    # Speak only when the result changes, so a failure that lasts an hour is announced once, not 60 times.
+    param(
+        [string]$Previous,
+        [Parameter(Mandatory)][bool]$Healthy,
+        [string]$Detail
+    )
+
+    if ($Healthy) {
+        if ($Previous -eq 'fail') { return 'ByteQuest recovered: every check passes again.' }
+        return $null
+    }
+    if ($Previous -eq 'fail') { return $null }
+    return "ByteQuest needs attention: $Detail"
+}
+
 function Test-HttpReady {
     param(
         [Parameter(Mandatory)][string]$Uri,

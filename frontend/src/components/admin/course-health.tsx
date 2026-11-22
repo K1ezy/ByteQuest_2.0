@@ -10,6 +10,8 @@ export interface CourseHealthRow {
   id:string; code:string; title:string; course_status:string; status:string;
   instructor_count:number; instructors:string[]; enrolled:number; published_activities:number;
   active_7d:number|null; not_started:number|null; activities_passed:number|null; research_consent:number|null;
+  /** Null while the study is closed or the course is too small to report. */
+  research_consent_unanswered:number|null;
 }
 export function healthAction(row: CourseHealthRow) {
   const course = encodeURIComponent(row.id);
@@ -33,7 +35,8 @@ export function CourseHealth() {
         <th scope="row">{row.code} · {row.title} <StatusChip state={row.course_status}/></th><td>{row.instructors.join(", ") || "Unassigned"}</td>
         <td>{row.enrolled}</td><td>{row.active_7d ?? <NotEnoughData/>}</td><td>{row.not_started ?? <NotEnoughData/>}</td>
         <td>{row.published_activities}</td><td>{row.activities_passed === null ? <NotEnoughData/> : row.activities_passed+"%"}</td>
-        <td>{row.research_consent === null ? <NotEnoughData/> : row.research_consent+" of "+row.enrolled}</td>
+        <td>{row.research_consent === null ? <NotEnoughData/> : row.research_consent+" of "+row.enrolled}
+          {row.research_consent_unanswered ? <span className="ws-muted"> · {row.research_consent_unanswered} not answered</span> : null}</td>
         <td>{action ? <Link className="ws-touch-action" href={action.href}>{action.label}</Link> : <span className="ws-muted">No action needed</span>}</td>
       </tr>)}</tbody></table></div> : <EmptyState title="No courses yet" action={<Link href="/admin/courses">Create course</Link>}>Create a course to see its health.</EmptyState>}
       <MeasureDefinitions names={["active_7d","not_started","activities_passed","consent_coverage"]}/><UpdatedAt at={data.generated_at}/>
