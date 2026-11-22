@@ -3494,6 +3494,7 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
 .ws-setting-main { min-width: 0; flex: 1 1 18rem; }
 .ws-setting-inline { flex-basis: 100%; display: grid; gap: 10px; margin-top: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .ws-setting-saved { color: var(--emerald-700); font-size: 12.5px; }
+@media (pointer: coarse) { .ws-copy { min-width: 44px; min-height: 44px; } }
 .ws-callout { margin: 12px 0; padding: 10px 12px; border-left: 3px solid var(--purple); border-radius: 6px; background: var(--purple-soft); }
 .ws-drawer-subtitle { margin: 18px 0 6px; font-size: 13.5px; }
 .ws-setting-main strong { display: block; font-size: 13.5px; }

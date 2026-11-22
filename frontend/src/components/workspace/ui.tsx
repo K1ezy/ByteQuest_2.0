@@ -62,7 +62,7 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
     window.setTimeout(() => setState(""), 2500);
   }
   return (
-    <button type="button" className="ws-inline-link" onClick={() => void copy()} aria-label={`Copy ${label}`}>
+    <button type="button" className="ws-inline-link ws-copy" onClick={() => void copy()} aria-label={`Copy ${label}`}>
       <span aria-live="polite">{state === "copied" ? "Copied" : state === "failed" ? "Select it to copy" : "Copy"}</span>
     </button>
   );
