@@ -3147,6 +3147,8 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
 .ws-option-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
 .ws-check { display: flex; align-items: flex-start; gap: 9px; color: var(--ink); font-size: var(--text-2xs); font-weight: 600; }
 .ws-check input { width: 18px; height: 18px; flex: none; margin-top: 1px; accent-color: var(--purple); }
+.enroll-preview { display: grid; gap: 10px; margin-top: 14px; }
+.enroll-preview summary { cursor: pointer; padding: 4px 0; }
 .ws-check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .ws-course-picker { padding: 10px 0 0; }
 .ws-course-picker legend { color: #2b2440; font-size: var(--text-2xs); font-weight: 700; }

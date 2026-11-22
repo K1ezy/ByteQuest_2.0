@@ -21,6 +21,16 @@ it("renders suppressed cells and a single forecast notice",() => {
   expect(screen.getAllByText("Not enough data yet")).toHaveLength(4);
   expect(screen.getAllByText(/Platform forecasts/)).toHaveLength(1);
 });
+it("sends Enrol students to the enroll panel for that course and hides archived courses until asked", () => {
+  expect(healthAction({...row,enrolled:0})?.href).toBe("/admin/assignments?enroll=1&course=c");
+  expect(healthAction({...row,course_status:"archived",instructor_count:0})).toBeNull();
+  mock.mockReturnValue({data:{generated_at:"2026-11-20T10:00:00Z",forecast_status:"ready",
+    courses:[row,{...row,id:"old",code:"OLD",title:"Old course",course_status:"archived"}]}});
+  render(<CourseHealth/>);
+  expect(screen.queryByText(/OLD · Old course/)).toBeNull();
+  fireEvent.click(screen.getByRole("checkbox",{name:"Show archived (1)"}));
+  expect(screen.getByText(/OLD · Old course/)).toBeTruthy();
+});
 it("handles empty data and allows retry after an error", () => {
   const retry=vi.fn();
   mock.mockReturnValue({error:"Offline",reload:retry});

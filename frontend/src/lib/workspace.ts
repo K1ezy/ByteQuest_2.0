@@ -120,6 +120,46 @@ export function createCourse(payload: { code: string; title: string; description
   });
 }
 
+export function updateCourse(courseId: string, payload: { title: string; description: string }) {
+  return apiRequest<{ course: CourseSummary; message: string }>(`/admin/courses/${courseId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface CourseImpact {
+  course: CourseSummary;
+  students: number;
+  instructors: number;
+  published_activities: number;
+  blocking_exams: { id: string; title: string; opens_at: string; closes_at: string }[];
+}
+
+export function getCourseImpact(courseId: string) {
+  return apiRequest<CourseImpact>(`/admin/courses/${courseId}/impact`);
+}
+
+export function setCourseArchived(courseId: string, archived: boolean) {
+  return apiRequest<{ status: string; message: string }>(`/admin/courses/${courseId}/${archived ? "archive" : "restore"}`, { method: "POST" });
+}
+
+export interface EnrollmentItem { school_id: string; profile_id?: string; name?: string; reason?: string }
+export interface EnrollmentPlan {
+  will_enroll: EnrollmentItem[];
+  already_enrolled: EnrollmentItem[];
+  not_found: EnrollmentItem[];
+  not_eligible: EnrollmentItem[];
+  invalid: EnrollmentItem[];
+}
+
+/** Preview reads only; enrolling plans again on the server, so a stale preview never enrolls twice. */
+export function submitEnrollment(courseId: string, schoolIds: string, mode: "preview" | "enroll") {
+  return apiRequest<{ plan: EnrollmentPlan; enrolled?: number; message?: string }>(
+    mode === "preview" ? "/admin/enrollments/preview" : "/admin/enrollments",
+    { method: "POST", body: JSON.stringify({ course_id: courseId, school_ids: schoolIds }) },
+  );
+}
+
 /* ------------------------------------------------------------------ faculty */
 
 export interface QueueItem {
