@@ -30,6 +30,7 @@ interface WorkspaceContextValue {
   setUnsaved: (unsaved: boolean, message?: string) => void;
   hasUnsaved: boolean;
   courseHref: (href: string) => string;
+  modelEvaluationAvailable: boolean;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -74,6 +75,7 @@ export function WorkspaceProvider({ role, children, shell: Shell }: {
   const searchParams = useSearchParams();
   const profile = useShellProfile();
   const [courses, setCourses] = useState<CourseSummary[]>([]);
+  const [modelEvaluationAvailable, setModelEvaluationAvailable] = useState(true);
   const [defaultCourseId, setDefaultCourseId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [fatalError, setFatalError] = useState("");
@@ -86,6 +88,7 @@ export function WorkspaceProvider({ role, children, shell: Shell }: {
     if (role === "faculty") {
       const result = await getFacultyCourses();
       setCourses(result.courses);
+      setModelEvaluationAvailable(result.model_evaluation_available !== false);
       defaultId = result.default_course_id;
     } else {
       const result = await getAdminCourses();
@@ -155,7 +158,7 @@ export function WorkspaceProvider({ role, children, shell: Shell }: {
 
   const value: WorkspaceContextValue = {
     role, profile, courses, courseId, activeCourse, setCourse, refreshCourses: loadCourses,
-    setUnsaved, hasUnsaved: unsaved, courseHref,
+    setUnsaved, hasUnsaved: unsaved, courseHref, modelEvaluationAvailable,
   };
 
   const independentRoute = pathname === "/instructor/exams" || pathname === "/instructor/preview";

@@ -474,6 +474,13 @@ def test_faculty_is_scoped_to_assigned_courses(workspace):
     assert courses.status_code == 200
     payload = courses.json()["courses"]
     assert [course["id"] for course in payload] == [str(ids["course_a"])]
+    # No approved report and forecasting off: the Model evaluation menu entry stays hidden (ML plan D9).
+    assert courses.json()["model_evaluation_available"] is False
+    app.state.ml_model_report = {"model_version": "v3-test"}
+    try:
+        assert client.get("/api/v1/faculty/courses", headers=headers).json()["model_evaluation_available"] is True
+    finally:
+        app.state.ml_model_report = None
 
     forbidden = client.get(f"/api/v1/faculty/dashboard?course_id={ids['course_b']}", headers=headers)
     assert forbidden.status_code == 403

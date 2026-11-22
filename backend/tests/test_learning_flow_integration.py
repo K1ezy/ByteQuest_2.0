@@ -739,6 +739,8 @@ def test_pilot_drafts_jobs_hints_and_consent_gate(flow, monkeypatch):
     with new_session() as db:
         assert db.query(func.count(ActivityAttempt.id)).filter(
             ActivityAttempt.submission_job_id == uuid.UUID(first.json()["id"])).scalar() == 1
+    # Start from consent switched off, whatever the developer's local settings say.
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_ACTIVE", False)
     consent = client.get("/api/v1/pilot/research/consent", headers=student)
     assert consent.status_code == 200 and consent.json()["available"] is False
     assert client.post("/api/v1/pilot/research/consent", headers=student,

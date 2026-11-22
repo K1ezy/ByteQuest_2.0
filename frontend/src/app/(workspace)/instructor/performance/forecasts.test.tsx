@@ -143,6 +143,8 @@ it("reports an unavailable model without implying nobody needs support", () => {
   expect(screen.queryByLabelText("Outlook")).toBeNull();
   expect(screen.getByRole("link",{name:"Model evaluation"})).toBeTruthy();
   expect(screen.getByText(/No approved, active model/)).toBeTruthy();
+  // The same advisory note appears wherever forecasts are mentioned.
+  expect(screen.getByText(/Once it's on, an Outlook column appears/).textContent).toMatch(/advisory, for instructors only: students never see it/);
 });
 
 it("labels the average as activity history and states the aggregation timezone", () => {

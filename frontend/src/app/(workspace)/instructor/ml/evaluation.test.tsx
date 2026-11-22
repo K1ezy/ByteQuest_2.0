@@ -239,3 +239,42 @@ it("states an honest empty report state and still shows the methodology", () => 
   expect(screen.getByText(/Student-disjoint 60\/20\/20/)).toBeTruthy();
   expect(screen.queryByLabelText("Partition")).toBeNull();
 });
+
+it("states the purpose, advisory use and pending status before any approved report exists", () => {
+  useApiReturning(evaluation({ offline: { status: "unavailable", report: null } }));
+  render(<Page />);
+  expect(screen.getByRole("heading", { name: "What this page shows" })).toBeTruthy();
+  expect(screen.getByText(/no approved model yet/)).toBeTruthy();
+  expect(screen.getByText(/students never see them/)).toBeTruthy();
+});
+
+const phaseB = {
+  ...report,
+  confidence_intervals: {
+    logreg: { level: 0.95, n_resamples: 1000, skipped_single_class: 3, metrics: { accuracy: { low: 0.61, high: 0.74 } } },
+  },
+  adequacy: { min_test_learners: 6, min_rows_per_class: 15, test_learners: 4, test_rows_per_class: { successful: 48, unsuccessful: 32 }, met: false },
+  supplementary: { live_eligible: { min_prior_tasks: 3, models: { logreg: score("test_live_eligible", 0.66) }, baselines: {} } },
+};
+
+it("shows test intervals, an indicative-only verdict with real counts and the supplementary report", () => {
+  useApiReturning(evaluation({ offline: { status: "available", report: phaseB } }));
+  render(<Page />);
+  expect(logregAccuracy("test")).toContain("95%: 0.610–0.740");
+  expect(screen.getByText(/1000 learner-level bootstrap resamples/).textContent).toContain("3 were skipped because they held only one outcome");
+  expect(screen.getByText(/The test partition has 4 learners, with 48 passed and 32 not passed rows; at least 6 learners and 15 rows of each outcome are needed/)).toBeTruthy();
+  expect(screen.getByText("Supplementary: never used to choose the model.")).toBeTruthy();
+  const live = screen.getByRole("table", { name: "Test metrics for learners eligible for a live forecast" });
+  expect(within(live).getByRole("row", { name: /Logistic regression/ })).toBeTruthy();
+
+  fireEvent.change(screen.getByLabelText("Partition"), { target: { value: "validation" } });
+  expect(logregAccuracy("validation")).not.toContain("95%");
+  expect(screen.queryByRole("table", { name: "Test metrics for learners eligible for a live forecast" })).toBeNull();
+});
+
+it("says plainly when the adequacy check is met", () => {
+  useApiReturning(evaluation({ offline: { status: "available", report: { ...phaseB, adequacy: { ...phaseB.adequacy, test_learners: 10, met: true } } } }));
+  render(<Page />);
+  expect(screen.getByText(/Adequacy check met: the test partition has 10 learners/)).toBeTruthy();
+  expect(screen.queryByText(/Indicative only/)).toBeNull();
+});

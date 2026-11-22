@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -22,7 +22,7 @@ router = APIRouter()
 # Courses
 # ---------------------------------------------------------------------------
 @router.get("/courses")
-def list_courses(user: Profile = Depends(faculty_user), db: Session = Depends(get_db)):
+def list_courses(request: Request, user: Profile = Depends(faculty_user), db: Session = Depends(get_db)):
     courses = courses_for_user(db, user)
     counts = enrollment_counts(db, [course.id for course in courses])
     activities = scoped_activities(db, [course.id for course in courses])
@@ -43,10 +43,14 @@ def list_courses(user: Profile = Depends(faculty_user), db: Session = Depends(ge
                 "attention_count": len(attention),
             }
         )
+    state = request.app.state
     return {
         "courses": payload,
         "default_course_id": str(courses[0].id) if courses else None,
         "timezone": "Asia/Manila",
+        # ML plan D9: the menu shows Model evaluation only once forecasting is ready or an approved report exists.
+        "model_evaluation_available": getattr(state, "ml_shadow_status", "disabled") == "ready"
+        or getattr(state, "ml_model_report", None) is not None,
     }
 
 

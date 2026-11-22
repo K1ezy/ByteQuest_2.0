@@ -152,6 +152,8 @@ Online evaluation (`GET /faculty/ml/evaluation`) counts one prediction per (stud
 
 ### Phase B: Model evaluation page (no deadline)
 
+**Done on 22 November 2026** (branch `feat/ml-evaluation-page`). Each test metric shows its 95% interval under the value (one cell, so the table still fits a phone), with a footnote counting skipped resamples. The adequacy verdict states the real learner and row counts, and a supplementary table covers learners eligible for a live forecast, test partition only. `/faculty/courses` now returns `model_evaluation_available`, and the instructor menu hides Model evaluation while it is false (D9). The page stays reachable from Student Progress and by its address. The page also opens with a short purpose, advisory-use and status summary (UI/UX slice 4), so it reads correctly before an approved report exists. No synthetic run is shown in the app.
+
 1. **Report sections** (`frontend/src/app/(workspace)/instructor/ml/evaluation.tsx` and `types.ts`):
    - an interval column beside each test metric;
    - an "Indicative only" notice when `adequacy.met` is false;

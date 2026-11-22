@@ -11,6 +11,7 @@ import { useApi, useNow } from "@/components/workspace/ui";
 import { timeGreeting } from "@/lib/greeting";
 import { studentAnnouncementsPath, type StudentAnnouncement } from "@/lib/workspace";
 import type { Profile } from "@/lib/types";
+import { ResearchConsentCard } from "@/components/research-consent";
 
 interface Dashboard {
   recommendation: { rationale: string; target_activity_id: string | null };
@@ -200,6 +201,7 @@ function DashboardContent({ profile }: { profile: Profile }) {
               </div>
             </section>
 
+            {profile.role === "student" ? <ResearchConsentCard /> : null}
             {announcementList}
             {data.notices?.length > 0 && (
               <section className="dashboard-notices dashboard-reveal" aria-labelledby="notices-title">
