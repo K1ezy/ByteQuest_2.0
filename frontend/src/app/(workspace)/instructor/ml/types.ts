@@ -73,6 +73,9 @@ export type TrendPoint = {
   quiz: number | null;
   challenge: number | null;
   exam: number | null;
+  quiz_count: number;
+  challenge_count: number;
+  exam_count: number;
 };
 
 export type HistoryEvent = {

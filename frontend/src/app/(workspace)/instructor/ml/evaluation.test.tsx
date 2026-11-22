@@ -205,8 +205,8 @@ it("renders confusion matrices and both curves", () => {
   render(<Page />);
   expect(screen.getAllByText("Actually passed").length).toBe(2);
   expect(screen.getAllByText("40").length).toBeGreaterThan(0);
-  expect(screen.getByRole("img", {name:/^ROC curve on the test partition/})).toBeTruthy();
-  expect(screen.getByRole("img", {name:/^Precision-recall curve on the test partition/})).toBeTruthy();
+  expect(screen.getByRole("figure", {name:/^ROC curve on the test partition/})).toBeTruthy();
+  expect(screen.getByRole("figure", {name:/^Precision-recall curve on the test partition/})).toBeTruthy();
 });
 
 it("explains the metrics and says a lower Brier score is better", () => {
