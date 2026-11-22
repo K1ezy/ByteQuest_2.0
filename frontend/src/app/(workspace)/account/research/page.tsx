@@ -1,135 +1,102 @@
 "use client";
 
 import Link from "next/link";
-import React, { useEffect, useState } from "react";
-import { apiRequest, getErrorMessage } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { getErrorMessage } from "@/lib/api";
+import { Button, ConfirmDialog, Notice, PageHeading, StatusChip } from "@/components/workspace/ui";
+import { ConsentFacts, getConsent, saveConsent, type ConsentStatus } from "@/components/research-consent";
 
-interface ConsentStatus {
-  available: boolean;
-  version: string | null;
-  text: string | null;
-  choice: "accepted" | "declined" | "withdrawn" | null;
-}
+const CHOICE_LABEL: Record<string, string> = {
+  accepted: "You agreed", declined: "You declined", withdrawn: "You withdrew",
+};
 
 export default function ResearchConsentSettingsPage() {
+  const [consent, setConsent] = useState<ConsentStatus | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [consentInfo, setConsentInfo] = useState<ConsentStatus | null>(null);
+  const [confirmWithdraw, setConfirmWithdraw] = useState(false);
 
   useEffect(() => {
     let active = true;
-    apiRequest<ConsentStatus>("/pilot/research/consent")
-      .then((res) => {
-        if (!active) return;
-        setConsentInfo(res);
-      })
+    getConsent().then((result) => { if (active) setConsent(result); })
       .catch((cause) => { if (active) setError(getErrorMessage(cause)); });
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, []);
 
-  const handleWithdraw = async () => {
+  async function choose(choice: "accepted" | "declined" | "withdrawn") {
+    if (!consent?.version) return;
     setBusy(true);
     setError("");
     try {
-      await apiRequest("/pilot/research-consent/withdraw", { method: "POST" });
-      setConsentInfo(await apiRequest<ConsentStatus>("/pilot/research/consent"));
+      await saveConsent(choice, consent.version);
+      setConsent(await getConsent());
+      setConfirmWithdraw(false);
     } catch (cause) {
       setError(getErrorMessage(cause));
     } finally {
       setBusy(false);
     }
-  };
+  }
 
-  const choose = async (choice: "accepted" | "declined") => {
-    if (!consentInfo?.available || !consentInfo.version) return;
-    setBusy(true);
-    setError("");
-    try {
-      await apiRequest("/pilot/research/consent", { method: "POST",
-        body: JSON.stringify({ choice, document_version: consentInfo.version }) });
-      setConsentInfo(await apiRequest<ConsentStatus>("/pilot/research/consent"));
-    } catch (cause) { setError(getErrorMessage(cause)); }
-    finally { setBusy(false); }
-  };
-
+  const choice = consent?.choice ?? null;
   return (
-    <section className="mx-auto max-w-2xl px-4 py-10">
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs space-y-5">
-        <div>
-          <span className="rounded-full bg-amber-100 px-3 py-1 font-mono text-xs font-bold text-amber-900">
-            {consentInfo?.available ? "Research Consent Available" : "Research Telemetry Disabled"}
-          </span>
-          <h1 className="mt-3 text-2xl font-extrabold text-slate-900">
-            Research Participation & Data Privacy
-          </h1>
-          <p className="mt-1 text-sm text-slate-600">
-            Manage how your anonymized learning telemetry is used in the ByteQuest classroom study.
-          </p>
-        </div>
+    <section className="page-shell research-consent-page">
+      <PageHeading eyebrow="ACCOUNT" title="Research participation"
+        description="Decide whether your practice results may be used in the ByteQuest classroom study. You can change your answer at any time."
+        status={consent ? <StatusChip state={choice || "pending"} label={choice ? CHOICE_LABEL[choice] : "Not answered yet"}
+          tone={choice === "accepted" ? "good" : "muted"} /> : undefined} />
 
-        {/* Hard Safety Lock Notice */}
-        {!consentInfo?.available && (
-          <div
-            role="status"
-            className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs leading-relaxed text-slate-700"
-          >
-            <p className="font-bold text-slate-900">
-              Research data collection is currently disabled (v0.0-pending-approval)
-            </p>
-            <p className="mt-1">
-              Approved institutional consent text, version identifier, and data retention policies are not yet active. ByteQuest is operating in classroom-only mode — zero research telemetry is being recorded or exported.
-            </p>
-          </div>
-        )}
-        {consentInfo?.available && consentInfo.text && <section className="rounded-xl border border-slate-200 p-4">
-          <h2 className="font-bold">Research consent, version {consentInfo.version}</h2>
-          <p className="whitespace-pre-wrap mt-2">{consentInfo.text}</p>
-          <div className="flex flex-wrap gap-3 mt-4">
-            <button type="button" className="button button-primary" disabled={busy}
-              onClick={() => void choose("accepted")}>I agree to research use</button>
-            <button type="button" className="button button-outline" disabled={busy}
-              onClick={() => void choose("declined")}>Decline research use</button>
-          </div>
-        </section>}
+      {error ? <Notice tone="error">{error}</Notice> : null}
 
-        <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4 text-xs space-y-2">
-          <div className="flex justify-between">
-            <span className="font-semibold text-slate-600">Current Status:</span>
-            <span className="font-mono font-bold uppercase text-slate-900">
-              {consentInfo?.choice ?? "not collected"}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="font-semibold text-slate-600">Consent Version:</span>
-            <span className="font-mono text-slate-700">{consentInfo?.version ?? "Pending approval"}</span>
-          </div>
-        </div>
-        {error && <p className="notice error" role="alert">{error}</p>}
+      {consent?.available && consent.previous_version ? (
+        <Notice tone="warning">
+          The consent form changed from version {consent.previous_version} to {consent.version}. Your earlier answer applied to
+          the old form, so it no longer counts. Please read the new form and answer again.
+        </Notice>
+      ) : null}
 
-        <div className="border-t border-slate-100 pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <p className="text-xs text-slate-500 max-w-sm">
-            Withdrawing never affects your access to quests, exams, or instructor course grades.
-          </p>
-          <button
-            type="button"
-            onClick={handleWithdraw}
-            disabled={consentInfo?.choice === "withdrawn" || busy || !consentInfo}
-            className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-bold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
-          >
-            {consentInfo?.choice === "withdrawn"
-              ? "Participation Withdrawn"
-              : "Withdraw from Research"}
-          </button>
-        </div>
+      {consent && !consent.available ? (
+        <Notice tone="info">
+          The study isn&apos;t open yet. Nothing about your learning is collected for research.
+          {choice === "accepted" ? " Your earlier agreement still applies until you withdraw it." : ""}
+        </Notice>
+      ) : null}
 
-        <div className="pt-2 border-t border-slate-100">
-          <Link href="/dashboard" className="text-xs font-semibold text-[#156046] hover:underline">
-            ← Return to dashboard
-          </Link>
-        </div>
-      </div>
+      <section className="ws-panel" aria-labelledby="consent-facts-title">
+        <h2 id="consent-facts-title">What research use means</h2>
+        <ConsentFacts />
+      </section>
+
+      {consent?.available && consent.text ? (
+        <section className="ws-panel" aria-labelledby="consent-text-title">
+          <h2 id="consent-text-title">Consent form, version {consent.version}</h2>
+          <p className="research-consent-text">{consent.text}</p>
+          {choice === "accepted" ? null : (
+            <div className="ws-inline-actions">
+              <Button variant="outline" disabled={busy} onClick={() => void choose("accepted")}>I agree to research use</Button>
+              <Button variant="outline" disabled={busy} onClick={() => void choose("declined")}>
+                {choice === "declined" ? "Keep declining" : "Decline research use"}
+              </Button>
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {choice === "accepted" ? (
+        <section className="ws-panel" aria-labelledby="withdraw-title">
+          <h2 id="withdraw-title">Withdraw from the study</h2>
+          <p>You agreed to version {consent?.version}. Withdrawing leaves your data out of future research exports and forecasts.</p>
+          <Button variant="danger" disabled={busy} onClick={() => setConfirmWithdraw(true)}>Withdraw from research</Button>
+        </section>
+      ) : null}
+
+      <Link className="ws-text-link" href="/dashboard">← Back to dashboard</Link>
+
+      <ConfirmDialog open={confirmWithdraw} title="Withdraw from the study?" confirmLabel="Withdraw" tone="danger" busy={busy}
+        onCancel={() => setConfirmWithdraw(false)} onConfirm={() => void choose("withdrawn")}>
+        <p>Your data will be left out of future research exports and forecasts. Data already exported before today stays in
+          that export. Your grades, XP and access don&apos;t change.</p>
+      </ConfirmDialog>
     </section>
   );
 }

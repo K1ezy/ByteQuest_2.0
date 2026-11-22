@@ -27,6 +27,8 @@ export interface CourseList {
   courses: CourseSummary[];
   default_course_id: string | null;
   timezone?: string;
+  /** False hides the Model evaluation menu entry (ML plan D9). */
+  model_evaluation_available?: boolean;
 }
 
 export interface ActivityAnalysis {

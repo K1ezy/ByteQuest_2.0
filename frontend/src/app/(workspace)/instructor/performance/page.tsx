@@ -33,6 +33,9 @@ import { MeasureDefinitions, UpdatedAt } from "@/components/insights/ui";
 import { type Dashboard, type Detail, PERIODS, READINESS_MESSAGES, isPeriod } from "../ml/types";
 import { LearnerForecast, Trend, compareNumbers, outlookOf, forecastTone } from "./forecasts";
 
+/** One advisory note wherever forecasts appear, so instructors read them the same way. */
+const OUTLOOK_NOTE = "Outlook estimates each consented learner's chance that their first submission on their next coding challenge passes. It is advisory, for instructors only: students never see it, and it changes no grade or access.";
+
 function FacultyPerformance() {
   const { courseId } = useWorkspace();
   const router = useRouter();
@@ -135,7 +138,7 @@ function FacultyPerformance() {
         <p className="ws-muted">The period changes reported history only. It never changes model inputs, the next activity, or whether a forecast is available.</p>
         {ml.error && <InlineError onRetry={ml.reload}/>}
         {forecastData ? <Trend points={forecastData.trend} events={forecastData.summary.graded_events} timezone={forecastData.aggregation_timezone} label="Class score trend"/> : ml.loading && <RowSkeleton/>}
-        {forecastData && !available && <p className="ws-muted">{READINESS_MESSAGES[forecastData.readiness.status] || READINESS_MESSAGES.unavailable} <Link href={"/instructor/ml?course=" + courseId}>Model evaluation</Link></p>}
+        {forecastData && !available && <p className="ws-muted">{READINESS_MESSAGES[forecastData.readiness.status] || READINESS_MESSAGES.unavailable} Once it&apos;s on, an Outlook column appears. {OUTLOOK_NOTE} <Link href={"/instructor/ml?course=" + courseId}>Model evaluation</Link></p>}
       </Section>
       <Toolbar label="Performance filters">
         <SearchField value={search} onChange={setSearch} onSubmit={() => updateQuery({ q: search || null })} placeholder="Search learners" label="Search learners" />
@@ -174,7 +177,9 @@ function FacultyPerformance() {
           value: data.summary.average_score == null ? "—" : data.summary.average_score + "%", note: data.summary.latest_activity_title ?? "No graded attempts yet" },
         { label: metrics.activities_passed.label, value: data.summary.average_completion_percent == null ? "—" : data.summary.average_completion_percent + "%", note: "avg of " + data.summary.published_activities + " published activities" },
         { label: metrics.not_started.label, value: data.summary.need_follow_up },
-      ]}/><MeasureDefinitions names={["activities_passed","latest_activity_average","not_started","inactive_7d"]}/>
+      ]}/><MeasureDefinitions names={["activities_passed","latest_activity_average","not_started","inactive_7d"]}>
+        {available ? <li><strong>Outlook</strong> · {OUTLOOK_NOTE}</li> : null}
+      </MeasureDefinitions>
       {data.summary.as_of && <UpdatedAt at={data.summary.as_of}/>}</>}
       {!loading && data && !rows.length && <InlineEmpty>{hasFilters ? "No learners match these filters" : "No students enrolled yet"} {hasFilters && <Button onClick={clear}>Clear filters</Button>}</InlineEmpty>}
       <div id="instructor-roster">

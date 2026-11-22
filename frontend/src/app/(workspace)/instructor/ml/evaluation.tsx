@@ -102,9 +102,11 @@ function ConfusionMatrix({ name, score }: { name: string; score: PartitionScore 
 function ComparisonTable({
   caption,
   rows,
+  intervals,
 }: {
   caption: string;
   rows: { key: string; score: PartitionScore | undefined }[];
+  intervals?: Intervals;
 }) {
   const present = rows.filter((row) => row.score);
   if (!present.length) return <p className="ws-muted">No results for this partition.</p>;
@@ -126,17 +128,59 @@ function ComparisonTable({
           {present.map((row) => (
             <tr key={row.key}>
               <th scope="row">{modelName(row.key)}</th>
-              {METRIC_COLUMNS.map((column) => (
-                <td key={column.key} data-label={column.label}>
-                  {metric(row.score?.[column.key])}
-                </td>
-              ))}
+              {METRIC_COLUMNS.map((column) => {
+                const range = intervals?.[row.key]?.metrics?.[column.key];
+                return (
+                  <td key={column.key} data-label={column.label}>
+                    {metric(row.score?.[column.key])}
+                    {range ? <span className="ws-row-meta">95%: {metric(range.low)}–{metric(range.high)}</span> : null}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
       </table>
     </div>
   );
+}
+
+type Intervals = NonNullable<OfflineReport["confidence_intervals"]>;
+
+/** Purpose, advisory use and status, so the page reads correctly before any results exist. */
+function AboutForecasts({ report }: { report: OfflineReport | null }) {
+  return (
+    <Section title="What this page shows">
+      <p>
+        Two models, logistic regression and random forest, estimate whether a learner&rsquo;s <strong>first graded
+        submission on their next coding challenge</strong> will pass. Forecasts are <strong>advisory for instructors
+        only</strong>: students never see them, and they never change grades, XP, access or what a student is offered next.
+      </p>
+      {report ? (
+        <p>
+          <strong>Status:</strong> approved model {report.model_version} is described below, with each test metric&rsquo;s
+          95% interval and whether the test data is large enough to rely on.
+        </p>
+      ) : (
+        <p>
+          <strong>Status:</strong> no approved model yet. Results appear after the pilot&rsquo;s consented data is trained and
+          reviewed. This page will then show each model&rsquo;s test metrics with 95% intervals, the comparison baselines, and
+          whether the test data is large enough to rely on.
+        </p>
+      )}
+    </Section>
+  );
+}
+
+/** ML plan D7: without enough test learners and rows of each outcome, results are indicative only. */
+function AdequacyNotice({ adequacy }: { adequacy: OfflineReport["adequacy"] }) {
+  if (!adequacy || adequacy.met === undefined) return null;
+  const rows = adequacy.test_rows_per_class || {};
+  const counts = `${adequacy.test_learners ?? 0} learners, with ${rows.successful ?? 0} passed and ${rows.unsuccessful ?? 0} not passed rows`;
+  const minimum = `at least ${adequacy.min_test_learners ?? 6} learners and ${adequacy.min_rows_per_class ?? 15} rows of each outcome`;
+  return adequacy.met
+    ? <p className="ws-muted">Adequacy check met: the test partition has {counts} ({minimum} are required).</p>
+    : <Notice tone="warning"><strong>Indicative only.</strong> The test partition has {counts}; {minimum} are needed for a reliable estimate.</Notice>;
 }
 
 function Methodology({ report }: { report: OfflineReport | null }) {
@@ -218,6 +262,10 @@ function OfflineComparison({ report }: { report: OfflineReport | null }) {
       y: row.score!.pr_curve!.precision || [],
     }));
   const validation = report.selection?.validation_average_precision || {};
+  // Intervals and the supplementary report describe the held-out test partition only.
+  const testIntervals = partition === "test" ? report.confidence_intervals : undefined;
+  const resampling = testIntervals ? Object.values(testIntervals)[0] : undefined;
+  const live = partition === "test" ? report.supplementary?.live_eligible : undefined;
 
   return (
     <>
@@ -292,11 +340,31 @@ function OfflineComparison({ report }: { report: OfflineReport | null }) {
         data, so validation figures are not an independent estimate of future performance.
       </p>
 
+      <AdequacyNotice adequacy={report.adequacy} />
+
       <h3>Model comparison</h3>
-      <ComparisonTable caption={`Model metrics on the ${partition} partition`} rows={rows} />
+      <ComparisonTable caption={`Model metrics on the ${partition} partition`} rows={rows} intervals={testIntervals} />
 
       <h3>Baselines</h3>
-      <ComparisonTable caption={`Baseline metrics on the ${partition} partition`} rows={baselineRows} />
+      <ComparisonTable caption={`Baseline metrics on the ${partition} partition`} rows={baselineRows} intervals={testIntervals} />
+      {resampling ? (
+        <p className="ws-muted">
+          95% intervals come from {resampling.n_resamples} learner-level bootstrap resamples of the test partition
+          {resampling.skipped_single_class ? `; ${resampling.skipped_single_class} were skipped because they held only one outcome` : ""}.
+        </p>
+      ) : null}
+
+      {live ? (
+        <>
+          <h3>Learners eligible for a live forecast</h3>
+          <p className="ws-muted">
+            <strong>Supplementary: never used to choose the model.</strong> The same frozen models, scored on test rows where
+            the learner had at least {live.min_prior_tasks ?? 3} earlier tasks in the course, the rule a live forecast needs.
+          </p>
+          <ComparisonTable caption="Test metrics for learners eligible for a live forecast"
+            rows={[...Object.entries(live.models), ...Object.entries(live.baselines)].map(([key, score]) => ({ key, score }))} />
+        </>
+      ) : null}
 
       <h3>Confusion matrices</h3>
       <div className="ml-chart-grid">
@@ -379,6 +447,7 @@ export default function ModelEvaluation({
     <>
       {error ? <InlineError onRetry={reload}/> : null}
       {loading && !data ? <RowSkeleton/> : null}
+      {data ? <AboutForecasts report={data.offline.report} /> : null}
       {data && observed ? (
         <>
           {data.readiness && <p className="ws-muted">{data.readiness.forecasts_available ? "Forecast scoring is available." : READINESS_MESSAGES[data.readiness.status] || READINESS_MESSAGES.unavailable}</p>}

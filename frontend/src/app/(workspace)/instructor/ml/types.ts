@@ -168,6 +168,20 @@ export type OfflineReport = {
   };
   models: Record<string, PartitionReport>;
   baselines: Record<string, PartitionReport>;
+  /** Learner-level bootstrap 95% intervals on the test partition, per model or baseline. */
+  confidence_intervals?: Record<string, {
+    level: number; n_resamples: number; skipped_single_class: number;
+    metrics: Record<string, { low: number | null; high: number | null }>;
+  }>;
+  /** The predeclared minimum-data rule (ML plan D7). */
+  adequacy?: {
+    min_test_learners?: number; min_rows_per_class?: number; test_learners?: number;
+    test_rows_per_class?: { successful?: number; unsuccessful?: number }; met?: boolean;
+  };
+  /** Test rows that meet the live minimum-history rule. Never used to choose the model. */
+  supplementary?: {
+    live_eligible?: { min_prior_tasks: number | null; models: Record<string, PartitionScore>; baselines: Record<string, PartitionScore> };
+  };
 };
 
 export type Evaluation = {
@@ -191,7 +205,9 @@ export const MODEL_NAMES: Record<string, string> = {
   logreg: "Logistic regression",
   random_forest: "Random forest",
   most_frequent: "Majority class baseline",
+  majority_class: "Majority class baseline",
   prior: "Prevalence baseline",
+  prevalence: "Prevalence baseline",
   stratified: "Prevalence baseline",
 };
 
