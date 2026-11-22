@@ -3551,3 +3551,29 @@ def test_workshop_progress_is_read_only_practice_and_current_members_only(flow):
     assert client.post(f"{path}/restore", headers=owner).status_code == 200
     assert client.delete(f"{path}/membership", headers=student).status_code == 204
     assert client.get(f"{path}/progress", headers=owner).json()["students"] == []
+
+
+def test_a_new_consent_form_version_asks_students_again(flow, monkeypatch):
+    """An answer to an older form no longer counts, so the student must be asked again, not silently dropped."""
+    from app.services.ml_predictor.consent import consented_student_ids
+
+    client, new_session, users = flow
+    student = _token(users["student"])
+    path = "/api/v1/pilot/research/consent"
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_ACTIVE", True)
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_TEXT", "Synthetic consent for tests only")
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_VERSION", "form-v1")
+    assert client.post(path, headers=student, json={"choice": "accepted", "document_version": "form-v1"}).status_code == 200
+    assert client.get(path, headers=student).json()["choice"] == "accepted"
+
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_VERSION", "form-v2")
+    status = client.get(path, headers=student).json()
+    assert (status["version"], status["choice"], status["previous_version"]) == ("form-v2", None, "form-v1")
+    with new_session() as db:
+        assert users["student"] not in consented_student_ids(db, [users["student"]])
+
+    assert client.post(path, headers=student, json={"choice": "accepted", "document_version": "form-v2"}).status_code == 200
+    status = client.get(path, headers=student).json()
+    assert (status["choice"], status["previous_version"]) == ("accepted", None)
+    with new_session() as db:
+        assert users["student"] in consented_student_ids(db, [users["student"]])

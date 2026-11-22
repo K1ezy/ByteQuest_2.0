@@ -9,6 +9,8 @@ export interface ConsentStatus {
   version: string | null;
   text: string | null;
   choice: "accepted" | "declined" | "withdrawn" | null;
+  /** Set when the student answered an older form, which no longer counts. */
+  previous_version?: string | null;
 }
 
 export const getConsent = () => apiRequest<ConsentStatus>("/pilot/research/consent");
@@ -67,6 +69,7 @@ export function ResearchConsentCard() {
     <section className="pilot-card dashboard-consent" aria-labelledby="consent-card-title">
       <p className="eyebrow-label">Research study</p>
       <h2 id="consent-card-title">Help a classroom study of ByteQuest?</h2>
+      {status.previous_version ? <p><strong>The consent form was updated,</strong> so your earlier answer no longer applies. Please answer again.</p> : null}
       <p>With your consent, your practice results can be used, under a research code, to study how students learn to code.
         Saying no changes nothing about your grades, XP or access.</p>
       <div className="pilot-actions">

@@ -375,9 +375,13 @@ def consent_status(user: Profile = Depends(get_current_user), db: Session = Depe
     latest = db.query(ResearchConsent).filter(ResearchConsent.student_id == user.id).order_by(
         ResearchConsent.event_order.desc()).first()
     active = bool(settings.RESEARCH_CONSENT_ACTIVE and settings.RESEARCH_CONSENT_VERSION and settings.RESEARCH_CONSENT_TEXT)
+    # An answer to an older form no longer counts (consent is matched on the current version), so it reads as
+    # unanswered and the student is asked again instead of silently dropping out of the study.
+    stale = bool(active and latest and latest.document_version != settings.RESEARCH_CONSENT_VERSION)
     return {"available": active, "version": settings.RESEARCH_CONSENT_VERSION if active else (latest.document_version if latest else None),
             "text": settings.RESEARCH_CONSENT_TEXT if active else None,
-            "choice": latest.choice if latest else None}
+            "choice": None if stale or not latest else latest.choice,
+            "previous_version": latest.document_version if stale else None}
 
 
 @router.post("/research/consent")

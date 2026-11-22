@@ -30,9 +30,9 @@
     "semantic_hash": ""
   },
   "backend/app/api/pilot.py": {
-    "mtime": 1795254525.6560333,
-    "seen": 1795255942.6984103,
-    "ast_hash": "e54c50a09bafae5c5107368e84cae64c",
+    "mtime": 1795336886.3976672,
+    "seen": 1795337150.6156557,
+    "ast_hash": "5bf0da58ec7aa07e4c0792aa99336a0c",
     "semantic_hash": ""
   },
   "backend/app/api/profiles.py": {
@@ -432,9 +432,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_learning_flow_integration.py": {
-    "mtime": 1795335154.2370155,
-    "seen": 1795335479.8953054,
-    "ast_hash": "66ea44084a3e41d618f6e17bea47599d",
+    "mtime": 1795336858.930273,
+    "seen": 1795337150.643332,
+    "ast_hash": "a277340fae045759a9c96fbb14ad98a5",
     "semantic_hash": ""
   },
   "backend/tests/test_ml_exam_features.py": {
@@ -516,9 +516,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/account/research/page.tsx": {
-    "mtime": 1795334963.325204,
-    "seen": 1795335479.902376,
-    "ast_hash": "aa4c101a8cc2301647b466e688c43f56",
+    "mtime": 1795336914.429868,
+    "seen": 1795337150.650343,
+    "ast_hash": "a909b00d27d39be8d738931222a69829",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/admin/accounts/page.tsx": {
@@ -2778,21 +2778,27 @@
     "semantic_hash": ""
   },
   "frontend/src/components/research-consent.test.tsx": {
-    "mtime": 1795335092.0358853,
-    "seen": 1795335479.938366,
-    "ast_hash": "f2a53cb9deb0e61de89e0f536b17c96d",
+    "mtime": 1795336978.478278,
+    "seen": 1795337150.6913395,
+    "ast_hash": "b01d8d564cd64321a4155fb1e8fb38b7",
     "semantic_hash": ""
   },
   "frontend/src/components/research-consent.tsx": {
-    "mtime": 1795334961.5713296,
-    "seen": 1795335479.938366,
-    "ast_hash": "bac03300934f264f5736f223e5cdad57",
+    "mtime": 1795336914.4288597,
+    "seen": 1795337150.6913395,
+    "ast_hash": "7c44a0ae0bfdadd2469e2136b5585058",
     "semantic_hash": ""
   },
   "docs/verification/ui-ux-harmonization-2026-11-21.md": {
     "mtime": 1795277635.4843166,
     "seen": 1795335479.9871657,
     "ast_hash": "078d9a3e0e6dc6bea63f35d61cb2a83a",
+    "semantic_hash": ""
+  },
+  "docs/reviews/system-review-2026-11-22.md": {
+    "mtime": 1795337122.3248808,
+    "seen": 1795337150.7343993,
+    "ast_hash": "28e0e3fcb55289b7dd132f69e81246e3",
     "semantic_hash": ""
   }
 }

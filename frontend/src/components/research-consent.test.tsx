@@ -10,7 +10,7 @@ import ResearchPage from "@/app/(workspace)/account/research/page";
 const status = (choice: string | null, available = true) =>
   ({ available, version: "dev-placeholder", text: "Development text: replace with the approved form.", choice });
 
-function serving(state: ReturnType<typeof status>) {
+function serving(state: ReturnType<typeof status> & { previous_version?: string }) {
   api.request.mockImplementation((path: string, init?: RequestInit) =>
     Promise.resolve(init?.method === "POST" ? { ok: true } : state));
 }
@@ -58,6 +58,17 @@ it("explains research use and confirms before withdrawing", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Withdraw" }));
   await waitFor(() => expect(api.request).toHaveBeenCalledWith("/pilot/research/consent",
     { method: "POST", body: JSON.stringify({ choice: "withdrawn", document_version: "dev-placeholder" }) }));
+});
+
+it("asks again, and says why, after the consent form changes", async () => {
+  serving({ ...status(null), previous_version: "form-v1" });
+  render(<ResearchConsentCard />);
+  expect(await screen.findByText(/your earlier answer no longer applies/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "I agree" })).toBeTruthy();
+  cleanup();
+  render(<ResearchPage />);
+  expect(await screen.findByText(/changed from version form-v1 to dev-placeholder/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "I agree to research use" })).toBeTruthy();
 });
 
 it("offers no withdrawal to a student who never agreed", async () => {

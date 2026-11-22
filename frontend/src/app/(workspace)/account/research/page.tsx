@@ -48,6 +48,13 @@ export default function ResearchConsentSettingsPage() {
 
       {error ? <Notice tone="error">{error}</Notice> : null}
 
+      {consent?.available && consent.previous_version ? (
+        <Notice tone="warning">
+          The consent form changed from version {consent.previous_version} to {consent.version}. Your earlier answer applied to
+          the old form, so it no longer counts. Please read the new form and answer again.
+        </Notice>
+      ) : null}
+
       {consent && !consent.available ? (
         <Notice tone="info">
           The study isn&apos;t open yet. Nothing about your learning is collected for research.
