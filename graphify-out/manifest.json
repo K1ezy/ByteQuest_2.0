@@ -2766,9 +2766,21 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_UI_UX_HARMONIZATION_PLAN.md": {
-    "mtime": 1795266850.7116022,
-    "seen": 1795268244.8247366,
-    "ast_hash": "7a5cb085ed8f64b3502e3ddbb1b206e8",
+    "mtime": 1795277646.9192984,
+    "seen": 1795315392.8822126,
+    "ast_hash": "75e4ab7d071ecbaf316c17d3ad8543cd",
+    "semantic_hash": ""
+  },
+  "backend/scripts/seed_local_4cs_workshops.py": {
+    "mtime": 1795315361.0639708,
+    "seen": 1795315392.778065,
+    "ast_hash": "3e93c237cdbb7d3f770dc4b01a47d35a",
+    "semantic_hash": ""
+  },
+  "docs/verification/ui-ux-harmonization-2026-11-21.md": {
+    "mtime": 1795277635.4843166,
+    "seen": 1795315392.9022126,
+    "ast_hash": "078d9a3e0e6dc6bea63f35d61cb2a83a",
     "semantic_hash": ""
   }
 }
