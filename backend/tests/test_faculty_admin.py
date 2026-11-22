@@ -915,6 +915,22 @@ def test_course_announcement_validation_and_limits(workspace):
     assert feed[0]["author_name"] == "Your instructor"
 
 
+def test_trend_reports_how_many_results_each_daily_average_uses():
+    events = [
+        {"at": "2026-11-06T01:00:00Z", "kind": "challenge", "score_percentage": 0.0},
+        {"at": "2026-11-06T23:59:00Z", "kind": "challenge", "score_percentage": 0.0},
+        {"at": "2026-11-06T10:00:00Z", "kind": "quiz", "score_percentage": 50.0},
+        {"at": "2026-11-07T00:00:00Z", "kind": "quiz", "score_percentage": 100.0},
+        {"at": None, "kind": "exam", "score_percentage": 90.0},
+    ]
+    assert faculty_ml_api._trend(events) == [
+        {"date": "2026-11-06", "quiz": 50.0, "challenge": 0.0, "exam": None,
+         "quiz_count": 1, "challenge_count": 2, "exam_count": 0},
+        {"date": "2026-11-07", "quiz": 100.0, "challenge": None, "exam": None,
+         "quiz_count": 1, "challenge_count": 0, "exam_count": 0},
+    ]
+
+
 def test_forecast_history_and_quality_never_cross_course_boundaries(workspace, monkeypatch):
     client, db_session, ids = workspace
     monkeypatch.setattr(settings, "RESEARCH_CONSENT_ACTIVE", True)
@@ -1207,7 +1223,7 @@ def test_ml_exam_history_waits_for_release_and_uses_overall_score_once(workspace
         assert after["students"][0]["challenge_count"] == 1
         detail = client.get(f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_a']}",
                             headers=_token(ids["faculty"])).json()
-        assert any(point["exam"] == 80.0 for point in detail["trend"])
+        assert any(point["exam"] == 80.0 and point["exam_count"] == 1 for point in detail["trend"])
         summary = released_exam_summary(db, exam.id, learners, [attempt])
         assert summary["average_percent"] == 80
         later = ExamAttempt(exam_id=exam.id, student_id=ids["student"], attempt_number=2,
@@ -1535,6 +1551,16 @@ def test_monitoring_reports_real_states_and_audit_is_searchable(workspace):
     audit = client.get("/api/v1/admin/audit?search=setting", headers=headers)
     assert audit.status_code == 200
     assert isinstance(audit.json()["items"], list)
+
+    # A job's detail lists only its own material's entries.
+    with _db() as db:
+        db.add_all([AuditEvent(action="material.retry_failed", entity_type="material", entity_id=str(ids["document"]),
+                               summary="Retry for the lesson failed"),
+                    AuditEvent(action="material.reprocessed", entity_type="material",
+                               entity_id=str(ids["other_document"]), summary="Another material")])
+        db.commit()
+    own = client.get("/api/v1/admin/audit", params={"entity_id": str(ids["document"])}, headers=headers).json()["items"]
+    assert [item["summary"] for item in own] == ["Retry for the lesson failed"]
 
 
 @pytest.mark.parametrize("worker_running", [False, True])
@@ -1905,3 +1931,150 @@ def test_studio_generation_is_limited_to_course_instructors(workspace):
     client, _, ids = workspace
     assert client.get("/api/v1/instructor/workspace", headers=_token(ids["admin"])).status_code == 403
     assert client.get("/api/v1/instructor/workspace", headers=_token(ids["faculty"])).status_code == 200
+
+
+def _set_school_ids(new_session, ids, **by_name):
+    with new_session() as db:
+        for name, school_id in by_name.items():
+            db.get(Profile, ids[name]).school_id = school_id
+        db.commit()
+
+
+def test_bulk_enrollment_previews_each_group_then_enrolls_each_student_once(workspace):
+    client, new_session, ids = workspace
+    _set_school_ids(new_session, ids, student="26-90001", other_student="26-90002", other_faculty="26-90003")
+    admin = _token(ids["admin"])
+    body = {"course_id": str(ids["course_a"]),
+            "school_ids": "26-90001, 26-90002\n26-90002 26-90003;26-99999 abc 26-00000"}
+
+    plan = client.post("/api/v1/admin/enrollments/preview", json=body, headers=admin).json()["plan"]
+    assert [i["school_id"] for i in plan["will_enroll"]] == ["26-90002"]
+    assert [i["school_id"] for i in plan["already_enrolled"]] == ["26-90001"]
+    assert [(i["school_id"], i["reason"]) for i in plan["not_eligible"]] == [("26-90003", "Not a student account")]
+    assert [i["school_id"] for i in plan["not_found"]] == ["26-99999"]
+    assert [i["school_id"] for i in plan["invalid"]] == ["abc", "26-00000"]
+
+    with new_session() as db:
+        db.get(Profile, ids["other_student"]).account_status = "deactivated"
+        db.commit()
+    plan = client.post("/api/v1/admin/enrollments/preview", json=body, headers=admin).json()["plan"]
+    assert plan["will_enroll"] == []
+    assert ("26-90002", "Account is deactivated") in [(i["school_id"], i["reason"]) for i in plan["not_eligible"]]
+    with new_session() as db:
+        db.get(Profile, ids["other_student"]).account_status = "active"
+        db.commit()
+
+    enrolled = client.post("/api/v1/admin/enrollments", json=body, headers=admin)
+    assert enrolled.status_code == 200 and enrolled.json()["enrolled"] == 1
+    again = client.post("/api/v1/admin/enrollments", json=body, headers=admin).json()
+    assert again["enrolled"] == 0
+    assert [i["school_id"] for i in again["plan"]["already_enrolled"]] == ["26-90001", "26-90002"]
+    with new_session() as db:
+        assert db.query(CourseMember).filter_by(course_id=ids["course_a"], profile_id=ids["other_student"],
+                                                member_role="student", status="active").count() == 1
+        audits = db.query(AuditEvent).filter(AuditEvent.action == "assignment.created",
+                                             AuditEvent.course_id == ids["course_a"]).all()
+        assert len(audits) == 1 and "as student in Introduction to Python" in audits[0].summary
+        membership = db.query(CourseMember).filter_by(course_id=ids["course_a"], profile_id=ids["other_student"],
+                                                      member_role="student").one()
+        assert audits[0].entity_id == str(membership.id)
+
+    too_many = {"course_id": str(ids["course_a"]), "school_ids": " ".join(f"26-{n:05d}" for n in range(1, 202))}
+    response = client.post("/api/v1/admin/enrollments/preview", json=too_many, headers=admin)
+    assert response.status_code == 422 and response.json()["detail"]["code"] == "too_many_ids"
+    assert client.post("/api/v1/admin/enrollments/preview", json=body, headers=_token(ids["faculty"])).status_code == 403
+
+
+def test_archiving_a_course_closes_its_activities_keeps_history_and_restores(workspace):
+    from app.models.entities import Workshop, WorkshopActivity, WorkshopMember
+    from app.services.attempt_visibility import student_activity_clause
+    from app.services.course_access import active_membership_course_ids
+
+    client, new_session, ids = workspace
+    with new_session() as db:  # other_student reaches the activity only through a workshop
+        workshop = Workshop(name="Archive check", language=ProgrammingLang.python, created_by=ids["faculty"],
+                            join_code=uuid.uuid4().hex[:8].upper())
+        db.add(workshop)
+        db.flush()
+        db.add_all([WorkshopMember(workshop_id=workshop.id, profile_id=ids["other_student"]),
+                    WorkshopActivity(workshop_id=workshop.id, activity_id=ids["published"])])
+        db.commit()
+
+    def visible(student):
+        with new_session() as db:
+            return db.query(LearningActivity.id).filter(
+                LearningActivity.id == ids["published"], student_activity_clause(ids[student])).first() is not None
+
+    admin, faculty = _token(ids["admin"]), _token(ids["faculty"])
+    assert visible("student") and visible("other_student")
+    assert client.post(f"/api/v1/admin/courses/{ids['course_a']}/archive", headers=faculty).status_code == 403
+    assert client.post(f"/api/v1/admin/courses/{ids['course_a']}/archive", headers=admin).status_code == 200
+    assert not visible("student") and not visible("other_student")
+    with new_session() as db:
+        assert db.query(ActivityAttempt).filter_by(student_id=ids["student"], activity_id=ids["published"]).count() == 1
+        assert ids["course_a"] not in active_membership_course_ids(db, ids["faculty"], "instructor")
+    blocked = client.get("/api/v1/faculty/performance", params={"course_id": str(ids["course_a"])}, headers=faculty)
+    assert blocked.status_code == 404 and blocked.json()["detail"]["code"] == "course_archived"
+    listed = {c["id"]: c["status"] for c in client.get("/api/v1/admin/courses", headers=admin).json()["courses"]}
+    assert listed[str(ids["course_a"])] == "archived"
+
+    assert client.post(f"/api/v1/admin/courses/{ids['course_a']}/restore", headers=admin).status_code == 200
+    assert visible("student") and visible("other_student")
+    restored = client.get("/api/v1/faculty/performance", params={"course_id": str(ids["course_a"])}, headers=faculty)
+    assert restored.status_code == 200
+    with new_session() as db:
+        actions = [a for (a,) in db.query(AuditEvent.action).filter(AuditEvent.course_id == ids["course_a"])]
+        assert "course.archived" in actions and "course.restored" in actions
+
+
+def test_archive_is_blocked_while_an_exam_using_the_course_is_open_or_scheduled(workspace):
+    client, new_session, ids = workspace
+    now = datetime.now(timezone.utc)
+    with new_session() as db:
+        exam = Exam(created_by=ids["faculty"], title="Midterm", opens_at=now + timedelta(days=1),
+                    closes_at=now + timedelta(days=1, hours=1), duration_minutes=45, published_at=now)
+        db.add(exam)
+        db.flush()
+        db.add(ExamItem(exam_id=exam.id, activity_id=ids["published"], position=1, points=10, snapshot_json={}))
+        db.commit()
+        exam_id = exam.id
+    admin = _token(ids["admin"])
+    impact = client.get(f"/api/v1/admin/courses/{ids['course_a']}/impact", headers=admin).json()
+    assert [e["title"] for e in impact["blocking_exams"]] == ["Midterm"] and impact["students"] == 1
+    refused = client.post(f"/api/v1/admin/courses/{ids['course_a']}/archive", headers=admin)
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "course_has_exam"
+    with new_session() as db:
+        assert db.get(Course, ids["course_a"]).status == "active"
+        exam = db.get(Exam, exam_id)
+        exam.opens_at, exam.closes_at = now - timedelta(days=2), now - timedelta(days=1)
+        db.commit()
+    assert client.post(f"/api/v1/admin/courses/{ids['course_a']}/archive", headers=admin).status_code == 200
+
+
+def test_course_creation_audit_entry_links_to_the_new_course(workspace):
+    client, new_session, ids = workspace
+    created = client.post("/api/v1/admin/courses", json={"code": "LINK-1", "title": "Linked course"},
+                          headers=_token(ids["admin"]))
+    assert created.status_code == 201
+    course_id = created.json()["course"]["id"]
+    with new_session() as db:
+        event = db.query(AuditEvent).filter(AuditEvent.action == "course.created",
+                                            AuditEvent.entity_id == course_id).one()
+        assert str(event.course_id) == course_id
+
+
+def test_course_edit_changes_title_and_description_with_an_audit_entry(workspace):
+    client, new_session, ids = workspace
+    path = f"/api/v1/admin/courses/{ids['course_a']}"
+    body = {"title": "Intermediate Programming - Python", "description": "Year 4"}
+    assert client.patch(path, json=body, headers=_token(ids["faculty"])).status_code == 403
+    saved = client.patch(path, json=body, headers=_token(ids["admin"]))
+    assert saved.status_code == 200 and saved.json()["message"] == "Course saved."
+    assert client.patch(path, json=body, headers=_token(ids["admin"])).json()["message"] == "No changes to save."
+    assert client.patch(path, json={**body, "code": "NEW"}, headers=_token(ids["admin"])).status_code == 422
+    with new_session() as db:
+        course = db.get(Course, ids["course_a"])
+        assert (course.title, course.description) == ("Intermediate Programming - Python", "Year 4")
+        summary = db.query(AuditEvent.summary).filter(AuditEvent.action == "course.updated",
+                                                      AuditEvent.course_id == ids["course_a"]).scalar()
+        assert "renamed from Introduction to Python" in summary

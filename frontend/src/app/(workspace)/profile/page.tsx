@@ -31,6 +31,7 @@ import { ProfileHeader, ROLE_LABEL } from "@/components/profile/profile-header";
 import { MeterList, PracticeLink } from "@/components/insights/ui";
 import { InsightLineChart } from "@/components/insights/line-chart";
 import { metrics } from "@/lib/insight-metrics";
+import { formatManilaDateTime } from "@/lib/activity-date";
 import { DebuggerCodex } from "@/components/profile/debugger-codex";
 
 // Informational feedback on process (independence, trying before asking), never a score or a penalty.
@@ -109,8 +110,10 @@ function StudentSections({ a }: { a: StudentAnalytics }) {
           </div>
           <InsightLineChart label="Recent score trend" xLabel="Attempt date" domain={[0,100]} numericX
             formatX={time => formatDateTime(new Date(Number(time)).toISOString())}
-            rows={a.score_trend.map(p => ({ x: Date.parse(p.created_at), score: p.score_percentage }))}
+            rows={a.score_trend.map(p => ({ x: Date.parse(p.created_at), score: p.score_percentage, title: p.title }))}
             series={[{ key: "score", label: "Score (%)", token: "var(--chart-series)" }]}
+            tooltip={{ title: row => (row.title || "Activity") + " · " + formatManilaDateTime(new Date(Number(row.x)).toISOString()),
+              value: (_, row) => Math.round(Number(row.score)) + "%" }}
             summary={a.score_trend.length ? "From " + Math.round(a.score_trend[0].score_percentage) + "% to "
               + Math.round(a.score_trend[a.score_trend.length - 1].score_percentage) + "% across " + a.score_trend.length + " attempts." : ""} />
           {a.score_trend.length > 0 ? (

@@ -121,7 +121,7 @@ export function pageLabel(path: string): string {
   if (belongsTo(path, "/arena")) return "Coding Arena";
   if (belongsTo(path, "/quiz")) return "Concept Check";
   if (belongsTo(path, "/exams")) return "Exam";
-  const labels: Record<string, string> = { ml: "Model evaluation", review: "Review drafts", research: "Research Participation", chat: "Chat Assistant", preview: "Student Preview", studio: "Authoring Studio", onboarding: "Learning Track", assignments: "Course Assignments" };
+  const labels: Record<string, string> = { ml: "Model evaluation", review: "Review drafts", research: "Research Participation", chat: "Chat Assistant", preview: "Student Preview", studio: "Authoring Studio", onboarding: "Learning Track", assignments: "Course access" };
   if (belongsTo(path, "/submissions")) return "Submission Status";
   return labels[label] ?? (label.charAt(0).toUpperCase() + label.slice(1));
 }

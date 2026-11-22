@@ -10,6 +10,7 @@ from sqlalchemy import and_, exists, or_
 from app.models.entities import (
     ActivityAttempt,
     ActivityKind,
+    Course,
     CourseMember,
     ExamAttempt,
     LearningActivity,
@@ -65,8 +66,16 @@ def activity_accepts_submissions_clause(now: datetime | None = None):
     )
 
 
+def course_open_clause():
+    """Activities without a course are global; an archived course's activities are closed everywhere."""
+    return or_(
+        LearningActivity.course_id.is_(None),
+        exists().where(Course.id == LearningActivity.course_id, Course.status == "active").correlate_except(Course),
+    )
+
+
 def workshop_shareable_activity_clause(owner_id):
-    """A workshop may share global activities or content its owner can teach."""
+    """A workshop may share global activities or content its owner can teach, while its course is open."""
     teaches_course = exists().where(
         CourseMember.profile_id == owner_id,
         CourseMember.course_id == LearningActivity.course_id,
@@ -78,7 +87,7 @@ def workshop_shareable_activity_clause(owner_id):
         Profile.account_status == "active",
         or_(Profile.role == UserRole.admin, and_(Profile.role == UserRole.instructor, teaches_course)),
     ).correlate_except(Profile)
-    return or_(LearningActivity.course_id.is_(None), authorized_owner)
+    return and_(course_open_clause(), or_(LearningActivity.course_id.is_(None), authorized_owner))
 
 
 def guard_solution_reopen(
@@ -122,6 +131,7 @@ def student_activity_clause(student_id: uuid.UUID):
 
     An activity with no course belongs to no one and cannot be scoped, so it stays
     visible to its language track: seeded content must not vanish silently.
+    An archived course closes its activities on both paths; past attempts stay on record.
     """
     in_course = exists().where(
         and_(
@@ -139,7 +149,7 @@ def student_activity_clause(student_id: uuid.UUID):
             workshop_shareable_activity_clause(Workshop.created_by),
         )
     ).correlate(LearningActivity)
-    return or_(LearningActivity.course_id.is_(None), in_course, in_workshop)
+    return and_(course_open_clause(), or_(LearningActivity.course_id.is_(None), in_course, in_workshop))
 
 
 def student_visible_activity_clause(student_id: uuid.UUID, now: datetime | None = None):

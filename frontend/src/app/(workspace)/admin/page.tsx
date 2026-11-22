@@ -170,10 +170,6 @@ function AdminDashboardPage() {
               operations belong here; draft approval, answer keys, hidden tests and grade changes stay with assigned
               instructors.
             </p>
-            <div className="ws-inline-actions">
-              <Link className="button button-outline small" href="/admin/assignments">Manage assignments</Link>
-              <Link className="button button-outline small" href="/admin/configuration">Configuration</Link>
-            </div>
           </section>
         </div>
       </div>

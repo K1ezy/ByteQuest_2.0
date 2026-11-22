@@ -13,6 +13,9 @@ export default function EngagementChart({ weeks, codexWeek, memoryWeek }: {
   const latest = rows.filter(r => r.share !== null).at(-1);
   return <InsightLineChart rows={rows} domain={[0,100]} xLabel="Week" label="Learners active each week"
     series={[{key:"share",label:"Active learners (%)",token:"var(--chart-series)"}]}
+    // Hidden weeks carry only nulls, so the tooltip cannot reveal what the table suppresses.
+    tooltip={{ value: (_, r) => r.share === null ? "Not enough data yet"
+      : `${r.share}% active · ${r.active} of ${r.reached} learners · ${r.events} practice events` }}
     summary={latest ? latest.share + "% practised in " + latest.x + "." : "Not enough data yet."}
     references={[{x:"Week "+(codexWeek+1),label:"Codex unlocks"},{x:"Week "+(memoryWeek+1),label:"Memory unlocks"}]}
     table={<table className="ws-table insights-table"><caption>Learners active each week since their first activity</caption>

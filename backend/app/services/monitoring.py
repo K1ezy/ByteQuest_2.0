@@ -265,10 +265,13 @@ def job_query(db: Session, *, service: str | None = None, status: str | None = N
     return query.order_by(ProcessingJob.created_at.desc()).limit(200)
 
 
-def audit_query(db: Session, *, search: str | None = None, course_ids: list[uuid.UUID] | None = None, limit: int = 50):
+def audit_query(db: Session, *, search: str | None = None, course_ids: list[uuid.UUID] | None = None, limit: int = 50,
+                entity_id: str | None = None):
     from app.models.entities import AuditEvent
 
     query = db.query(AuditEvent)
+    if entity_id:
+        query = query.filter(AuditEvent.entity_id == entity_id)
     if course_ids is not None:
         query = query.filter(AuditEvent.course_id.in_(course_ids)) if course_ids else query.filter(AuditEvent.course_id.is_(None))
     if search:
