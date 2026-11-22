@@ -908,6 +908,22 @@ def test_course_announcement_validation_and_limits(workspace):
     assert feed[0]["author_name"] == "Your instructor"
 
 
+def test_trend_reports_how_many_results_each_daily_average_uses():
+    events = [
+        {"at": "2026-11-06T01:00:00Z", "kind": "challenge", "score_percentage": 0.0},
+        {"at": "2026-11-06T23:59:00Z", "kind": "challenge", "score_percentage": 0.0},
+        {"at": "2026-11-06T10:00:00Z", "kind": "quiz", "score_percentage": 50.0},
+        {"at": "2026-11-07T00:00:00Z", "kind": "quiz", "score_percentage": 100.0},
+        {"at": None, "kind": "exam", "score_percentage": 90.0},
+    ]
+    assert faculty_ml_api._trend(events) == [
+        {"date": "2026-11-06", "quiz": 50.0, "challenge": 0.0, "exam": None,
+         "quiz_count": 1, "challenge_count": 2, "exam_count": 0},
+        {"date": "2026-11-07", "quiz": 100.0, "challenge": None, "exam": None,
+         "quiz_count": 1, "challenge_count": 0, "exam_count": 0},
+    ]
+
+
 def test_forecast_history_and_quality_never_cross_course_boundaries(workspace, monkeypatch):
     client, db_session, ids = workspace
     monkeypatch.setattr(settings, "RESEARCH_CONSENT_ACTIVE", True)
@@ -1200,7 +1216,7 @@ def test_ml_exam_history_waits_for_release_and_uses_overall_score_once(workspace
         assert after["students"][0]["challenge_count"] == 1
         detail = client.get(f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_a']}",
                             headers=_token(ids["faculty"])).json()
-        assert any(point["exam"] == 80.0 for point in detail["trend"])
+        assert any(point["exam"] == 80.0 and point["exam_count"] == 1 for point in detail["trend"])
         summary = released_exam_summary(db, exam.id, learners, [attempt])
         assert summary["average_percent"] == 80
         later = ExamAttempt(exam_id=exam.id, student_id=ids["student"], attempt_number=2,

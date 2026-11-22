@@ -112,6 +112,8 @@ def _trend(events: list[dict]) -> list[dict]:
                 kind: round(sum(kinds[kind]) / len(kinds[kind]), 1) if kinds[kind] else None
                 for kind in ("quiz", "challenge", "exam")
             },
+            # How many results each average is built from, so a chart can say "0% from 2 attempts".
+            **{f"{kind}_count": len(kinds[kind]) for kind in ("quiz", "challenge", "exam")},
         }
         for day, kinds in sorted(daily.items())
     ]

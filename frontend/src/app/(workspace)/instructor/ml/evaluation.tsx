@@ -38,7 +38,7 @@ function metric(value: number | null | undefined): string {
   return value === null || value === undefined ? "—" : value.toFixed(3);
 }
 
-function CurveChart({
+export function CurveChart({
   label,
   xLabel,
   yLabel,
@@ -61,7 +61,10 @@ function CurveChart({
   }).sort((a, b) => a.x - b.x);
   const lines = curves.map(s => ({key:s.key,label:modelName(s.key),token:s.key === "logreg" ? "var(--chart-series)" : "var(--chart-series-2)",dash:s.key === "logreg" ? undefined : "7 4"}));
   return <InsightLineChart rows={rows} series={lines} label={label} summary={yLabel + " by " + xLabel.toLowerCase() + " for the selected partition."}
-    xLabel={xLabel} domain={[0,1]} numericX connectGaps references={diagonal ? [{label:"Chance",diagonal:true}] : [{label:"Prevalence",y:baseline}]}/>;
+    xLabel={xLabel} domain={[0,1]} numericX connectGaps references={diagonal ? [{label:"Chance",diagonal:true}] : [{label:"Prevalence",y:baseline}]}
+    // Real curve points only: a model without a point at this x is left out, never estimated.
+    tooltip={{ title: row => xLabel + " " + Number(row.x).toFixed(2),
+      value: (s, row) => row[s.key] == null ? null : Number(row[s.key]).toFixed(2) }}/>;
 }
 
 function ConfusionMatrix({ name, score }: { name: string; score: PartitionScore }) {

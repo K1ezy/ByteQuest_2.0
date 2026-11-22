@@ -4995,6 +4995,22 @@ html:has(.bq-settings-dialog[open]) { overflow: hidden; }
 html[data-contrast="high"] { --chart-series: CanvasText; --chart-series-2: CanvasText; --chart-series-3: CanvasText; --chart-grid: CanvasText; --chart-annotation: CanvasText; }
 .insight-plot { width: 100%; height: 240px; min-width: 0; }
 .insight-legend { display: flex; flex-wrap: wrap; gap: 1rem; }
+.insight-figure { margin: 0; }
+/* Tapping or clicking focuses the chart; keep the ring for keyboard focus only. */
+.insight-plot .recharts-surface:focus:not(:focus-visible) { outline: none; }
+.insight-tooltip { max-width: min(26rem, 90vw); padding: .5rem .7rem; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--surface); color: var(--ink); box-shadow: 0 6px 18px rgb(33 22 58 / 12%); font-size: .85rem; line-height: 1.35; }
+.insight-tooltip p { margin: 0; }
+.insight-tooltip .insight-tooltip-title { margin-bottom: .3rem; font-weight: 600; }
+.insight-tooltip ul { display: grid; gap: .2rem; margin: 0; padding: 0; list-style: none; }
+.insight-tooltip li { display: grid; grid-template-columns: 24px auto 1fr; align-items: center; column-gap: .45rem; }
+.insight-tooltip li strong { font-weight: 600; white-space: nowrap; }
+/* Phones: narrower than the chart, so Recharts can keep it inside instead of pushing the page sideways. */
+@media (max-width: 480px) {
+  .insight-tooltip { max-width: 15rem; }
+  .insight-tooltip li { grid-template-columns: 24px 1fr; }
+  .insight-tooltip li strong { grid-column: 2; white-space: normal; }
+}
 @media (pointer: coarse) {
   .insights-table-toggle summary, .insights-method summary, .insight-practice { min-height: 44px; display: inline-flex; align-items: center; }
   /* Compact buttons keep their look on desktop but get a full 44px touch target on touch screens. */
