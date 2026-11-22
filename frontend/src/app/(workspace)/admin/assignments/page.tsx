@@ -3,6 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { ApiError, getErrorMessage } from "@/lib/api";
+import { EnrollStudents } from "@/components/admin/enroll-students";
 import { useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
 import {
   Button,
@@ -30,6 +31,8 @@ import {
 
 function AdminAssignments() {
   const { courses } = useWorkspace();
+  // Archived courses accept no new access; they stay in the filter so their history can be read.
+  const openCourses = courses.filter((course) => course.status !== "archived");
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -41,6 +44,7 @@ function AdminAssignments() {
   const [search, setSearch] = useState(appliedSearch);
   const [notice, setNotice] = useState<{ tone: "success" | "error" | "warning"; text: string } | null>(null);
   const [assignOpen, setAssignOpen] = useState(Boolean(presetProfile));
+  const [enrollOpen, setEnrollOpen] = useState(searchParams.get("enroll") === "1");
   const [busy, setBusy] = useState<"assign" | "remove" | "confirm" | "">("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [form, setForm] = useState({ profile_id: presetProfile, course_id: "", member_role: "instructor" });
@@ -140,17 +144,31 @@ function AdminAssignments() {
     <>
       <PageHeading
         eyebrow="ADMINISTRATION"
-        title="Course assignments"
-        description="Grant or remove course access with clear role boundaries. Students can only be enrolled as students; instructors need an instructor account."
-        status={data ? <StatusChip state="active" label={`${data.counts.active} active assignments`} /> : undefined}
+        title="Course access"
+        description="Choose who can open each course. Enroll a class by pasting School IDs, or assign one account at a time. Students can only be enrolled as students; instructors need an instructor account."
+        status={data ? <StatusChip state="active" label={`${data.counts.active} active`} /> : undefined}
         actions={
-          <Button variant="primary" onClick={() => setAssignOpen((open) => !open)}>
-            {assignOpen ? "Close form" : "Assign course"}
-          </Button>
+          <div className="ws-inline-actions">
+            <Button variant="primary" onClick={() => setEnrollOpen((open) => !open)}>
+              {enrollOpen ? "Close enrollment" : "Enroll students"}
+            </Button>
+            <Button variant="outline" onClick={() => setAssignOpen((open) => !open)}>
+              {assignOpen ? "Close form" : "Assign one account"}
+            </Button>
+          </div>
         }
       />
 
       {notice ? <Notice tone={notice.tone} onDismiss={() => setNotice(null)}>{notice.text}</Notice> : null}
+
+      {enrollOpen ? (
+        <EnrollStudents
+          courses={openCourses}
+          initialCourse={courseFilter}
+          onClose={() => setEnrollOpen(false)}
+          onEnrolled={(message) => { setNotice({ tone: "success", text: message }); reload(); }}
+        />
+      ) : null}
 
       {assignOpen ? (
         <section className="ws-panel" aria-labelledby="assign-title">
@@ -191,7 +209,7 @@ function AdminAssignments() {
               <label htmlFor="assignment-course_id">Course</label>
               <select id="assignment-course_id" value={form.course_id} onChange={(event) => setForm({ ...form, course_id: event.target.value })} aria-invalid={Boolean(errors.course_id)}>
                 <option value="">Choose a course</option>
-                {courses.map((course) => (
+                {openCourses.map((course) => (
                   <option key={course.id} value={course.id}>{course.title}</option>
                 ))}
               </select>
@@ -254,15 +272,15 @@ function AdminAssignments() {
 
       {error ? (
         <Notice tone="error">
-          Assignments could not load. {error}{" "}
+          Course access could not load. {error}{" "}
           <button type="button" className="ws-inline-link" onClick={reload}>Retry</button>
         </Notice>
       ) : null}
-      {loading && !data ? <LoadingPanel label="Loading course assignments…" /> : null}
+      {loading && !data ? <LoadingPanel label="Loading course access…" /> : null}
 
       {!loading && data && rows.length === 0 ? (
         <EmptyState
-          title="No assignments in this view"
+          title="No course access in this view"
           action={<Button variant="primary" onClick={() => setAssignOpen(true)}>Assign course</Button>}
         >
           {courseFilter || roleFilter || appliedSearch
@@ -274,7 +292,7 @@ function AdminAssignments() {
       {rows.length > 0 ? (
         <div className="ws-table-wrap">
           <table className="ws-table">
-            <caption className="sr-only">Course assignments</caption>
+            <caption className="sr-only">Course access</caption>
             <thead>
               <tr>
                 <th scope="col">Account</th>

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ApiError, getErrorMessage } from "@/lib/api";
 import { WorkspaceSuspense } from "@/components/workspace/workspace-provider";
@@ -17,6 +18,7 @@ import {
 import { formatDateTime, updateSetting, type SettingRecord, type SettingsResponse } from "@/lib/workspace";
 
 type Conflict = { key: string; proposed: string; latest: SettingRecord };
+type Saved = { key: string; label: string; from: string; to: string; version: number };
 
 function Configuration() {
   const { data, error, loading, reload } = useApi<SettingsResponse>("/admin/settings");
@@ -26,6 +28,7 @@ function Configuration() {
   const [busy, setBusy] = useState(false);
   const [fieldError, setFieldError] = useState("");
   const [conflict, setConflict] = useState<Conflict | null>(null);
+  const [saved, setSaved] = useState<Saved | null>(null);
 
   useEffect(() => {
     // A stale conflict notice should not survive a data reload.
@@ -38,12 +41,14 @@ function Configuration() {
     setFieldError("");
     setConflict(null);
     setNotice(null);
+    setSaved(null);
   }
 
   function validate(): string {
     if (!editing) return "";
     const { setting, value } = editing;
     if (!value.trim()) return "Enter a value.";
+    if (value.trim() === String(setting.value)) return "Enter a different value. This one is already saved.";
     if (setting.value_type === "integer") {
       const parsed = Number(value);
       if (!Number.isInteger(parsed)) return "Enter a whole number.";
@@ -72,7 +77,8 @@ function Configuration() {
     try {
       const value = editing.setting.value_type === "integer" ? Number(editing.value) : editing.value.trim();
       const result = await updateSetting(editing.setting.key, value, editing.setting.version);
-      setNotice({ tone: "success", text: result.message });
+      setSaved({ key: editing.setting.key, label: editing.setting.label, from: String(editing.setting.value),
+        to: String(result.setting?.value ?? value), version: result.setting?.version ?? editing.setting.version + 1 });
       setReviewOpen(false);
       setEditing(null);
       reload();
@@ -83,7 +89,6 @@ function Configuration() {
         if (latest) {
           setConflict({ key: editing.setting.key, proposed: editing.value, latest });
           setReviewOpen(false);
-          setNotice({ tone: "warning", text: payload?.detail?.message || "Another administrator saved this setting first." });
         } else {
           setNotice({ tone: "error", text: caught.message });
         }
@@ -98,6 +103,62 @@ function Configuration() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function renderConflict(current: Conflict) {
+    return (
+      <div className="ws-setting-inline ws-conflict" role="alert" aria-labelledby={`conflict-${current.key}`}>
+        <div className="ws-panel-head">
+          <strong id={`conflict-${current.key}`}>Another administrator saved this setting first</strong>
+          <StatusChip state="pending" label="Not saved" tone="wait" />
+        </div>
+        <p>Your value was not saved and nothing was overwritten. Compare the two, then reload the latest version to try again.</p>
+        <div className="ws-form-grid">
+          <div className="ws-soft"><strong>Your proposed value</strong><p>{current.proposed}</p></div>
+          <div className="ws-soft">
+            <strong>Latest saved value (version {current.latest.version})</strong>
+            <p>{String(current.latest.value)}</p>
+            <p className="ws-muted">Edited by {current.latest.last_editor || "unknown"} · {formatDateTime(current.latest.updated_at)}</p>
+          </div>
+        </div>
+        <div className="ws-inline-actions">
+          <Button variant="primary" onClick={() => {
+            const latestSetting = current.latest;
+            setConflict(null);
+            setEditing({ setting: latestSetting, value: String(latestSetting.value) });
+            reload();
+          }}>Reload latest value</Button>
+          <Button variant="quiet" onClick={() => setConflict(null)}>Close</Button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderEditor(current: { setting: SettingRecord; value: string }) {
+    const { setting } = current;
+    return (
+      <div className="ws-setting-inline">
+        <div className="ws-field">
+          <label htmlFor="setting-value">New value for {setting.label}</label>
+          <input
+            id="setting-value"
+            type={setting.value_type === "integer" ? "number" : "text"}
+            min={setting.min_value ?? undefined}
+            max={setting.max_value ?? undefined}
+            value={current.value}
+            onChange={(event) => setEditing({ ...current, value: event.target.value })}
+            aria-invalid={Boolean(fieldError)}
+            autoFocus
+          />
+          <FieldError>{fieldError}</FieldError>
+        </div>
+        <div className="ws-inline-actions">
+          <Button variant="primary" onClick={openReview}>Review change</Button>
+          <Button variant="quiet" onClick={() => setEditing(null)}>Cancel</Button>
+          <span className="ws-muted">You&apos;ll see a summary before anything is saved.</span>
+        </div>
+      </div>
+    );
   }
 
   if (loading && !data) return <LoadingPanel label="Loading operational settings…" />;
@@ -117,93 +178,12 @@ function Configuration() {
       <PageHeading
         eyebrow="ADMINISTRATION"
         title="Configuration"
-        description="Grouped operational settings with their current value, description, version and last editor. Changes are validated, reviewed and audited."
+        description="Operational settings, grouped by the service they affect. Each change is validated, reviewed before saving and recorded in the audit trail."
         status={data ? <StatusChip state="active" label={`${data.total} settings`} /> : undefined}
         actions={<Button variant="outline" onClick={reload}>Refresh</Button>}
       />
 
       {notice ? <Notice tone={notice.tone} onDismiss={() => setNotice(null)}>{notice.text}</Notice> : null}
-
-      {conflict ? (
-        <section className="ws-panel ws-conflict" aria-labelledby="conflict-title">
-          <div className="ws-panel-head">
-            <div>
-              <p className="eyebrow-label">VERSION CONFLICT</p>
-              <h2 id="conflict-title">Another administrator saved this setting first</h2>
-            </div>
-            <StatusChip state="pending" label="Not saved" tone="wait" />
-          </div>
-          <p>
-            Your proposed value was not saved. Compare it with the latest saved value, then reload the latest version and
-            try again. Nothing was overwritten.
-          </p>
-          <div className="ws-form-grid">
-            <div className="ws-soft">
-              <strong>Your proposed value</strong>
-              <p>{conflict.proposed}</p>
-            </div>
-            <div className="ws-soft">
-              <strong>Latest saved value (version {conflict.latest.version})</strong>
-              <p>{String(conflict.latest.value)}</p>
-              <p className="ws-muted">
-                Edited by {conflict.latest.last_editor || "unknown"} · {formatDateTime(conflict.latest.updated_at)}
-              </p>
-            </div>
-          </div>
-          <div className="ws-inline-actions">
-            <Button
-              variant="primary"
-              onClick={() => {
-                const latestSetting = conflict.latest;
-                setConflict(null);
-                setEditing({ setting: latestSetting, value: String(latestSetting.value) });
-                reload();
-              }}
-            >
-              Reload latest value
-            </Button>
-            <Button variant="quiet" onClick={() => setConflict(null)}>
-              Keep comparing
-            </Button>
-          </div>
-        </section>
-      ) : null}
-
-      {editing ? (
-        <section className="ws-panel" aria-labelledby="edit-setting-title">
-          <div className="ws-panel-head">
-            <div>
-              <p className="eyebrow-label">{editing.setting.service_label.toUpperCase()}</p>
-              <h2 id="edit-setting-title">{editing.setting.label}</h2>
-            </div>
-            <button type="button" className="ws-inline-link" onClick={() => setEditing(null)}>Cancel</button>
-          </div>
-          <p className="ws-muted">{editing.setting.description}</p>
-          <div className="ws-form-grid">
-            <div className="ws-field">
-              <label htmlFor="setting-value">New value</label>
-              <input
-                id="setting-value"
-                type={editing.setting.value_type === "integer" ? "number" : "text"}
-                min={editing.setting.min_value ?? undefined}
-                max={editing.setting.max_value ?? undefined}
-                value={editing.value}
-                onChange={(event) => setEditing({ ...editing, value: event.target.value })}
-                aria-invalid={Boolean(fieldError)}
-              />
-              <FieldError>{fieldError}</FieldError>
-              <p className="ws-muted">
-                Current value: {String(editing.setting.value)} · version {editing.setting.version} · last edited by{" "}
-                {editing.setting.last_editor || "system"} {formatDateTime(editing.setting.updated_at)}
-              </p>
-            </div>
-            <div className="ws-inline-actions full">
-              <Button variant="primary" onClick={openReview}>Review change</Button>
-              <span className="ws-muted">A review summary appears before anything is saved.</span>
-            </div>
-          </div>
-        </section>
-      ) : null}
 
       {data && data.groups.length === 0 ? (
         <EmptyState title="No operational settings are configured">Settings appear here once the platform seeds them.</EmptyState>
@@ -231,14 +211,20 @@ function Configuration() {
                       {setting.updated_at ? `· ${formatDateTime(setting.updated_at)}` : ""}
                     </span>
                     {setting.min_value !== null || setting.max_value !== null ? (
-                      <span className="ws-row-meta">
-                        Allowed range: {setting.min_value ?? "—"} to {setting.max_value ?? "—"}
-                      </span>
+                      <span className="ws-row-meta">Allowed range: {setting.min_value ?? "—"} to {setting.max_value ?? "—"}</span>
+                    ) : null}
+                    {saved?.key === setting.key ? (
+                      <p className="ws-setting-saved" role="status">
+                        Saved: changed from <code>{saved.from}</code> to <code>{saved.to}</code> (version {saved.version}).{" "}
+                        <Link href={`/admin/monitoring?audit=${encodeURIComponent(saved.label)}`}>See it in the audit trail</Link>
+                      </p>
                     ) : null}
                   </div>
-                  <Button variant="outline" onClick={() => startEdit(setting)} disabled={busy}>
-                    Change
-                  </Button>
+                  {editing?.setting.key === setting.key ? null : (
+                    <Button variant="outline" onClick={() => startEdit(setting)} disabled={busy}>Change</Button>
+                  )}
+                  {editing?.setting.key === setting.key ? renderEditor(editing) : null}
+                  {conflict?.key === setting.key ? renderConflict(conflict) : null}
                 </li>
               ))}
             </ul>

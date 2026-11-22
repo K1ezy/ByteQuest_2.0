@@ -11,6 +11,7 @@ from app.models.entities import (
     CourseMember,
     Profile,
 )
+from app.services.course_access import active_membership_course_ids
 def role_value(profile: Profile | None) -> str | None:
     if profile is None:
         return None
@@ -49,18 +50,8 @@ def account_needs_action(profile: Profile, memberships: list[CourseMember]) -> t
 
 
 def instructor_course_ids(db: Session, user: Profile) -> list[uuid.UUID]:
-    """Courses the user actively teaches."""
-    return [
-        row[0]
-        for row in db.query(CourseMember.course_id)
-        .filter(
-            CourseMember.profile_id == user.id,
-            CourseMember.member_role == "instructor",
-            CourseMember.status == "active",
-        )
-        .distinct()
-        .all()
-    ]
+    """Courses the user actively teaches (archived courses excluded)."""
+    return active_membership_course_ids(db, user.id, "instructor")
 
 
 def personal_audit(db: Session, actor_id: uuid.UUID, limit: int = 8) -> list[AuditEvent]:
