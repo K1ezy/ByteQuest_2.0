@@ -6,9 +6,9 @@
     "semantic_hash": ""
   },
   "backend/app/api/admin.py": {
-    "mtime": 1795326354.5998104,
-    "seen": 1795327265.102332,
-    "ast_hash": "08d09b07bb44d65958c52f06a2081c1b",
+    "mtime": 1795327763.3664057,
+    "seen": 1795328320.7541513,
+    "ast_hash": "044517f0a163e8489aabf6eb4002d036",
     "semantic_hash": ""
   },
   "backend/app/api/chat.py": {
@@ -288,9 +288,9 @@
     "semantic_hash": ""
   },
   "backend/app/services/monitoring.py": {
-    "mtime": 1795001615.4069319,
-    "seen": 1795003026.7197697,
-    "ast_hash": "5686643d475e519dd2621e0d93d1bf21",
+    "mtime": 1795327761.7142923,
+    "seen": 1795328320.776633,
+    "ast_hash": "4fc0e20e6cf3db5d96d1cac51a55e41e",
     "semantic_hash": ""
   },
   "backend/app/services/profile_attention.py": {
@@ -420,9 +420,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_faculty_admin.py": {
-    "mtime": 1795326457.3599203,
-    "seen": 1795327265.1494062,
-    "ast_hash": "dc2564a2d69d46d33a8e8851b038d46e",
+    "mtime": 1795327787.0370936,
+    "seen": 1795328320.7888088,
+    "ast_hash": "85beb411c34b7a717044ee7ab9feab47",
     "semantic_hash": ""
   },
   "backend/tests/test_judge0_privacy.py": {
@@ -540,9 +540,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/admin/configuration/page.tsx": {
-    "mtime": 1794652568.066471,
-    "seen": 1794680212.9106905,
-    "ast_hash": "5604e66b78f03550511ad6bac51c3a03",
+    "mtime": 1795328260.610359,
+    "seen": 1795328320.7976992,
+    "ast_hash": "17d524d43536d98361393f0769357e4d",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/admin/courses/page.tsx": {
@@ -564,9 +564,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/admin/monitoring/page.tsx": {
-    "mtime": 1794927034.038498,
-    "seen": 1794975331.6991398,
-    "ast_hash": "d438c014784ca72fc8e94db77d46f478",
+    "mtime": 1795327870.153914,
+    "seen": 1795328320.7997077,
+    "ast_hash": "5e6491ba0aae35d1fecfa7918ddddb29",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/admin/page.tsx": {
@@ -984,9 +984,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/workspace/ui.tsx": {
-    "mtime": 1795267635.3259354,
-    "seen": 1795268244.8017344,
-    "ast_hash": "3e6b37eb088113c942b03cb869c25a81",
+    "mtime": 1795327866.6840503,
+    "seen": 1795328320.8585217,
+    "ast_hash": "aa92a1ebaa9809b62df709df72502ec4",
     "semantic_hash": ""
   },
   "frontend/src/components/workspace/workspace-provider.test.tsx": {
@@ -1116,9 +1116,9 @@
     "semantic_hash": ""
   },
   "frontend/src/lib/workspace.ts": {
-    "mtime": 1795326527.1603208,
-    "seen": 1795327265.246344,
-    "ast_hash": "c52f0b2ef97e97018b3b0dc7e0cc8642",
+    "mtime": 1795327868.4580944,
+    "seen": 1795328320.8680494,
+    "ast_hash": "8b2c20d19ae0a6ce1c22e9450f14a24f",
     "semantic_hash": ""
   },
   "frontend/src/next-config.test.tsx": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795327208.9701583,
-    "seen": 1795327265.26416,
-    "ast_hash": "e56b770237e0d6b44eb291d4a00bb336",
+    "mtime": 1795328091.8149228,
+    "seen": 1795328320.879117,
+    "ast_hash": "ca1a763b5a2a8a09739d39e7c74e6d02",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -2760,15 +2760,15 @@
     "semantic_hash": ""
   },
   "frontend/src/components/admin/section-nav.tsx": {
-    "mtime": 1795326529.8570094,
-    "seen": 1795327265.1944828,
-    "ast_hash": "cae4be6b076d6e764644c914fd99ef4d",
+    "mtime": 1795327620.8109937,
+    "seen": 1795328320.8262544,
+    "ast_hash": "95a74cacb7a25b362c4838a08bcd5888",
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_UI_UX_HARMONIZATION_PLAN.md": {
-    "mtime": 1795327208.9733863,
-    "seen": 1795327265.26416,
-    "ast_hash": "17b3c198001d11185129e8f9b051fb4e",
+    "mtime": 1795328091.8164318,
+    "seen": 1795328320.879117,
+    "ast_hash": "913a9b00ca06634e317334291cf78841",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/admin/courses/page.test.tsx": {
@@ -2790,15 +2790,27 @@
     "semantic_hash": ""
   },
   "frontend/src/components/admin/section-nav.test.tsx": {
-    "mtime": 1795326756.2668793,
-    "seen": 1795327265.1944828,
-    "ast_hash": "7189b14517f57d72fef472d72d0a73d8",
+    "mtime": 1795328016.670436,
+    "seen": 1795328320.8262544,
+    "ast_hash": "8b8b13d63ac72190049fd392e022c45c",
     "semantic_hash": ""
   },
   "docs/verification/ui-ux-harmonization-2026-11-21.md": {
     "mtime": 1795277635.4843166,
     "seen": 1795327265.2908196,
     "ast_hash": "078d9a3e0e6dc6bea63f35d61cb2a83a",
+    "semantic_hash": ""
+  },
+  "frontend/src/app/(workspace)/admin/configuration/page.test.tsx": {
+    "mtime": 1795328262.4633732,
+    "seen": 1795328320.7976992,
+    "ast_hash": "ae42f33464af7a9472167411c197a830",
+    "semantic_hash": ""
+  },
+  "frontend/src/app/(workspace)/admin/monitoring/page.test.tsx": {
+    "mtime": 1795327994.5867133,
+    "seen": 1795328320.7986956,
+    "ast_hash": "05bc86f2d8a44c507d7a483ab70149b8",
     "semantic_hash": ""
   }
 }

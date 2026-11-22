@@ -920,8 +920,10 @@ export function getMonitoring(params: { service?: string; status?: string; searc
 }
 
 export function retryJob(jobId: string) {
-  return apiRequest<{ message: string }>(`/admin/jobs/${jobId}/retry`, { method: "POST" });
+  return apiRequest<{ message: string; job: JobRecord }>(`/admin/jobs/${jobId}/retry`, { method: "POST" });
 }
+
+export interface AuditItem { id: string; action: string; summary: string; actor_role: string | null; created_at: string }
 
 /* ------------------------------------------------------------------ helpers */
 

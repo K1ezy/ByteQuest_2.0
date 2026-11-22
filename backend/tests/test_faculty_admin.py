@@ -1529,6 +1529,16 @@ def test_monitoring_reports_real_states_and_audit_is_searchable(workspace):
     assert audit.status_code == 200
     assert isinstance(audit.json()["items"], list)
 
+    # A job's detail lists only its own material's entries.
+    with _db() as db:
+        db.add_all([AuditEvent(action="material.retry_failed", entity_type="material", entity_id=str(ids["document"]),
+                               summary="Retry for the lesson failed"),
+                    AuditEvent(action="material.reprocessed", entity_type="material",
+                               entity_id=str(ids["other_document"]), summary="Another material")])
+        db.commit()
+    own = client.get("/api/v1/admin/audit", params={"entity_id": str(ids["document"])}, headers=headers).json()["items"]
+    assert [item["summary"] for item in own] == ["Retry for the lesson failed"]
+
 
 @pytest.mark.parametrize("worker_running", [False, True])
 def test_monitoring_distinguishes_worker_and_sandbox_outages(workspace, monkeypatch, worker_running):
@@ -1942,6 +1952,9 @@ def test_bulk_enrollment_previews_each_group_then_enrolls_each_student_once(work
         audits = db.query(AuditEvent).filter(AuditEvent.action == "assignment.created",
                                              AuditEvent.course_id == ids["course_a"]).all()
         assert len(audits) == 1 and "as student in Introduction to Python" in audits[0].summary
+        membership = db.query(CourseMember).filter_by(course_id=ids["course_a"], profile_id=ids["other_student"],
+                                                      member_role="student").one()
+        assert audits[0].entity_id == str(membership.id)
 
     too_many = {"course_id": str(ids["course_a"]), "school_ids": " ".join(f"26-{n:05d}" for n in range(1, 202))}
     response = client.post("/api/v1/admin/enrollments/preview", json=too_many, headers=admin)
@@ -2013,6 +2026,18 @@ def test_archive_is_blocked_while_an_exam_using_the_course_is_open_or_scheduled(
         exam.opens_at, exam.closes_at = now - timedelta(days=2), now - timedelta(days=1)
         db.commit()
     assert client.post(f"/api/v1/admin/courses/{ids['course_a']}/archive", headers=admin).status_code == 200
+
+
+def test_course_creation_audit_entry_links_to_the_new_course(workspace):
+    client, new_session, ids = workspace
+    created = client.post("/api/v1/admin/courses", json={"code": "LINK-1", "title": "Linked course"},
+                          headers=_token(ids["admin"]))
+    assert created.status_code == 201
+    course_id = created.json()["course"]["id"]
+    with new_session() as db:
+        event = db.query(AuditEvent).filter(AuditEvent.action == "course.created",
+                                            AuditEvent.entity_id == course_id).one()
+        assert str(event.course_id) == course_id
 
 
 def test_course_edit_changes_title_and_description_with_an_audit_entry(workspace):

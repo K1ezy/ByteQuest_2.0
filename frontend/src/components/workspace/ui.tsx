@@ -49,6 +49,25 @@ export function useApi<T>(path: string | null, abortOnCleanup = false) {
   return { data, error, loading, reload, setData };
 }
 
+/** Copies a reference such as a trace ID. If the browser refuses, the text stays on screen to select. */
+export function CopyButton({ value, label }: { value: string; label: string }) {
+  const [state, setState] = useState<"" | "copied" | "failed">("");
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setState("copied");
+    } catch {
+      setState("failed");
+    }
+    window.setTimeout(() => setState(""), 2500);
+  }
+  return (
+    <button type="button" className="ws-inline-link" onClick={() => void copy()} aria-label={`Copy ${label}`}>
+      <span aria-live="polite">{state === "copied" ? "Copied" : state === "failed" ? "Select it to copy" : "Copy"}</span>
+    </button>
+  );
+}
+
 export function useNow(intervalMs = 30_000): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {

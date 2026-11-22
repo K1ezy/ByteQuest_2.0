@@ -636,6 +636,7 @@ def create_course(payload: CourseCreate, user: Profile = Depends(admin_user), db
         created_by=user.id,
     )
     db.add(course)
+    db.flush()  # assigns course.id, so the audit entry links to the course
     record_audit(
         db,
         actor=user,
@@ -815,12 +816,13 @@ def _grant_course_access(db: Session, user: Profile, course: Course, profile: Pr
         membership = CourseMember(course_id=course.id, profile_id=profile.id, member_role=member_role,
                                   status="active", assigned_by=user.id)
         db.add(membership)
+        db.flush()  # assigns membership.id, so the audit entry links to it
     record_audit(
         db,
         actor=user,
         action="assignment.created",
         entity_type="course_member",
-        entity_id=membership.id if membership.id else None,
+        entity_id=membership.id,
         course_id=course.id,
         summary=f"Assigned {profile.display_name or profile.username} as {member_role} in {course.title}",
     )
@@ -1534,8 +1536,9 @@ async def retry_job(job_id: uuid.UUID, user: Profile = Depends(admin_user), db: 
 
 
 @router.get("/audit")
-def audit_events(search: Optional[str] = None, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
-    events = audit_query(db, search=search, limit=200).all()
+def audit_events(search: Optional[str] = None, entity_id: Optional[str] = Query(None, max_length=64),
+                 user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
+    events = audit_query(db, search=search, limit=200, entity_id=entity_id).all()
     return {
         "items": [
             {

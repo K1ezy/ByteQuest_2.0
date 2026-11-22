@@ -6,12 +6,12 @@ const path = vi.hoisted(() => ({ current: "/admin" }));
 vi.mock("next/navigation", () => ({ usePathname: () => path.current }));
 afterEach(cleanup);
 
-it("shows the tab row of the group the current page belongs to", () => {
-  path.current = "/admin/assignments";
+it("shows the tab row of the group the current page belongs to, with Accounts beside Course access", () => {
+  path.current = "/admin/accounts";
   render(<AdminSectionNav />);
-  const nav = screen.getByRole("navigation", { name: "Course sections" });
-  expect([...nav.querySelectorAll("a")].map(link => link.textContent)).toEqual(["Courses", "Course access"]);
-  expect(screen.getByRole("link", { name: "Course access" }).getAttribute("aria-current")).toBe("page");
+  const nav = screen.getByRole("navigation", { name: "Course and account sections" });
+  expect([...nav.querySelectorAll("a")].map(link => link.textContent)).toEqual(["Courses", "Course access", "Accounts"]);
+  expect(screen.getByRole("link", { name: "Accounts" }).getAttribute("aria-current")).toBe("page");
 });
 
 it("groups Activities with Materials and the system pages together", () => {
@@ -23,8 +23,8 @@ it("groups Activities with Materials and the system pages together", () => {
   expect(screen.getByRole("link", { name: "Monitoring" })).toBeTruthy();
 });
 
-it("shows no tab row on a page that stands alone", () => {
-  path.current = "/admin/accounts";
+it("shows no tab row outside the admin groups", () => {
+  path.current = "/admin/teaching";
   const { container } = render(<AdminSectionNav />);
   expect(container.innerHTML).toBe("");
 });

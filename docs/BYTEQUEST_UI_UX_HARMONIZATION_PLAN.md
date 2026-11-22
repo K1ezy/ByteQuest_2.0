@@ -131,7 +131,7 @@ Work through terms one page at a time with the metric definitions and API states
 
 ## 8. Delivery order
 
-Progress: slices 1–3 were delivered on 21 November 2026 and checkpointed in commit `07df51d`. Slice 5 was partly delivered on 22 November 2026: the pilot admin tasks (bulk enrollment by School ID on **Course access**, course edit, archive and restore, grouped admin tab rows, and Course health links that carry the course). Still open in slice 5: the job recovery flow (failed job, its details, a confirmed retry and the audit entry) and a visual pass on Configuration and Monitoring. What changed, how it was checked and what remains are in the [21 November change log](verification/ui-ux-harmonization-2026-11-21.md).
+Progress: slices 1–3 were delivered on 21 November 2026 and checkpointed in commit `07df51d`. Slice 5 was delivered on 22 November 2026: the pilot admin tasks (bulk enrollment by School ID on **Course access**, course edit, archive and restore, grouped admin tab rows, and Course health links that carry the course), the job recovery flow (a failed job opens with its details and audit entries, a confirmed retry, and the outcome), and a pass on Configuration and Monitoring that keeps each edit, conflict and result beside the item it concerns. What changed, how it was checked and what remains are in the [21 November change log](verification/ui-ux-harmonization-2026-11-21.md).
 
 | Slice | Work to ship | Gate before moving on |
 | --- | --- | --- |
