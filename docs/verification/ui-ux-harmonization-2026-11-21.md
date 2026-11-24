@@ -117,3 +117,22 @@ Both commits are on `fix/ml-pr-auc-student-disjoint-split` and have not been pus
 - The rebuilt local app passed the signup, workshop join and exam walkthrough in Edge at 320 and 1440 px. The full suites passed 290 backend tests, 238 frontend tests and four exam recovery checks.
 
 The [system status log](../BYTEQUEST_SYSTEM_STATUS_2026-11-21.md) records the local rollout and verification. The [navigation guide](../NAVIGATION.md) records the current routes.
+
+## Quest Map deadlines and activity numbering, 24 November 2026
+
+| Commit | Branch | What it holds |
+| --- | --- | --- |
+| `5c60057` | `feat/pilot-readiness-quick-fixes` | Deadlines on quest cards, and activity numbers without the word "Quest" or "Exam". Not pushed. |
+
+To see the change, run `git show --stat 5c60057`.
+
+| Change | What users see | Main files |
+| --- | --- | --- |
+| Quest deadlines | Code challenge and concept check quiz cards on the Quest Map end with the deadline date and time in Manila time, for example "Due Nov 25, 2026, 07:30 PM". After the deadline it reads "Closed Nov 25, 2026, 07:30 PM". Cards without a closing time show no line. Exam cards already showed "opens to closes" times and are unchanged. | `components/quest-card.tsx`, `lib/types.ts`, `backend/app/api/quests_gamification.py` (`/quests` now returns `closes_at`) |
+| Activity numbers | The number reads "#3" instead of "Quest #3" or "Exam #3". | Quest Map cards (`components/quest-card.tsx`), exam cards (`components/student-exam-list.tsx`), and the headers of the code challenge (`components/arena.tsx`), concept check quiz (`components/quiz-view.tsx`) and exam (`exams/[id]/page.tsx`) pages |
+
+The numbers themselves did not change: quests use the learner's own list order and exams their exam number. Workshop activity cards never showed a number.
+
+**How it was checked.** All 239 frontend tests in 51 files passed, including a new Quest Map test for the Due line, the Closed line and a card without a deadline. TypeScript and lint on the changed files were clean. The quest-date backend integration test now also checks `closes_at`, and passed.
+
+**Not checked.** The cards and page headers were not viewed in a signed-in browser. On exam cards and the exam page, "#2" now sits above the title without the word "Exam", so it carries less context there than on quest cards. Workshop activity cards share the quest card but get no deadline line, because the workshop API does not send `closes_at`.
