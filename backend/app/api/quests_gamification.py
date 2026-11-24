@@ -147,7 +147,7 @@ class LeaderboardStanding(BaseModel):
 
 
 class LeaderboardResponse(BaseModel):
-    track: ProgrammingLang
+    track: ProgrammingLang | None
     entries: list[LeaderboardEntry]
     you: Optional[LeaderboardStanding]  # None for staff, who are never ranked
     total_ranked: int
@@ -496,6 +496,8 @@ def get_gamification_leaderboard(
     so a learner outside the top entries still sees where they are.
     """
     track = current_user.enrolled_language
+    if track is None:
+        return LeaderboardResponse(track=None, entries=[], you=None, total_ranked=0)
     ranked = (
         Profile.role == UserRole.student,
         Profile.enrolled_language == track,

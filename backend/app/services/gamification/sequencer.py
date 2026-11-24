@@ -142,6 +142,13 @@ def determine_track_recommendation(
     be based only on the student's enrolled language. This keeps attempts made
     while exploring another language from incorrectly marking this track done.
     """
+    if student.enrolled_language is None:
+        return {
+            "sequencer_mode": "rule_based",
+            "recommended_action": "join_workshop",
+            "target_activity_id": None,
+            "rationale": "Choose your programming language when you join a workshop.",
+        }
     successful_activity = (
         db.query(ActivityAttempt.id)
         .filter(

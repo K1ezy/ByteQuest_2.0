@@ -1,14 +1,14 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { UserRole, Workshop } from "@/lib/types";
+import type { ProgrammingLanguage, UserRole, Workshop } from "@/lib/types";
 
-const mocks = vi.hoisted(() => ({ api: vi.fn(), push: vi.fn(), replace: vi.fn(), role: "student" as UserRole }));
+const mocks = vi.hoisted(() => ({ api: vi.fn(), push: vi.fn(), replace: vi.fn(), role: "student" as UserRole, language: "python" as ProgrammingLanguage | null }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push, replace: mocks.replace }) }));
 vi.mock("@/lib/api", async (original) => ({
   ...await original<typeof import("@/lib/api")>(), apiRequest: mocks.api,
 }));
 vi.mock("@/components/app-shell", () => ({
-  useShellProfile: () => ({ role: mocks.role, username: "learner", enrolled_language: "python" }),
+  useShellProfile: () => ({ role: mocks.role, username: "learner", enrolled_language: mocks.language }),
 }));
 
 import { JoinWorkshopForm, WorkshopHome } from "./workshop-home";
@@ -22,6 +22,7 @@ const item: Workshop = {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.role = "student";
+  mocks.language = "python";
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   HTMLDialogElement.prototype.close = function () { this.open = false; };
 });
@@ -101,4 +102,17 @@ it("switches an instructor between active and archived lists", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Archived" }));
   expect(await screen.findByRole("link", { name: /Past workshop/ })).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Python practice/ })).toBeNull();
+});
+
+it("lets an unassigned student choose a first language at workshop join", async () => {
+  mocks.language = null;
+  mocks.api.mockResolvedValueOnce(item);
+  render(<JoinWorkshopForm code="ABCD2345" />);
+  expect(screen.getAllByRole<HTMLInputElement>("radio").every((radio) => !radio.checked)).toBe(true);
+  fireEvent.click(screen.getByRole("radio", { name: "Python" }));
+  fireEvent.click(screen.getByRole("button", { name: "Join Workshop" }));
+  await vi.waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/workshops/workshop-1"));
+  expect(mocks.api).toHaveBeenCalledWith("/workshops/join", {
+    method: "POST", body: '{"code":"ABCD2345","language":"python"}',
+  });
 });

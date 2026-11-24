@@ -206,7 +206,7 @@ function FacultyPerformance() {
                       displayName={row.display_name}
                       pseudonym={row.pseudonym}
                       username={row.username}
-                      meta={row.enrolled_language.toUpperCase()}
+                      meta={row.enrolled_language?.toUpperCase() ?? "Language not chosen"}
                     />
                   </td>
                   <td data-label={metrics.activities_passed.label}>

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({ apiRequest: vi.fn() }));
 
@@ -13,38 +13,24 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 import Page from "./page";
 
-const attempt = (index: number) => ({
-  attempt_id: `attempt${index}`, activity_id: `activity${index}`, title: `Task ${index}`,
-  activity_type: index % 2 ? "quiz" : "challenge", score_percentage: index % 2 ? 100 : 40,
-  is_successful: index % 2 === 1, created_at: "2026-11-11T03:32:00Z",
-});
-
 afterEach(() => { cleanup(); mocks.apiRequest.mockReset(); });
 
-it("shows track progress, XP to the next level, and collapses long attempt history", async () => {
-  mocks.apiRequest.mockImplementation((path: string) => Promise.resolve(path.startsWith("/pilot") ? {
-    recommendation: { rationale: "More practice is recommended.", target_activity_id: "next" },
+it("keeps upcoming work on Dashboard and links to metrics in Profile", async () => {
+  mocks.apiRequest.mockImplementation(async (path: string) => path === "/pilot/dashboard" ? {
+    recommendation: { rationale: "More practice is recommended.", recommended_action: "remedial_practice" },
     next_activity: { id: "next", title: "Even or Odd", kind: "challenge" },
-    completed: 5, total: 9, xp: 340, level: 2, pending_job_id: null, due_exam: null, notices: [],
-  } : {
-    total_attempts: 7, attempts: Array.from({ length: 7 }, (_, index) => attempt(index + 1)),
-    badges: [{ code: "first", name: "First Steps", description: "Finish a quest." }, {code:"old",name:"Earlier award",description:"old"}],
-  }));
+    completed: 5, total: 9, xp: 340, level: 2, pending_job_id: "job",
+    due_exam: { id: "exam", title: "Practice exam", closes_at: "2099-11-24T05:00:00Z" }, notices: [],
+  } : { items: [], available: false });
 
   render(<Page />);
 
-  expect(await screen.findByText("4 activities left to finish the PYTHON track.")).toBeTruthy();
+  expect((await screen.findByRole("link", { name: /Continue quest/ })).getAttribute("href")).toBe("/arena/next");
   expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/^Good (morning|afternoon|evening), Kieser!$/);
-  expect(screen.getByRole("progressbar", { name: "Quest completion" }).getAttribute("aria-valuenow")).toBe("56");
-  expect(screen.getByRole("heading",{name:"Badges · 2"})).toBeTruthy();
-  expect(screen.getByText("First Steps")).toBeTruthy();
-  expect(screen.queryByText("Earlier award")).toBeNull();
-  expect(screen.getByRole("link",{name:"See all badges"}).getAttribute("href")).toBe("/profile?tab=activity#badges");
-  expect(screen.getByText("160 XP to Level 3")).toBeTruthy();
-  expect(screen.getByRole("link", { name: /Continue quest/ }).getAttribute("href")).toBe("/arena/next");
-
-  expect(screen.getAllByRole("link", { name: /^Task \d/ })).toHaveLength(5);
-  fireEvent.click(screen.getByRole("button", { name: "Show all 7" }));
-  expect(screen.getAllByRole("link", { name: /^Task \d/ })).toHaveLength(7);
-  expect(screen.getByRole("button", { name: "Show fewer" }).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("link", { name: /Open exam/ }).getAttribute("href")).toBe("/exams/exam");
+  expect(screen.getByRole("link", { name: "View submission status" }).getAttribute("href")).toBe("/submissions/job");
+  expect(screen.getByRole("link", { name: "View my progress" }).getAttribute("href")).toBe("/profile?tab=activity");
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Recent attempts" })).toBeNull();
+  expect(mocks.apiRequest.mock.calls.some(([path]) => String(path).startsWith("/quests/progress"))).toBe(false);
 });

@@ -4,7 +4,7 @@ Signed-in destinations share a sidebar and account menu. Profile, Accessibility,
 
 | Audience | Primary destinations |
 | --- | --- |
-| Student | Dashboard, Quest Map, Exams, Workshops, Leaderboard |
+| Student | Dashboard, Quest Map, Workshops, Profile |
 | Instructor | My Courses, Quest & Workshop Builder, Student Progress & Submissions, Exams |
 | Administrator | System Overview, Course & Instructor Management, User & Role Management, Content & Track Repository, Instructor Workspace |
 
@@ -12,9 +12,11 @@ Signed-in destinations share a sidebar and account menu. Profile, Accessibility,
 
 | Existing routes | Disposition |
 | --- | --- |
-| `/`, `/terms`, `/privacy`, `/onboarding` | Retained. Signed-in track setup uses the app shell. |
-| `/profile`, `/account/research`, `/chat` | Retained as account or support destinations. |
-| `/dashboard`, `/quests`, `/exams` | Retained. Dashboard absorbs Journey. |
+| `/`, `/terms`, `/privacy`, `/onboarding` | Retained. Students go to Dashboard after registration and sign-in, or return to the link that prompted sign-in. |
+| `/profile` | Student Progress, Mastery, Rankings and Account. Students choose their first language while joining a workshop and can change it later in Edit profile. Staff retain their role-specific activity and Account tabs. |
+| `/account/research`, `/chat` | Retained as account or support destinations. |
+| `/dashboard`, `/quests` | Dashboard shows upcoming work. Quest Map contains All quests, Code challenges, Concept check quiz and Exams. |
+| `/exams` | Redirects to the Exams view at `/quests?category=exams`. |
 | `/arena/[id]`, `/quiz/[id]`, `/exams/[id]`, `/submissions/[id]` | Retained as deep links. The three runners use a focus layout. |
 | `/faculty` | Permanent redirect to `/instructor`. |
 | `/faculty/activities`, `/faculty/activities/[id]`, `/faculty/materials`, `/faculty/ml`, `/faculty/performance`, `/faculty/review`, `/faculty/review/[id]` | Permanent redirects to the matching suffix under `/instructor`. |
@@ -27,13 +29,16 @@ Signed-in destinations share a sidebar and account menu. Profile, Accessibility,
 
 | Old Quest Map URL | Destination |
 | --- | --- |
-| `?view=leaderboard` | `/leaderboard` |
+| `?view=leaderboard` and `/leaderboard` | `/profile?tab=rankings` |
+| `?view=map` | `/profile?tab=mastery` |
 | `?view=journey` | `/dashboard` |
 | `?view=activity-hub` | `/workshops` |
 | `?view=accessibility` | `/account/accessibility` |
 | `?view=faculty` | `/quests`, `/instructor`, or `/admin/teaching` according to the signed-in role |
 | `/quests?group=[id]`, `/workshops?group=[id]` | `/workshops/[id]` |
 | `?category=code-challenge`, `?category=lessons-review` | Retained as activity filters. |
+
+The former `/onboarding?mode=change_track` opens the student's language field in Edit profile.
 
 Instructor Preview is at `/instructor/preview`. Administrator teaching tools are at `/admin/teaching`, with `/preview` and `/exams` below it. Preview filters published content by language and performs no student writes.
 

@@ -69,6 +69,7 @@ class CreateWorkshop(WorkshopClassroomDetails):
 
 class JoinWorkshop(WorkshopMutation):
     code: str = Field(min_length=8, max_length=12)
+    language: ProgrammingLang | None = None
 
 
 class UpdateWorkshop(WorkshopClassroomDetails):
@@ -398,8 +399,19 @@ def join_workshop(
         raise HTTPException(404, "No workshop matches that code.")
     if workshop.archived_at is not None or not workshop.joining_enabled:
         raise HTTPException(409, CLOSED_JOIN_MESSAGE)
-    if current_user.role == UserRole.student and workshop.language != current_user.enrolled_language:
-        raise HTTPException(409, "This workshop uses a different language track. Change your track before joining.")
+    if current_user.role == UserRole.student:
+        # A student may try joining two different workshops at the same time.
+        current_user = db.query(Profile).filter_by(id=current_user.id).with_for_update().populate_existing().one()
+        if current_user.enrolled_language is None:
+            if payload.language is None:
+                raise HTTPException(422, "Choose a programming language before joining.")
+            if payload.language != workshop.language:
+                label = {"cpp": "C++", "python": "Python", "java": "Java"}[workshop.language.value]
+                raise HTTPException(409, f"This workshop uses {label}. Choose {label} to join.")
+            current_user.enrolled_language = workshop.language
+            current_user.track_selected_at = datetime.now(timezone.utc)
+        elif workshop.language != current_user.enrolled_language:
+            raise HTTPException(409, "This workshop uses a different language track. Change your track before joining.")
     if not db.query(WorkshopMember.id).filter_by(workshop_id=workshop.id, profile_id=current_user.id).first():
         db.add(WorkshopMember(workshop_id=workshop.id, profile_id=current_user.id))
     db.commit()

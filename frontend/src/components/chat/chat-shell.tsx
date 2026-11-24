@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { belongsTo } from "@/lib/navigation";
+import { belongsTo, isStudentExamView } from "@/lib/navigation";
 import { useChat } from "./chat-provider";
 import { useChatViewport, useCompactChatLayout } from "./use-chat-viewport";
 
@@ -102,7 +102,7 @@ export function ChatShell() {
   const panelId = useId();
   const launcherRef = useRef<HTMLButtonElement>(null);
   const restoreRef = useRef<HTMLButtonElement>(null);
-  const visible = signedIn === true && !belongsTo(pathname, "/chat") && !belongsTo(pathname, "/exams");
+  const visible = signedIn === true && !belongsTo(pathname, "/chat") && !isStudentExamView(pathname, searchParams.get("category"));
 
   useEffect(() => {
     if (!visible) return;

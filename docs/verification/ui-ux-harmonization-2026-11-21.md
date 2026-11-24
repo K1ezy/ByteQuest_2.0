@@ -109,3 +109,11 @@ Both commits are on `fix/ml-pr-auc-student-disjoint-split` and have not been pus
 2. Run `/compact we're going to grill the ML analytics slice`, then `/grill-with-docs`.
 3. Run `/to-spec` and `/to-tickets`, then `/implement` for each ticket. The draft tickets are: a seeded local ML fixture; Model evaluation leading with purpose and status; learner forecasts with predicted and observed results kept apart; one chart pattern; the research consent flow; glossary and plan updates.
 4. Slice 5 (administrator) waits as a ready-to-start session card with its own brief.
+
+## Student flow checkpoint for 24 November 2026
+
+- Student signup opens Dashboard with the language unset. The first successful workshop join saves the student's choice when it matches the workshop. Existing tracks are preserved.
+- Profile holds personal progress and analytics. Dashboard shows upcoming work. Quest Map has All quests, Code challenges, Concept check quiz and Exams. Old exam list links redirect to the Exams view, and individual exam links still work.
+- The rebuilt local app passed the signup, workshop join and exam walkthrough in Edge at 320 and 1440 px. The full suites passed 290 backend tests, 238 frontend tests and four exam recovery checks.
+
+The [system status log](../BYTEQUEST_SYSTEM_STATUS_2026-11-21.md) records the local rollout and verification. The [navigation guide](../NAVIGATION.md) records the current routes.

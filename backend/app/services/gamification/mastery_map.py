@@ -34,7 +34,7 @@ class MasteryConcept(BaseModel):
 
 
 class MasteryMapResponse(BaseModel):
-    track: ProgrammingLang
+    track: ProgrammingLang | None
     concepts: list[MasteryConcept]
 
 

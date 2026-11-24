@@ -1,19 +1,18 @@
 "use client";
 
-import React, { useState, useId, useEffect, useRef, FormEvent, Suspense } from "react";
+import React, { useState, useId, useCallback, useEffect, useRef, FormEvent, Suspense } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Session } from "@supabase/auth-js";
-import { AppShell } from "@/components/app-shell";
 import { destinationFor } from "@/components/home-redirect";
-import { authReturnTo, roleLabels } from "@/lib/navigation";
+import { authReturnTo } from "@/lib/navigation";
 import { apiRequest, getAuthErrorMessage, getErrorMessage } from "@/lib/api";
-import { clearSharedComputerData, getSupabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 import { checkStudentSignup, signUpStudent } from "@/lib/student-signup";
 import { formatStudentSchoolId, STUDENT_SCHOOL_ID_ERROR, STUDENT_SCHOOL_ID_PATTERN } from "@/lib/school-id";
 import { usePasswordReset } from "@/hooks/use-password-reset";
-import type { Profile, ProgrammingLanguage } from "@/lib/types";
+import type { Profile } from "@/lib/types";
 import { SignupAgreement } from "@/components/signup-agreement";
 
 type AuthMode = "choices" | "signin" | "roles" | "signup" | "faculty-info" | "admin-info" | "agreement" | "reset-request" | "reset-update";
@@ -122,8 +121,6 @@ function OnboardingContent() {
   const isResetSuccess = searchParams.get("reset") === "success";
   const emailEnabled = process.env.NEXT_PUBLIC_EMAIL_ENABLED === "true";
 
-  // Toggle between unauthenticated Auth view and post-login Learning Track view
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>(isRecoveryMode || isInviteMode ? "reset-update" : isInstructorMode || isSignInMode || isResetSuccess ? "signin" : "choices");
   const authHeading = useRef<HTMLHeadingElement>(null);
   const focusNextScreen = useRef(false);
@@ -132,7 +129,6 @@ function OnboardingContent() {
   // Authentication & session states
   const [session, setSession] = useState<Session | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
-  const [profile, setProfile] = useState<Profile | null>(null);
 
   // Form states
   const [email, setEmail] = useState("");
@@ -161,10 +157,9 @@ function OnboardingContent() {
     updatePassword,
   } = usePasswordReset();
 
-  // Learning Track states
-  const [languageTrack, setLanguageTrack] = useState<ProgrammingLanguage>("python");
-  const [yearLevel, setYearLevel] = useState("1");
-  const [semester, setSemester] = useState("1");
+  const signedInDestination = useCallback((profile: Profile) => authReturnTo(profile, returnTo)
+    ?? (isChangeTrackMode && profile.role === "student" ? "/profile?edit=track" : destinationFor(profile)),
+  [isChangeTrackMode, returnTo]);
 
   // Initial Auth & Session Synchronization
   useEffect(() => {
@@ -195,26 +190,7 @@ function OnboardingContent() {
 
           try {
             const userProfile = await apiRequest<Profile>("/profile/me");
-            if (active) {
-              setProfile(userProfile);
-              if (userProfile.enrolled_language) {
-                setLanguageTrack(userProfile.enrolled_language);
-              }
-              if (userProfile.year_level) {
-                setYearLevel(String(userProfile.year_level));
-              }
-              if (userProfile.semester) {
-                setSemester(String(userProfile.semester));
-              }
-
-              if (isChangeTrackMode && userProfile.role !== "student") return;
-              if (userProfile.role !== "student" || (!userProfile.needs_track_setup && !isChangeTrackMode)) {
-                router.replace(authReturnTo(userProfile, returnTo) ?? destinationFor(userProfile));
-                return;
-              }
-
-              setIsAuthenticated(true);
-            }
+            if (active) router.replace(signedInDestination(userProfile));
           } catch (error) {
             if (active) {
               setIsError(true);
@@ -238,17 +214,13 @@ function OnboardingContent() {
       if (!active) return;
       if (event === "PASSWORD_RECOVERY") setAuthMode("reset-update");
       setSession(nextSession);
-      if (!nextSession) {
-        setProfile(null);
-        setIsAuthenticated(false);
-      }
     });
 
     return () => {
       active = false;
       listener.subscription.unsubscribe();
     };
-  }, [router, isChangeTrackMode, isRecoveryMode, isInviteMode, setResetError, returnTo]);
+  }, [router, isRecoveryMode, isInviteMode, setResetError, signedInDestination]);
 
   function changeAuthMode(mode: AuthMode) {
     setStatusMessage(null);
@@ -324,33 +296,15 @@ function OnboardingContent() {
       if (result.data.session) {
         setSession(result.data.session);
 
-        // Directive #8: If returning student already has saved learning track, redirect immediately
         try {
           const userProfile = await apiRequest<Profile>("/profile/me");
-          setProfile(userProfile);
-          if (userProfile.enrolled_language) {
-            setLanguageTrack(userProfile.enrolled_language);
-          }
-          if (userProfile.year_level) {
-            setYearLevel(String(userProfile.year_level));
-          }
-          if (userProfile.semester) {
-            setSemester(String(userProfile.semester));
-          }
-
-          if (isChangeTrackMode && userProfile.role !== "student") return;
-          if (userProfile.role !== "student" || (!userProfile.needs_track_setup && !isChangeTrackMode)) {
-            router.push(authReturnTo(userProfile, returnTo) ?? destinationFor(userProfile));
-            return;
-          }
+          router.replace(signedInDestination(userProfile));
         } catch (error) {
           changeAuthMode("signin");
           setIsError(true);
           setStatusMessage(getErrorMessage(error));
           return;
         }
-
-        setIsAuthenticated(true);
       }
     } catch (err) {
       const existingEmail = createAccount && typeof err === "object" && err !== null && "code" in err
@@ -400,54 +354,6 @@ function OnboardingContent() {
     }
   }
 
-  const handleSaveTrack = async (e: FormEvent) => {
-    e.preventDefault();
-    setStatusMessage(null);
-    setIsError(false);
-    setBusy(true);
-
-    try {
-      const value = await apiRequest<Profile>("/profile/onboarding", {
-        method: "PUT",
-        body: JSON.stringify({
-          enrolled_language: languageTrack,
-          year_level: Number(yearLevel),
-          semester: Number(semester),
-        }),
-      });
-      setProfile(value);
-      router.push(authReturnTo(value, returnTo) ?? destinationFor(value));
-    } catch (err) {
-      setIsError(true);
-      setStatusMessage(getErrorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleSignOut = async () => {
-    setBusy(true);
-    setStatusMessage(null);
-    setIsError(false);
-
-    try {
-      const { error } = await getSupabase().auth.signOut({ scope: "local" });
-      if (error) throw error;
-      clearSharedComputerData();
-      setSession(null);
-      setProfile(null);
-      setIsAuthenticated(false);
-      setPassword("");
-      setStatusMessage("You have signed out.");
-      setAuthMode("signin");
-    } catch (err) {
-      setIsError(true);
-      setStatusMessage(getErrorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (loadingSession) {
     return (
       <div className="min-h-screen bg-[#f7f9f7] flex items-center justify-center p-6">
@@ -455,18 +361,6 @@ function OnboardingContent() {
           Checking your sign-in…
         </div>
       </div>
-    );
-  }
-
-  if (isChangeTrackMode && profile && profile.role !== "student") {
-    return (
-      <AppShell profile={profile}>
-        <section className="panel">
-          <h1>Learning tracks are for students</h1>
-          <p>You are signed in as an {roleLabels[profile.role]}.</p>
-          <Link className="button button-primary" href={destinationFor(profile)}>Back to your workspace</Link>
-        </section>
-      </AppShell>
     );
   }
 
@@ -480,12 +374,9 @@ function OnboardingContent() {
     : (!isError ? statusMessage : null);
   const displayError = isResetFlow ? resetError : (isError ? statusMessage : null);
 
-  const content = (
-    <div className={isAuthenticated ? "" : "auth-page"}>
-
-      <div className="auth-stage" id={isAuthenticated ? undefined : "main-content"}>
-        {!isAuthenticated ? (
-          /* ================= AUTHENTICATION VIEW (No Top Navbar) ================= */
+  return (
+    <div className="auth-page">
+        <div className="auth-stage" id="main-content">
           <section className={`auth-form-card${authMode === "agreement" ? " auth-form-card-wide" : ""}`} aria-labelledby="auth-heading">
             <div className="auth-brand-header">
               <Link href="/" className="auth-brand-link" aria-label="ByteQuest home" data-tooltip="Go to the ByteQuest home page.">
@@ -741,127 +632,7 @@ function OnboardingContent() {
               )}
             </div>
           </section>
-        ) : (
-          /* ================= LEARNING TRACK VIEW (Post-Login) ================= */
-          <section className="auth-form-card" aria-labelledby="auth-track-heading">
-            <div className="auth-brand-header">
-              <h1 id="auth-track-heading">
-                Choose your learning track
-              </h1>
-              <p className="mt-1.5 text-sm text-slate-600">
-                Signed in as{" "}
-                <span className="font-semibold text-slate-900">
-                  {session?.user?.email || email || "student@example.edu"}
-                </span>
-                . Select your course language and academic term to configure your quest map.
-              </p>
-            </div>
-
-            <form
-              onSubmit={handleSaveTrack}
-              className="space-y-5"
-            >
-
-              {statusMessage && (
-                <div
-                  role="status"
-                  aria-live="polite"
-                  className={`rounded-xl border px-3.5 py-2.5 text-xs font-medium ${
-                    isError
-                      ? "border-rose-200 bg-rose-50/80 text-rose-700"
-                      : "border-emerald-200 bg-emerald-50/70 text-[#156046]"
-                  }`}
-                >
-                  {statusMessage}
-                </div>
-              )}
-
-              {/* Directive #9: Removed programming language helper description below select */}
-              <div>
-                <label
-                  htmlFor="language-track"
-                  className="auth-label"
-                >
-                  Programming language track
-                </label>
-                <select
-                  id="language-track"
-                  value={languageTrack}
-                  onChange={(e) => setLanguageTrack(e.target.value as ProgrammingLanguage)}
-                  className="auth-input"
-                >
-                  <option value="python">Python — General &amp; Data Science</option>
-                  <option value="cpp">C++ — Systems &amp; Algorithms</option>
-                  <option value="java">Java — Object-Oriented Programming</option>
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3.5">
-                <div>
-                  <label
-                    htmlFor="year-level"
-                    className="auth-label"
-                  >
-                    Year level
-                  </label>
-                  <select
-                    id="year-level"
-                    value={yearLevel}
-                    onChange={(e) => setYearLevel(e.target.value)}
-                    className="auth-input"
-                  >
-                    <option value="1">Year 1</option>
-                    <option value="2">Year 2</option>
-                    <option value="3">Year 3</option>
-                    <option value="4">Year 4</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="semester"
-                    className="auth-label"
-                  >
-                    Semester
-                  </label>
-                  <select
-                    id="semester"
-                    value={semester}
-                    onChange={(e) => setSemester(e.target.value)}
-                    className="auth-input"
-                  >
-                    <option value="1">Semester 1</option>
-                    <option value="2">Semester 2</option>
-                  </select>
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={busy}
-                className="auth-action auth-primary-button"
-              >
-                {busy ? "Saving track…" : "Save and open quests →"}
-              </button>
-
-              {isChangeTrackMode && <Link href="/dashboard" className="button button-outline">Cancel</Link>}
-              <div className="text-center">
-                <button
-                  type="button"
-                  onClick={handleSignOut}
-                  disabled={busy}
-                  className="text-xs font-medium text-slate-600 hover:text-rose-600"
-                >
-                  Sign out of {session?.user?.email || email || "account"}
-                </button>
-              </div>
-
-              {/* Directive #7: Removed "Account ready. Choose your learning track to continue." banner */}
-            </form>
-          </section>
-        )}
-      </div>
+        </div>
     </div>
   );
-  return isAuthenticated && profile ? <AppShell profile={profile}>{content}</AppShell> : content;
 }

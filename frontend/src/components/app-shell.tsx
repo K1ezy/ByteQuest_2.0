@@ -6,7 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { apiRequest, ApiError, getErrorMessage } from "@/lib/api";
 import { getSupabase } from "@/lib/supabase";
 import { subscribeToProfileUpdates } from "@/lib/profile-events";
-import { belongsTo, canOpenPath, pageLabel, primaryNavigation, questRedirect, roleLabels, usesInstructorCourseShell, withCourse } from "@/lib/navigation";
+import { belongsTo, canOpenPath, pageLabel, primaryNavigation, questRedirect, roleLabels, studentExamsHref, usesInstructorCourseShell, withCourse } from "@/lib/navigation";
 import type { Profile } from "@/lib/types";
 import { destinationFor } from "@/components/home-redirect";
 import { AccountMenu } from "@/components/account-menu";
@@ -79,9 +79,6 @@ export function AuthenticatedLayout({ children }: { children: ReactNode }) {
   const profile = state.profile;
   const legacyQuest = pathname === "/quests" && questRedirect(params, profile.role);
   if (legacyQuest) return <LegacyQuestRedirect target={legacyQuest} />;
-  if (profile.role === "student" && profile.needs_track_setup) {
-    return <LegacyQuestRedirect target={"/onboarding?redirect=" + encodeURIComponent(requestedPath)} />;
-  }
   return <ProfileContext.Provider value={profile}>
     <AppShell profile={profile}>
       {canOpenPath(profile.role, pathname) ? children : (
@@ -124,7 +121,8 @@ function isActiveDestination(pathname: string, href: string, index: number) {
     || (href === "/admin/courses" && belongsTo(pathname, "/admin/assignments"))
     || (href === "/admin/activities" && belongsTo(pathname, "/admin/materials"))
     || (href === "/admin/teaching" && belongsTo(pathname, "/workshops"))
-    || (href === "/quests" && ["/arena", "/quiz", "/submissions", "/reviews"].some((section) => belongsTo(pathname, section)));
+    || (href === "/profile" && belongsTo(pathname, "/reviews"))
+    || (href === "/quests" && ["/arena", "/quiz", "/submissions"].some((section) => belongsTo(pathname, section)));
 }
 
 export function AppShell({ profile, children }: { profile: Profile; children: ReactNode }) {
@@ -141,7 +139,7 @@ export function AppShell({ profile, children }: { profile: Profile; children: Re
   const [origin, setOrigin] = useState("/quests");
   const here = pathname + (params.size ? "?" + params.toString() : "");
   if (profile.role === "student" && !focusExit && !belongsTo(pathname, "/submissions") && origin !== here) setOrigin(here);
-  const exit = focusExit && focusExit[1] === "exams" ? { href: "/exams", label: "Exams" }
+  const exit = focusExit && focusExit[1] === "exams" ? { href: studentExamsHref, label: "Exams" }
     : { href: origin, label: pageLabel(origin.split(/[?#]/)[0]) };
   useScrollResetOnRouteChange(pathname);
   useEffect(() => {
@@ -178,7 +176,7 @@ export function AppShell({ profile, children }: { profile: Profile; children: Re
         <span className="bq-app-location">{title}</span>
       </>}
       <div className="bq-app-utilities">
-        {profile.role === "student" && <span className="tag bq-app-context">{profile.enrolled_language.toUpperCase()}</span>}
+        {profile.role === "student" && profile.enrolled_language && <span className="tag bq-app-context">{profile.enrolled_language.toUpperCase()}</span>}
         <span className="tag bq-app-context">{roleLabels[profile.role]}</span>
         <ChatShell />
         <AccountMenu key={titleKey} profile={profile} />

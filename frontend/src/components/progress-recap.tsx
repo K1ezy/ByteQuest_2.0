@@ -69,7 +69,7 @@ export function ProgressRecap({ userId }: { userId: string }) {
     && shown.metrics.some((metric) => metric.change < 0));
 
   return (
-    <section className="pilot-card dashboard-recap dashboard-reveal" aria-labelledby="recap-title" aria-busy={loading}>
+    <section className="ws-panel dashboard-recap" aria-labelledby="recap-title" aria-busy={loading}>
       <div className="recap-head">
         <div>
           <p className="eyebrow-label">Your recent progress</p>

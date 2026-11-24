@@ -1108,7 +1108,8 @@ def test_public_signup_username_is_reserved_with_auth_user(workspace):
         profile = db.get(Profile, created)
         assert profile.username == "freshhandle"
         assert profile.role == UserRole.student
-        assert profile.enrolled_language == ProgrammingLang.cpp
+        assert profile.enrolled_language is None
+        assert profile.track_selected_at is None
         assert profile.pseudonym_id == f"stu_{created.hex}"
         assert (profile.school_id, profile.year_level, profile.block_section) == (first_school_id, 3, "F")
 

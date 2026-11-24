@@ -88,6 +88,8 @@ it("opens the account menu and closes it on Escape or a tap outside", () => {
 
 it("keeps exam return paths internal and role appropriate", () => {
   expect(authReturnTo(student, "/exams/exam-id?resume=1")).toBe("/exams/exam-id?resume=1");
+  expect(authReturnTo(student, "/quests?category=exams")).toBe("/quests?category=exams");
+  expect(authReturnTo(admin, "/quests?category=exams")).toBeNull();
   expect(authReturnTo(admin, "/exams/exam-id")).toBeNull();
   expect(authReturnTo(student, "//example.test")).toBeNull();
   expect(authReturnTo(student, "/admin")).toBeNull();
@@ -122,5 +124,5 @@ it("returns a focus page to the filtered list it was opened from", () => {
   expect(screen.getByRole("link", { name: "Back to Workshops" }).getAttribute("href")).toBe("/workshops/w-1/activities");
   route.path = "/exams/exam-1";
   view.rerender(<AppShell profile={student}><p>Exam</p></AppShell>);
-  expect(screen.getByRole("link", { name: "Back to Exams" }).getAttribute("href")).toBe("/exams");
+  expect(screen.getByRole("link", { name: "Back to Exams" }).getAttribute("href")).toBe("/quests?category=exams");
 });

@@ -48,6 +48,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
         if (role !== "student") {
           throw new Error("Concept check quizzes are available to student accounts.");
         }
+        if (!language) throw new Error("Join a workshop to choose your language before opening a quiz.");
         const activities = await apiRequest<Quest[]>(`/quests?details_for=${encodeURIComponent(activityId)}`);
         if (!active) return;
         setTrackActivities(activities);
@@ -218,7 +219,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
       {/* Page Heading */}
       <div className="page-heading">
         <div>
-          <p className="eyebrow-label">{quest && `Quest #${quest.position ?? quest.sequence_order} · `}Concept check · {language.toUpperCase()}</p>
+          <p className="eyebrow-label">{quest && `Quest #${quest.position ?? quest.sequence_order} · `}Concept check quiz · {quest?.language.toUpperCase()}</p>
           <h1>{quest?.title || "Concept knowledge check"}</h1>
           <p>{quest ? `${quest.topic_concept} · ${quest.xp_reward} XP on first completion` : "Test your understanding of core concepts."}</p>
         </div>

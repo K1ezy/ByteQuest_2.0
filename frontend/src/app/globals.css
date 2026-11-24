@@ -378,30 +378,6 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .quest-filter-empty { grid-column: 1 / -1; }
 
-/* Progress Summary Card */
-.quest-progress { padding: 22px; }
-.quest-progress-heading { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
-.quest-progress-heading .eyebrow-label { margin-bottom: 6px; }
-.quest-progress-heading h2 { margin: 0; font: 700 var(--text-lg) var(--font-heading); }
-.quest-progress-percent { color: var(--green); font: 700 1.5rem var(--font-heading); }
-.progress-track {
-  height: 10px;
-  overflow: hidden;
-  margin: 16px 0 12px;
-  border-radius: 999px;
-  background: var(--emerald-100);
-}
-.progress-track span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--emerald-700), var(--emerald-400));
-  transform: translateX(calc(var(--value, 0%) - 100%));
-  transition: transform var(--dur-base) var(--ease-out);
-}
-.quest-progress-next { margin: 0; font-size: var(--text-sm); }
-.quest-progress-next strong { color: var(--ink); }
-
 /* Quest Grid & Challenge Cards */
 .quest-grid {
   display: grid;
@@ -1098,7 +1074,7 @@ h1, h2, h3, p { margin-top: 0; }
   font-variant-numeric: tabular-nums;
 }
 .leaderboard-standing-copy { min-width: 0; }
-.leaderboard-standing-copy h2 { margin: 0; color: var(--ink); font-size: var(--text-lg); }
+.leaderboard-standing-copy h3 { margin: 0; color: var(--ink); font-size: var(--text-lg); }
 .leaderboard-standing-copy p { margin: 4px 0 0; color: var(--muted); font-size: var(--text-sm); }
 .leaderboard-standing-identity strong { color: var(--purple-dark); overflow-wrap: anywhere; }
 .leaderboard-standing-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
@@ -2303,13 +2279,7 @@ html[data-contrast="high"] .a11y-keyboard-reference {
   border: 1px solid var(--emerald-100);
 }
 
-.progress-track {
-  background: var(--control-pressed);
-}
 
-.progress-track span {
-  background: var(--purple);
-}
 
 .status-dot {
   background: var(--emerald-500);
@@ -2350,14 +2320,7 @@ html[data-contrast="high"] .quest-card.is-selected-card {
   box-shadow: 0 0 0 3px #000000 !important;
 }
 
-html[data-contrast="high"] .progress-track {
-  background: #ffffff !important;
-  border: 1px solid #000000;
-}
 
-html[data-contrast="high"] .progress-track span {
-  background: #000000 !important;
-}
 
 /* ByteQuest Chat Assistant */
 .chat-launcher-label { line-height: 1; }
@@ -3661,6 +3624,12 @@ html[data-contrast="high"] .ws-row-meta { color: #252337; }
 .profile-tabs a:hover, .ws-section-nav a:hover { background: var(--violet-50); color: var(--purple-dark); }
 .profile-tabs a[aria-current="page"], .ws-section-nav a[aria-current="page"] { background: var(--purple); color: var(--ink-inverse); box-shadow: 0 4px 12px rgb(91 37 176 / 18%); }
 .profile-tabs a:focus-visible, .ws-section-nav a:focus-visible { outline: 3px solid var(--violet-600); outline-offset: 2px; }
+.profile-tabs-student { flex-wrap: wrap; overflow: visible; }
+.profile-tabs-student a { flex: 1; }
+.profile-progress-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 16px; }
+.profile-progress-overview .ws-panel { display: grid; align-content: start; justify-items: start; gap: 8px; margin: 0; min-width: 0; }
+.profile-progress-overview :is(h2, p) { margin: 0; }
+.profile-progress-overview progress { width: 100%; accent-color: var(--purple); }
 
 
 /* ===========================================================================
@@ -4079,15 +4048,7 @@ html[data-contrast="high"] .ws-row-meta { color: #252337; }
   font-size: clamp(1.5rem, 2.2vw, 2rem);
 }
 .bq-quest-map .qm-panel-heading p { color: var(--muted); }
-.bq-quest-map .quest-progress,
 .bq-quest-map .quest-card { box-shadow: none; }
-@media (max-width: 700px) {
-  /* Search and filters lead on phones; progress stays a compact summary below them. */
-  .bq-quest-map .quest-progress { padding: 14px 16px; }
-  .bq-quest-map .quest-progress-heading .eyebrow-label { display: none; }
-  .bq-quest-map .quest-progress-heading h2 { font-size: var(--text-base); }
-  .bq-quest-map .quest-progress-percent { font-size: var(--text-lg); }
-}
 .bq-quest-map .quest-grid-expanded {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
   gap: clamp(16px, 2vw, 24px);
@@ -4222,9 +4183,8 @@ html[data-contrast="high"] .ws-row-meta { color: #252337; }
 .bq-quest-map .quest-results-summary { min-height: 32px; }
 @media (max-width: 520px) {
   .quest-map-toolbar .quest-filters { width: 100%; }
-  /* One row of type filters with full labels; the row scrolls sideways when it runs out of room. */
-  .quest-map-toolbar .quest-filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
-  .quest-map-toolbar .filter-button { flex: 1 0 auto; padding-inline: 10px; white-space: nowrap; }
+  .quest-map-toolbar .quest-filters { flex-wrap: wrap; }
+  .quest-map-toolbar .filter-button { flex: 1 1 auto; padding-inline: 10px; }
   .quest-refine-controls { flex-basis: 100%; }
   .quest-refine-controls .quest-search { flex-basis: 8.5rem; }
 }
@@ -4344,8 +4304,7 @@ html[data-contrast="high"] :is(.filter-button, .ws-filter-chip, .arena-case-butt
 @property --ring { syntax: "<number>"; inherits: false; initial-value: 0; }
 .dashboard-hub { --dash-ease: cubic-bezier(.2, .7, .2, 1); --dash-lift: 0 1px 2px rgb(17 12 40 / 5%), 0 6px 16px rgb(17 12 40 / 3%); }
 .dashboard-hub .pilot-card { box-shadow: var(--dash-lift); }
-.dashboard-main-column, .dashboard-side-column { min-width: 0; }
-.dashboard-heading, .dashboard-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.dashboard-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .dashboard-heading { margin-bottom: 22px; }
 .dashboard-heading > div { min-width: 0; }
 .dashboard-heading h1 { margin: 4px 0 6px; line-height: var(--leading-tight); overflow-wrap: anywhere; }
@@ -4394,56 +4353,13 @@ html[data-contrast="high"] :is(.filter-button, .ws-filter-chip, .arena-case-butt
 .dashboard-live-dot::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: inherit; animation: dashboard-pulse 1.6s var(--ease-out) infinite; }
 @keyframes dashboard-pulse { 0% { transform: scale(1); opacity: .45; } 100% { transform: scale(3); opacity: 0; } }
 
-/* Recent attempts: whole row is the target; colour plus text carries the result. */
-.dashboard-history .dashboard-section-heading { align-items: center; }
-.dashboard-history .dashboard-section-heading h2 { margin: 0; }
-.dashboard-history .dashboard-section-heading > span { padding: 2px 10px; border-radius: 999px; background: var(--purple-soft); color: var(--purple-dark); font-size: var(--text-2xs); font-weight: 700; }
-.dashboard-attempt-list { margin: 12px -10px 0; padding: 0; list-style: none; }
-.dashboard-attempt-list li + li { border-top: 1px solid var(--line); }
-.dashboard-attempt { display: flex; align-items: center; gap: 14px; padding: 12px 10px; border-radius: 10px; transition: background-color .15s; }
-.dashboard-attempt:hover { background: var(--paper); }
-.dashboard-attempt:hover strong { color: var(--purple-dark); }
-.dashboard-attempt-icon { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border-radius: 10px; background: var(--purple-soft); color: var(--purple); font: 800 .8rem var(--font-mono); }
-.dashboard-attempt-icon.quiz { background: #eef4ff; color: #2f4fa8; font-size: 1rem; }
-.dashboard-attempt-text { flex: 1; min-width: 0; }
-.dashboard-attempt-text strong, .dashboard-attempt-text span { display: block; }
-.dashboard-attempt-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .15s; }
-.dashboard-attempt-text span { color: var(--muted); font-size: var(--text-2xs); }
-.dashboard-result { display: grid; justify-items: end; gap: 6px; flex: none; color: #865823; font-size: var(--text-2xs); font-weight: 750; }
-.dashboard-result.passed { color: var(--emerald-700); }
-.dashboard-score-bar { position: relative; width: 84px; height: 5px; overflow: hidden; border-radius: 999px; background: var(--purple-soft); }
-.dashboard-score-bar::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 100%; transform: translateX(calc(var(--score) - 100%)); border-radius: inherit; background: currentColor; animation: dashboard-grow .7s var(--dash-ease) both; }
-.dashboard-more { margin-top: 8px; }
-.dashboard-empty { padding: 18px 0 4px; text-align: center; }
-.dashboard-empty p { margin: 0; color: var(--muted); }
-
-/* Progress ring: the percentage text stays inside, so forced-colour modes still read it. */
-.dashboard-progress-body { display: flex; align-items: center; gap: 16px; margin-top: 12px; }
-.dashboard-progress-body h2 { margin: 0 0 2px; }
-.dashboard-ring { --ring: var(--pct); display: grid; place-items: center; width: 92px; aspect-ratio: 1; flex: none; border-radius: 50%; background: radial-gradient(closest-side, var(--surface) 78%, transparent 79%), conic-gradient(var(--purple) calc(var(--ring) * 1%), var(--purple-soft) 0); transition: --ring .8s var(--dash-ease); animation: dashboard-ring-fill 1s var(--dash-ease) both; }
+.dashboard-ring { --ring: var(--pct); display: grid; place-items: center; width: 92px; aspect-ratio: 1; flex: none; border-radius: 50%; background: radial-gradient(closest-side, var(--surface) 78%, transparent 79%), conic-gradient(var(--purple) calc(var(--ring) * 1%), var(--purple-soft) 0); transition: --ring .8s var(--ease-out); animation: dashboard-ring-fill 1s var(--ease-out) both; }
 .dashboard-ring span { color: var(--ink); font-size: var(--text-lg); font-weight: 800; }
 @keyframes dashboard-ring-fill { from { --ring: 0; } }
-
-.dashboard-level { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
-.dashboard-level h2 { margin: 0; }
-.dashboard-level-badge { display: grid; place-items: center; width: 52px; height: 52px; flex: none; border-radius: 14px; background: linear-gradient(145deg, #7a45c9, var(--purple-dark)); color: var(--ink-inverse); font-size: 1.4rem; font-weight: 800; box-shadow: 0 6px 16px rgb(89 39 166 / 25%), inset 0 1px 0 rgb(255 255 255 / 25%); }
-.dashboard-xp { margin: 0; color: var(--purple-dark); font-weight: 800; }
-.dashboard-meter { height: 8px; margin: 16px 0 6px; overflow: hidden; border-radius: 999px; background: var(--purple-soft); }
-.dashboard-meter span { display: block; width: 100%; height: 100%; transform: translateX(calc(var(--fill) - 100%)); border-radius: inherit; background: linear-gradient(90deg, #8b5cd6, var(--purple)); transition: transform .6s var(--dash-ease); animation: dashboard-grow .9s var(--dash-ease) both; }
-@keyframes dashboard-grow { from { transform: translateX(-100%); } }
-.dashboard-subheading { margin: 20px 0 10px; color: var(--muted); font-size: var(--text-2xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.dashboard-badge-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.dashboard-badge-list li { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--purple-soft); color: var(--purple-dark); transition: transform .2s var(--dash-ease); }
-.dashboard-badge-list li:hover { transform: translateX(2px); }
-.dashboard-badge-list strong, .dashboard-badge-list small { display: block; }
-.dashboard-badge-list small { color: var(--muted); font-size: var(--text-2xs); line-height: var(--leading-snug); }
-.dashboard-badge-icon { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 8px; background: var(--surface); color: var(--purple); }
 
 /* Loading skeleton holds the final layout so nothing jumps on arrival. */
 .dashboard-skeleton .ws-skeleton { margin-bottom: 16px; border-radius: 12px; }
 .dashboard-skeleton-hero { height: 196px; }
-.dashboard-skeleton-list { height: 320px; }
-.dashboard-skeleton-side { height: 230px; }
 
 .dashboard-reveal { animation: dashboard-rise .5s var(--dash-ease) both; animation-delay: calc(var(--reveal-step, 0) * 70ms); }
 @keyframes dashboard-rise { from { opacity: 0; transform: translateY(8px); } }
@@ -4458,17 +4374,13 @@ html[data-contrast="high"] :is(.filter-button, .ws-filter-chip, .arena-case-butt
   .dashboard-exam .button { width: 100%; }
   .dashboard-next { padding: 18px; }
   .dashboard-next::after { display: none; }
-  .dashboard-attempt { flex-wrap: wrap; row-gap: 6px; }
-  .dashboard-result { display: flex; align-items: center; gap: 10px; flex-basis: 100%; padding-left: 52px; }
-  .dashboard-score-bar { width: 56px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .dashboard-reveal, .dashboard-ring, .dashboard-meter span, .dashboard-score-bar::after, .dashboard-live-dot, .dashboard-refresh-icon { animation: none !important; }
-  .dashboard-next-cta:hover, .dashboard-badge-list li:hover { transform: none; }
+  .dashboard-reveal, .dashboard-ring, .dashboard-live-dot::after, .dashboard-refresh-icon { animation: none !important; }
+  .dashboard-next-cta:hover { transform: none; }
 }
 @media (forced-colors: active) {
   .dashboard-ring { border: 2px solid CanvasText; }
-  .dashboard-meter, .dashboard-score-bar { border: 1px solid CanvasText; }
 }
 
 /* Solve-quality stars and reward news (informational; XP rules are unchanged). */
@@ -4510,26 +4422,6 @@ html[data-contrast="high"] :is(.filter-button, .ws-filter-chip, .arena-case-butt
 .codex-entry p { font-size: var(--text-sm); margin: 8px 0 0; }
 .codex-entry progress { display: block; width: 100%; margin-top: 12px; accent-color: var(--green); }
 
-.mastery-view-toggle {
-  width: fit-content;
-  max-width: 100%;
-  margin-block: 0 16px;
-  overflow: visible;
-}
-.mastery-view-toggle button {
-  min-height: 44px;
-  padding: 6px 14px;
-  border: 0;
-  border-radius: 9px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: 750;
-  cursor: pointer;
-}
-.mastery-view-toggle button:hover { background: var(--violet-50); }
-.mastery-view-toggle button[aria-pressed="true"] { background: var(--purple); color: var(--ink-inverse); }
-.mastery-view-toggle button:focus-visible,
 .mastery-node:focus-visible { outline-color: var(--purple); }
 .mastery-path {
   --path-gap: 20px;
@@ -4868,8 +4760,6 @@ html { scroll-padding-top: 5rem; }
   .bq-sheet-handle { display: block; width: 40px; height: 4px; margin: 4px auto 10px; border-radius: 999px; background: var(--line-strong); }
   .bq-account-actions a, .bq-account-actions button { min-height: 48px; padding-inline: .75rem; font-size: var(--text-base); }
 
-  /* Leaderboard is a tab of its own, so a "Back to Quest Map" button duplicates the Quests tab. */
-  .leaderboard-back { display: none; }
 }
 /* Timed exam controls and code need to share the first phone viewport. */
 .exam-attempt-header { border: 2px solid var(--emerald-700); }

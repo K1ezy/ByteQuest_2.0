@@ -6,7 +6,7 @@ export interface Profile {
   pseudonym_id: string;
   username: string;
   role: UserRole;
-  enrolled_language: ProgrammingLanguage;
+  enrolled_language: ProgrammingLanguage | null;
   year_level: number;
   semester: number;
   xp_points: number;
@@ -16,8 +16,6 @@ export interface Profile {
   avatar_url?: string | null;
   email?: string | null;
   created_at?: string | null;
-  /** True until a student saves their learning track; always false for staff. */
-  needs_track_setup?: boolean;
   /** False while the account still has its generated starter handle; the server owns this rule. */
   handle_chosen?: boolean;
 }
@@ -142,7 +140,7 @@ export type MasteryConcept = {
   activity_ids: string[];
   memory?: MemoryConcept | null;
 };
-export type MasteryMapResponse = { track: ProgrammingLanguage; concepts: MasteryConcept[] };
+export type MasteryMapResponse = { track: ProgrammingLanguage | null; concepts: MasteryConcept[] };
 
 export type MemoryState = "fresh" | "due" | "fading" | "long_term";
 export type MemoryConcept = {

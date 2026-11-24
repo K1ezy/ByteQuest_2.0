@@ -964,6 +964,8 @@ def test_exam_snapshot_autosave_and_result_embargo(flow, monkeypatch):
     assert hidden_student["current_level"] == 1
     assert hidden_student["active_days_30"] == 0
     assert hidden_student["score_trend"] == []
+    assert hidden_student["recent_attempts"] == []
+    assert hidden_student["quests_completed"] == 0
     assert hidden_student["exam_history"][0]["score"] is None
     assert hidden_student["exam_history"][0]["results_released"] is False
     hidden_progress = client.get("/api/v1/quests/progress", headers=student).json()
@@ -984,6 +986,9 @@ def test_exam_snapshot_autosave_and_result_embargo(flow, monkeypatch):
     assert staff_result["results_released"] and staff_result["xp_awarded"] > 0
     released_profile = client.get("/api/v1/profile/me/analytics", headers=student).json()["student"]
     assert released_profile["total_attempts"] == 2
+    assert released_profile["quests_completed"] == 2
+    assert len(released_profile["recent_attempts"]) == 2
+    assert all(item["is_exam"] and not item["can_open_quest"] for item in released_profile["recent_attempts"])
     assert released_profile["xp_points"] > 0
     assert released_profile["active_days_30"] == 1
     assert sum(day["attempts"] for day in released_profile["activity_days"]) == 2
@@ -3086,32 +3091,50 @@ def test_ai_failures_leave_drafts_and_hint_allowance_intact(flow, monkeypatch, c
 
 
 
-def test_student_track_setup_is_pending_until_saved(flow):
-    """A new student must return to track setup, not a default-track dashboard.
-
-    Regression: routing treated a non-empty enrolled_language as proof of setup,
-    but the signup trigger always writes 'cpp', so refreshing during setup sent
-    the student to the dashboard on a track they never chose.
-    """
+def test_first_language_is_selected_only_on_successful_workshop_join(flow):
     client, new_session, users = flow
-    student = _token(users["student"])
+    student, instructor = _token(users["student"]), _token(users["instructor"])
 
     with new_session() as db:
-        db.get(Profile, users["student"]).track_selected_at = None
+        profile = db.get(Profile, users["student"])
+        profile.enrolled_language = None
+        profile.track_selected_at = None
         db.commit()
 
-    pending = client.get("/api/v1/profile/me", headers=student)
-    assert pending.status_code == 200, pending.text
-    assert pending.json()["needs_track_setup"] is True
+    profile = client.get("/api/v1/profile/me", headers=student).json()
+    assert profile["enrolled_language"] is None and not profile["needs_track_setup"]
+    dashboard = client.get("/api/v1/pilot/dashboard", headers=student).json()
+    assert dashboard["recommendation"]["recommended_action"] == "join_workshop"
+    assert dashboard["next_activity"] is None
+    assert client.get("/api/v1/quests", headers=student).json() == []
+    assert client.get("/api/v1/quests/leaderboard", headers=student).json()["track"] is None
+    assert client.get("/api/v1/quests/mastery-map", headers=student).json()["concepts"] == []
+    progress = client.get("/api/v1/profile/me/analytics", headers=student).json()["student"]
+    assert progress["quests_total"] == 0
 
-    saved = client.put("/api/v1/profile/onboarding", headers=student,
-                       json={"enrolled_language": "python", "year_level": 3, "semester": 1})
+    update = {"enrolled_language": "java", "year_level": 3, "semester": 1}
+    assert client.put("/api/v1/profile/onboarding", headers=student, json=update).status_code == 409
+    workshop = client.post("/api/v1/workshops", headers=instructor, json={
+        "name": "Choose Python", "language": "python",
+    })
+    assert workshop.status_code == 201, workshop.text
+    code = workshop.json()["join_code"]
+    join = "/api/v1/workshops/join"
+    assert client.post(join, headers=student, json={"code": code}).status_code == 422
+    mismatch = client.post(join, headers=student, json={"code": code, "language": "java"})
+    assert (mismatch.status_code, mismatch.json()["detail"]) == (409, "This workshop uses Python. Choose Python to join.")
+    assert client.get("/api/v1/profile/me", headers=student).json()["enrolled_language"] is None
+    assert client.get("/api/v1/workshops", headers=student).json() == []
+
+    joined = client.post(join, headers=student, json={"code": code, "language": "python"})
+    assert joined.status_code == 200, joined.text
+    assert client.get("/api/v1/profile/me", headers=student).json()["enrolled_language"] == "python"
+    with new_session() as db:
+        assert db.get(Profile, users["student"]).track_selected_at is not None
+    assert client.post(join, headers=student, json={"code": code}).status_code == 200
+    saved = client.put("/api/v1/profile/onboarding", headers=student, json=update)
     assert saved.status_code == 200, saved.text
-    assert saved.json()["needs_track_setup"] is False
-    assert client.get("/api/v1/profile/me", headers=student).json()["needs_track_setup"] is False
-
-    # Staff never see track setup, whatever the column holds.
-    assert client.get("/api/v1/profile/me", headers=_token(users["instructor"])).json()["needs_track_setup"] is False
+    assert saved.json()["enrolled_language"] == "java" and saved.json()["year_level"] == 3
 
 
 def test_progress_recap_compares_manila_periods_and_usual_pace(flow, monkeypatch):

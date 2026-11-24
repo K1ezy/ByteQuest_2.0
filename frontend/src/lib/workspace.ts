@@ -367,7 +367,7 @@ export interface PerformanceRow {
   pseudonym: string;
   username: string;
   display_name: string | null;
-  enrolled_language: string;
+  enrolled_language: string | null;
   completed_count: number;
   total_activities: number;
   attempt_count: number;
@@ -399,7 +399,7 @@ export interface StudentPerformance {
     pseudonym: string;
     username: string;
     display_name: string | null;
-    enrolled_language: string;
+    enrolled_language: string | null;
     xp_points: number;
     current_level: number;
   };
@@ -1030,6 +1030,8 @@ export interface StudentAnalytics {
   xp_into_level: number;
   xp_to_next_level: number;
   level_progress_percent: number;
+  quests_completed?: number;
+  quests_total?: number;
   active_days_30: number;
   current_streak: number;
   longest_streak: number;
@@ -1039,6 +1041,17 @@ export interface StudentAnalytics {
   by_type: TypeBreakdown[];
   by_topic: TopicBreakdown[];
   score_trend: TrendPoint[];
+  recent_attempts?: {
+    attempt_id: string;
+    activity_id: string;
+    title: string | null;
+    activity_type: "quiz" | "challenge";
+    score_percentage: number;
+    is_successful: boolean;
+    created_at: string;
+    can_open_quest: boolean;
+    is_exam: boolean;
+  }[];
   exam_history: ExamHistoryEntry[];
   badges: BadgeEntry[];
   help_pattern?: HelpPattern;

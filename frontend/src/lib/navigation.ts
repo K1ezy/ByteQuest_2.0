@@ -1,6 +1,12 @@
 import type { InstructorIconName } from "@/components/instructor/course-ui";
 import type { Profile } from "@/lib/types";
 
+export const studentExamsHref = "/quests?category=exams";
+
+export function isStudentExamView(pathname: string, category: string | null) {
+  return belongsTo(pathname, "/exams") || (pathname === "/quests" && category === "exams");
+}
+
 export const roleLabels = { student: "Student", instructor: "Instructor", admin: "Administrator" };
 
 /**
@@ -36,8 +42,8 @@ const instructorLabel = (href: string) => instructorLinks.find(([, path]) => pat
  */
 export const primaryNavigation: Record<Profile["role"], readonly (readonly [string, string, string])[]> = {
   student: [
-    ["/dashboard", "Dashboard", "Home"], ["/quests", "Quest Map", "Quests"], ["/exams", "Exams", "Exams"],
-    ["/workshops", "Workshops", "Workshops"], ["/leaderboard", "Leaderboard", "Ranks"],
+    ["/dashboard", "Dashboard", "Home"], ["/quests", "Quest Map", "Quests"],
+    ["/workshops", "Workshops", "Workshops"], ["/profile", "Profile", "Profile"],
   ],
   // Four tabs leave room for More, which opens the full instructor menu.
   instructor: ["/instructor", "/instructor/activities", "/instructor/performance", "/instructor/exams"]
@@ -89,12 +95,14 @@ export function authReturnTo(profile: Profile, value: string | null): string | n
   }
   if (!canOpenPath(profile.role, url.pathname)) return null;
   const roots = [...primaryNavigation[profile.role].map(([path]) => path), "/profile", "/account", "/chat", "/workshops"];
-  if (profile.role === "student") roots.push("/arena", "/quiz", "/submissions", "/reviews");
+  if (profile.role === "student") roots.push("/arena", "/quiz", "/submissions", "/reviews", "/leaderboard", "/exams");
   return roots.some((path) => belongsTo(url.pathname, path)) ? url.pathname + url.search + url.hash : null;
 }
 
 export function questRedirect(params: URLSearchParams, role?: Profile["role"]): string | null {
   const view = params.get("view");
+  if (role === "student" && view === "map") return "/profile?tab=mastery";
+  if (role === "student" && view === "leaderboard") return "/profile?tab=rankings";
   const fixed: Record<string, string> = {
     leaderboard: "/leaderboard", journey: "/dashboard", "activity-hub": "/workshops",
     accessibility: "/account/accessibility",
@@ -119,9 +127,9 @@ export function pageLabel(path: string): string {
   if (belongsTo(path, "/instructor/activities") && label === "analysis") return "Activity Analysis";
   if (belongsTo(path, "/instructor/activities") && label !== "activities") return "Activity Editor";
   if (belongsTo(path, "/arena")) return "Coding Arena";
-  if (belongsTo(path, "/quiz")) return "Concept Check";
+  if (belongsTo(path, "/quiz")) return "Concept check quiz";
   if (belongsTo(path, "/exams")) return "Exam";
-  const labels: Record<string, string> = { ml: "Model evaluation", review: "Review drafts", research: "Research Participation", chat: "Chat Assistant", preview: "Student Preview", studio: "Authoring Studio", onboarding: "Learning Track", assignments: "Course Assignments" };
+  const labels: Record<string, string> = { ml: "Model evaluation", review: "Review drafts", research: "Research Participation", chat: "Chat Assistant", preview: "Student Preview", studio: "Authoring Studio", onboarding: "Sign in", assignments: "Course Assignments" };
   if (belongsTo(path, "/submissions")) return "Submission Status";
   return labels[label] ?? (label.charAt(0).toUpperCase() + label.slice(1));
 }

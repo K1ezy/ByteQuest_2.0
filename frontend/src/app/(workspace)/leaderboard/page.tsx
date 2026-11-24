@@ -1,2 +1,5 @@
-import { Leaderboard } from "@/components/leaderboard";
-export default Leaderboard;
+import { redirect } from "next/navigation";
+
+export default function LeaderboardPage() {
+  redirect("/profile?tab=rankings");
+}

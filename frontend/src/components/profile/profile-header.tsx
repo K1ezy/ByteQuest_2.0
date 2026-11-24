@@ -25,7 +25,7 @@ interface Draft {
   name: string;
   handle: string;
   bio: string;
-  language: ProgrammingLanguage;
+  language: ProgrammingLanguage | null;
   yearLevel: number;
   semester: number;
 }
@@ -49,7 +49,7 @@ function pendingChanges(profile: Profile, draft: Draft) {
   if (draft.bio.trim() !== base.bio.trim()) identity.bio = draft.bio.trim();
   const handle = draft.handle.trim().toLowerCase();
   if (handle && handle !== base.handle) identity.username = handle;
-  const track = profile.role === "student" && (
+  const track = profile.role === "student" && base.language !== null && (
     draft.language !== base.language || draft.yearLevel !== base.yearLevel || draft.semester !== base.semester);
   return { identity, track };
 }
@@ -61,16 +61,16 @@ function handleProblem(profile: Profile, value: string): string {
   return isValidHandle(value) ? "" : "Use 3–44 letters only, with no numbers, spaces or symbols.";
 }
 
-export function ProfileHeader({ profile, avatar, onUpdated, editHandleOnOpen = false }: {
+export function ProfileHeader({ profile, avatar, onUpdated, editOnOpen }: {
   profile: Profile;
   avatar: ReactNode;
   onUpdated: (profile: Profile) => void;
-  /** Start in the editor with the handle field focused (the leaderboard deep link). */
-  editHandleOnOpen?: boolean;
+  editOnOpen?: "handle" | "track";
 }) {
   const toast = useToast();
   const id = useId();
-  const [editing, setEditing] = useState(editHandleOnOpen);
+  const [editing, setEditing] = useState<"name" | "handle" | "track" | null>(editOnOpen ?? null);
+  const [lastEditRequest, setLastEditRequest] = useState(editOnOpen);
   const [draft, setDraft] = useState<Draft>(() => draftFrom(profile));
   const [saving, setSaving] = useState(false);
   const [handleTouched, setHandleTouched] = useState(false);
@@ -79,8 +79,19 @@ export function ProfileHeader({ profile, avatar, onUpdated, editHandleOnOpen = f
   const editButton = useRef<HTMLButtonElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const handleInput = useRef<HTMLInputElement>(null);
+  const languageInput = useRef<HTMLSelectElement>(null);
   const restoreFocus = useRef(false);
-  const focusHandle = useRef(editHandleOnOpen);
+
+  if (lastEditRequest !== editOnOpen) {
+    setLastEditRequest(editOnOpen);
+    if (editOnOpen) {
+      setDraft(draftFrom(profile));
+      setHandleTouched(false);
+      setServerHandleError("");
+      setFormError("");
+      setEditing(editOnOpen);
+    }
+  }
 
   const student = profile.role === "student";
   const hasHandle = profile.handle_chosen !== false;
@@ -95,7 +106,7 @@ export function ProfileHeader({ profile, avatar, onUpdated, editHandleOnOpen = f
   const handleError = serverHandleError || (handleTouched ? handleProblem(profile, draft.handle) : "");
 
   useEffect(() => {
-    if (editing) (focusHandle.current ? handleInput : nameInput).current?.focus();
+    if (editing) (editing === "track" ? languageInput : editing === "handle" ? handleInput : nameInput).current?.focus();
     else if (restoreFocus.current) {
       restoreFocus.current = false;
       editButton.current?.focus();
@@ -103,17 +114,16 @@ export function ProfileHeader({ profile, avatar, onUpdated, editHandleOnOpen = f
   }, [editing]);
 
   const open = () => {
-    focusHandle.current = false;
     setDraft(draftFrom(profile));
     setHandleTouched(false);
     setServerHandleError("");
     setFormError("");
-    setEditing(true);
+    setEditing("name");
   };
 
   const close = () => {
     restoreFocus.current = true;
-    setEditing(false);
+    setEditing(null);
   };
 
   const update = <K extends keyof Draft>(key: K, value: Draft[K]) => {
@@ -148,7 +158,7 @@ export function ProfileHeader({ profile, avatar, onUpdated, editHandleOnOpen = f
         }
         onUpdated(latest);
       }
-      if (track) {
+      if (track && draft.language) {
         try {
           latest = await updateMyTrack({ enrolled_language: draft.language, year_level: draft.yearLevel, semester: draft.semester });
         } catch (caught) {
@@ -251,14 +261,15 @@ export function ProfileHeader({ profile, avatar, onUpdated, editHandleOnOpen = f
                 <p id={`${id}-bio-count`} className="ws-muted profile-bio-count">{draft.bio.length}/{BIO_MAX}</p>
               </div>
 
-              {student ? (
+              {student && profile.enrolled_language ? (
                 <fieldset className="ws-field full profile-track-fieldset">
                   <legend>Learning track</legend>
                   <div className="profile-track-grid">
                     <label className="ws-field">
                       <span>Language</span>
                       <select
-                        value={draft.language}
+                        ref={languageInput}
+                        value={draft.language ?? ""}
                         disabled={saving}
                         onChange={(event) => update("language", event.target.value as ProgrammingLanguage)}
                       >
@@ -314,7 +325,9 @@ export function ProfileHeader({ profile, avatar, onUpdated, editHandleOnOpen = f
             </p>
             {bio ? <p className="profile-bio">{bio}</p> : null}
             {student ? (
-              <p className="profile-header-meta">{trackLabel} track · Year {profile.year_level} · Semester {profile.semester}</p>
+              <p className="profile-header-meta">
+                {trackLabel ? `${trackLabel} track · ` : ""}Year {profile.year_level} · Semester {profile.semester}
+              </p>
             ) : null}
           </>
         )}

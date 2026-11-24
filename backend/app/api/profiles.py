@@ -1,4 +1,4 @@
-"""Authenticated profile and student onboarding endpoints."""
+"""Authenticated profile and student preferences endpoints."""
 
 import uuid
 from collections import Counter
@@ -18,10 +18,10 @@ from app.services.profile_attention import (
     instructor_course_ids,
     personal_audit,
 )
-from app.services.gamification.progression import XP_PER_LEVEL
+from app.services.gamification.progression import XP_PER_LEVEL, quest_completion
 from app.services.gamification.sequencer import determine_track_recommendation
 from app.services.gamification.solve_quality import help_pattern
-from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.attempt_visibility import learner_visible_attempt_clause, published_track_clause
 from app.services.usernames import normalize_username
 from sqlalchemy.exc import IntegrityError
 from app.models.entities import (
@@ -57,7 +57,7 @@ class ProfileResponse(BaseModel):
     pseudonym_id: str
     username: str
     role: UserRole
-    enrolled_language: ProgrammingLang
+    enrolled_language: ProgrammingLang | None
     year_level: int
     semester: int
     xp_points: int
@@ -67,7 +67,7 @@ class ProfileResponse(BaseModel):
     avatar_url: str | None = None
     email: str | None = None
     created_at: datetime | None = None
-    needs_track_setup: bool = False
+    needs_track_setup: bool = False  # Kept for older clients. Track setup is optional.
     handle_chosen: bool = True
 
 
@@ -106,7 +106,7 @@ def _require_student(profile: Profile) -> None:
     if profile.role != UserRole.student:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Student onboarding is only available to student accounts.",
+            detail="Learning track changes are only available to student accounts.",
         )
 
 
@@ -192,6 +192,8 @@ def complete_student_onboarding(
 ) -> ProfileResponse:
     """Save the student's curriculum track and academic context."""
     _require_student(current_user)
+    if current_user.enrolled_language is None:
+        raise HTTPException(409, "Choose your first language when joining a workshop.")
     current_user.enrolled_language = payload.enrolled_language
     current_user.year_level = payload.year_level
     current_user.semester = payload.semester
@@ -356,6 +358,18 @@ class HelpPattern(BaseModel):
     tried_before_hint: int
 
 
+class RecentAttempt(BaseModel):
+    attempt_id: uuid.UUID
+    activity_id: uuid.UUID
+    title: str | None
+    activity_type: str
+    score_percentage: float
+    is_successful: bool
+    created_at: datetime
+    can_open_quest: bool
+    is_exam: bool
+
+
 class StudentAnalytics(BaseModel):
     total_attempts: int
     successful_attempts: int
@@ -369,6 +383,8 @@ class StudentAnalytics(BaseModel):
     xp_into_level: int
     xp_to_next_level: int
     level_progress_percent: float
+    quests_completed: int
+    quests_total: int
     active_days_30: int
     current_streak: int
     longest_streak: int
@@ -378,6 +394,7 @@ class StudentAnalytics(BaseModel):
     by_type: list[TypeBreakdown]
     by_topic: list[TopicBreakdown]
     score_trend: list[TrendPoint]
+    recent_attempts: list[RecentAttempt]
     exam_history: list[ExamHistoryEntry]
     badges: list[BadgeEntry]
     help_pattern: HelpPattern
@@ -486,17 +503,42 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
         for topic, count, avg in topic_rows
     ]
 
-    trend_rows = (
-        db.query(ActivityAttempt.created_at, ActivityAttempt.score_percentage, LearningActivity.title)
+    attempt_rows = (
+        db.query(
+            ActivityAttempt.id.label("attempt_id"),
+            ActivityAttempt.score_percentage,
+            ActivityAttempt.is_successful,
+            ActivityAttempt.created_at,
+            ActivityAttempt.exam_attempt_id,
+            LearningActivity.id.label("activity_id"),
+            LearningActivity.title,
+            LearningActivity.topic_concept,
+            LearningActivity.activity_type,
+            case((published_track_clause(user), True), else_=False).label("quest_available"),
+        )
         .join(LearningActivity, LearningActivity.id == ActivityAttempt.activity_id)
         .filter(visible_attempt_filter)
         .order_by(ActivityAttempt.created_at.desc(), ActivityAttempt.id.desc())
-        .limit(15)
+        .limit(20)
         .all()
     )
+    recent_attempts = [
+        RecentAttempt(
+            attempt_id=row.attempt_id,
+            activity_id=row.activity_id,
+            title=row.title or row.topic_concept,
+            activity_type=_enum_value(row.activity_type),
+            score_percentage=float(row.score_percentage or 0.0),
+            is_successful=row.is_successful,
+            created_at=row.created_at,
+            can_open_quest=row.quest_available and row.exam_attempt_id is None,
+            is_exam=row.exam_attempt_id is not None,
+        )
+        for row in attempt_rows
+    ]
     score_trend = [
-        TrendPoint(created_at=created_at, score_percentage=float(score or 0.0), title=title)
-        for created_at, score, title in reversed(trend_rows)
+        TrendPoint(created_at=row.created_at, score_percentage=float(row.score_percentage or 0.0), title=row.title)
+        for row in reversed(attempt_rows[:15])
     ]
 
     exam_rows = (
@@ -566,6 +608,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
         streak_cursor -= timedelta(days=1)
 
     xp_into_level = max(0, int(user.xp_points or 0)) % XP_PER_LEVEL
+    completed, total = quest_completion(db, user)
     recommendation = determine_track_recommendation(db, user)
     target = db.get(LearningActivity, recommendation["target_activity_id"]) if recommendation["target_activity_id"] else None
 
@@ -582,6 +625,8 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
         xp_into_level=xp_into_level,
         xp_to_next_level=XP_PER_LEVEL - xp_into_level,
         level_progress_percent=round(100.0 * xp_into_level / XP_PER_LEVEL, 1),
+        quests_completed=completed,
+        quests_total=total,
         active_days_30=sum(1 for item in activity_days if item.attempts > 0),
         current_streak=current_streak,
         longest_streak=longest_streak,
@@ -598,6 +643,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
         by_type=by_type,
         by_topic=by_topic,
         score_trend=score_trend,
+        recent_attempts=recent_attempts,
         exam_history=exam_history,
         badges=badges,
     )

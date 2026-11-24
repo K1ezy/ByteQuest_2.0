@@ -1,6 +1,7 @@
 "use client";
 
 import type { CSSProperties } from "react";
+import Link from "next/link";
 import { MAX_STARS, SolveStars } from "@/components/solve-stars";
 import { Button, Notice, StatusChip, useApi } from "@/components/workspace/ui";
 import type { MasteryConcept, MasteryMapResponse, MemoryState, PracticeError } from "@/lib/types";
@@ -11,9 +12,9 @@ const ERROR_LABELS: Record<PracticeError, string> = {
   syntax_error: "Syntax errors", logic_error: "Logic errors", runtime_error: "Runtime errors", timeout: "Time limits",
 };
 
-export function MasteryPath({ concepts, onSelect }: { concepts: MasteryConcept[]; onSelect: (topic: string) => void }) {
+function MasteryPath({ concepts }: { concepts: MasteryConcept[] }) {
   if (!concepts.length) {
-    return <div className="empty-state"><h2>No concepts yet</h2><p>Published activities will appear here for your track.</p></div>;
+    return <div className="empty-state"><h3>No concepts yet</h3><p>Published activities will appear here for your track.</p></div>;
   }
 
   return (
@@ -35,7 +36,7 @@ export function MasteryPath({ concepts, onSelect }: { concepts: MasteryConcept[]
             "--step": Math.min(index, 9), "--wide-row": row + 1,
             "--wide-col": row % 2 ? 3 - column : column + 1,
           } as CSSProperties}>
-            <button className="mastery-node" type="button" aria-label={name} onClick={() => onSelect(item.concept)}>
+            <Link className="mastery-node" href={"/quests?concept=" + encodeURIComponent(item.concept)} aria-label={name}>
               <span className="dashboard-ring mastery-node-ring" style={{ "--pct": item.mastery_percent } as CSSProperties} aria-hidden="true">
                 <span>{item.mastery_percent}%</span>
               </span>
@@ -48,7 +49,7 @@ export function MasteryPath({ concepts, onSelect }: { concepts: MasteryConcept[]
                 {weak ? <StatusChip state="watch" label={`Watch: ${weak}`} tone="wait" /> : null}
                 {memory ? <StatusChip state="memory" label={`Memory: ${memory}`} tone={item.memory?.state === "due" || item.memory?.state === "fading" ? "wait" : "info"} /> : null}
               </span>
-            </button>
+            </Link>
           </li>
         );
       })}
@@ -56,9 +57,9 @@ export function MasteryPath({ concepts, onSelect }: { concepts: MasteryConcept[]
   );
 }
 
-export function MasteryMap({ onSelect }: { onSelect: (topic: string) => void }) {
+export function MasteryMap() {
   const { data, loading, error, reload } = useApi<MasteryMapResponse>("/quests/mastery-map");
   if (loading) return <div className="ws-skeleton gamification-skeleton" role="status" aria-label="Loading Mastery map" />;
   if (error) return <><Notice tone="error">{error}</Notice><Button onClick={reload}>Try again</Button></>;
-  return data ? <MasteryPath concepts={data.concepts} onSelect={onSelect} /> : null;
+  return data ? <MasteryPath concepts={data.concepts} /> : null;
 }

@@ -343,6 +343,7 @@ export default function Arena({ activityId }: { activityId: string }) {
     async function load() {
       try {
         if (role !== "student") throw new Error("Code submissions are available to student accounts.");
+        if (!language) throw new Error("Join a workshop to choose your language before opening a code challenge.");
         const activities = await apiRequest<Quest[]>(`/quests?details_for=${encodeURIComponent(activityId)}`);
         if (!active) return;
         setTrackActivities(activities);
@@ -365,7 +366,7 @@ export default function Arena({ activityId }: { activityId: string }) {
           if (value.reviewed.some((hint) => hint.body) || value.ai_hints.length) setHintsOpen(true);
         }).catch((error) => { if (active) setHintError(getErrorMessage(error)); });
 
-        const defaultCode = target.starter_code || starterCode(language);
+        const defaultCode = target.starter_code || starterCode(target.language);
         setStarter(defaultCode);
 
         // Restore any unsynced account-scoped backup before the server draft.
@@ -598,8 +599,8 @@ export default function Arena({ activityId }: { activityId: string }) {
     }
   }
 
-  const languageName = LANGUAGE_NAMES[language] ?? language;
-  const monacoLanguage = language === "cpp" ? "cpp" : language;
+  const languageName = quest ? LANGUAGE_NAMES[quest.language] ?? quest.language : "";
+  const monacoLanguage = quest?.language;
   const evaluation = result?.evaluation;
   const visibleResults = evaluation?.test_results?.filter((test) => !test.is_hidden) ?? [];
   const activeCase = visibleResults[activeCaseIndex] ?? visibleResults[0];

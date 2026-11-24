@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import OnboardingPage from "./page";
 
@@ -7,12 +7,15 @@ const auth = vi.hoisted(() => ({
   checkSignup: vi.fn(),
   signIn: vi.fn(),
   reset: vi.fn(),
+  apiRequest: vi.fn(),
   query: new URLSearchParams(),
   router: { push: vi.fn(), replace: vi.fn() },
 }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => auth.router, useSearchParams: () => auth.query }));
-vi.mock("@/components/app-shell", () => ({ AppShell: ({ children }: { children: React.ReactNode }) => children }));
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/api")>(), apiRequest: auth.apiRequest,
+}));
 vi.mock("@/lib/student-signup", () => ({ signUpStudent: auth.signUp, checkStudentSignup: auth.checkSignup }));
 vi.mock("@/lib/supabase", () => ({ getSupabase: () => ({ auth: {
   getSession: async () => ({ data: { session: null } }),
@@ -85,10 +88,14 @@ it("shows administrator grant instructions in local mode", async () => {
   expect(auth.signUp).not.toHaveBeenCalled();
 });
 
-it("requires both policy panels and acknowledgments on each visit and submits once", async () => {
+it("requires both policy acknowledgments and opens Dashboard after a single signup", async () => {
   vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(300);
   vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(100);
-  auth.signUp.mockImplementation(() => new Promise(() => {}));
+  let completeSignUp = () => {};
+  auth.signUp.mockImplementation(() => new Promise((resolve) => {
+    completeSignUp = () => resolve({ data: { session: { user: { email: "learner@example.test" } } }, error: null });
+  }));
+  auth.apiRequest.mockResolvedValue({ role: "student", enrolled_language: null, needs_track_setup: false });
   await openAuth();
   fireEvent.click(screen.getByRole("button", { name: "Sign up" }));
   expect(screen.queryByLabelText("School ID")).toBeNull();
@@ -133,6 +140,10 @@ it("requires both policy panels and acknowledgments on each visit and submits on
   fireEvent.click(submit);
   fireEvent.click(submit);
   expect(auth.signUp).toHaveBeenCalledExactlyOnceWith("learner@example.test", "password", "AdaHandle", { schoolId: "26-00123", yearLevel: 3, blockSection: "F", research: true });
+  completeSignUp();
+  await waitFor(() => expect(auth.router.replace).toHaveBeenCalledExactlyOnceWith("/dashboard"));
+  expect(auth.apiRequest).toHaveBeenCalledExactlyOnceWith("/profile/me");
+  expect(screen.queryByRole("heading", { name: "Choose your learning track" })).toBeNull();
 });
 
 it("unlocks acknowledgment when the document already fits", async () => {
@@ -150,7 +161,7 @@ it("unlocks acknowledgment when the document already fits", async () => {
   fireEvent.change(screen.getByLabelText("Block section"), { target: { value: "F" } });
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   await screen.findByRole("button", { name: "I agree" });
-  expect(screen.getAllByRole<HTMLInputElement>("checkbox").every((box) => !box.disabled)).toBe(true);
+  await waitFor(() => expect(screen.getAllByRole<HTMLInputElement>("checkbox").every((box) => !box.disabled)).toBe(true));
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "I agree" }).disabled).toBe(true);
 });
 

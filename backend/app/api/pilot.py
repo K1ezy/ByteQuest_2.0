@@ -6,7 +6,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -23,6 +23,7 @@ from app.services.ai_rag.error_explainer import explain_code_error
 from app.services.ai_rag.retrieval import passages_block, tutoring_document_ids, tutoring_passages, validate_tutor_citations
 from app.services.ai_rag.solution_guard import WITHHELD_HINT, reveals_solution
 from app.services.ai_rag.gemini_client import GEMINI_DISABLED
+from app.services.gamification.progression import quest_completion
 from app.services.gamification.sequencer import determine_track_recommendation
 from app.services.course_access import active_membership_course_ids, may_manage_instructional_content
 from app.services.attempt_visibility import (
@@ -92,20 +93,7 @@ def dashboard(user: Profile = Depends(get_current_user), db: Session = Depends(g
     student_only(user)
     recommendation = determine_track_recommendation(db, user)
     target = db.get(LearningActivity, recommendation["target_activity_id"]) if recommendation["target_activity_id"] else None
-    completed = db.query(func.count(func.distinct(ActivityAttempt.activity_id))).join(
-        LearningActivity, LearningActivity.id == ActivityAttempt.activity_id
-    ).filter(
-        ActivityAttempt.student_id == user.id, ActivityAttempt.is_successful.is_(True),
-        learner_visible_attempt_clause(),
-        LearningActivity.language == user.enrolled_language,
-        LearningActivity.review_status == ReviewState.published,
-        student_visible_activity_clause(user.id),
-    ).scalar() or 0
-    total = db.query(func.count(LearningActivity.id)).filter(
-        LearningActivity.language == user.enrolled_language,
-        LearningActivity.review_status == ReviewState.published,
-        student_visible_activity_clause(user.id),
-    ).scalar() or 0
+    completed, total = quest_completion(db, user)
     pending = db.query(SubmissionJob).filter(
         SubmissionJob.student_id == user.id, SubmissionJob.status.in_(["queued", "running"])
     ).order_by(SubmissionJob.created_at.desc()).first()

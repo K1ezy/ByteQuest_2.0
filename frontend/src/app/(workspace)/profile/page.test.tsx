@@ -89,6 +89,8 @@ const analytics = {
     xp_into_level: 125,
     xp_to_next_level: 125,
     level_progress_percent: 50,
+    quests_completed: 5,
+    quests_total: 9,
     active_days_30: 0,
     current_streak: 0,
     longest_streak: 0,
@@ -104,6 +106,7 @@ const analytics = {
     by_type: [{ activity_type: "quiz", attempts: 0, average_score: 0, pass_rate: 0 }],
     by_topic: [],
     score_trend: [],
+    recent_attempts: [],
     exam_history: [{
       exam_id: "exam-id",
       title: "Midterm",
@@ -125,9 +128,14 @@ beforeEach(() => {
   mocks.getMyProfile.mockResolvedValue(profile);
   mocks.getMyAnalytics.mockResolvedValue(analytics);
   // Each endpoint returns its real shape, so panels never receive another endpoint's payload.
-  mocks.apiRequest.mockImplementation(async (path: string) => path.startsWith("/quests/codex")
-    ? { locked: true, day: 0, unlock: { unlocked: false, unlock_day: 21, unlocks_on: null }, categories: [] }
-    : { available: false, version: null, choice: null });
+  mocks.apiRequest.mockImplementation(async (path: string) => {
+    if (path.startsWith("/quests/progress-recap")) return {
+      days: 7, period_start: "2026-11-18", period_end: "2026-11-24",
+      previous_start: "2026-11-11", previous_end: "2026-11-17",
+      comparison: "new_learner", enough_activity: false, metrics: [],
+    };
+    return { available: false, version: null, choice: null };
+  });
   mocks.requestResetLink.mockResolvedValue(true);
   mocks.updateMyProfile.mockImplementation(async (body: { display_name?: string; bio?: string }) => ({ ...profile, ...body }));
 });
@@ -257,12 +265,42 @@ it("uses the activity URL for progress details and preserves embargoed exam data
   render(<ProfilePage />);
 
   expect((await screen.findByRole("link", { name: "Progress" })).getAttribute("aria-current")).toBe("page");
+  expect((await screen.findByRole("progressbar", { name: "Quest completion" })).getAttribute("value")).toBe("56");
+  expect(screen.getByRole("progressbar", { name: "XP toward level 3" }).getAttribute("value")).toBe("125");
+  expect(screen.getByRole("heading", { name: "Recent attempts" })).toBeTruthy();
   expect(await screen.findByRole("heading", { name: "How you solve challenges" })).toBeTruthy();
   expect(screen.getByText("1 of 2")).toBeTruthy();
   expect(screen.getByText("1 of 3")).toBeTruthy();
   expect(screen.getByText(/Try one before opening a hint/)).toBeTruthy();
   expect(screen.getAllByText(/Awaiting release/).length).toBeGreaterThan(0);
   expect(screen.getByRole("img", { name: "Quizzes: 0%" })).toBeTruthy();
+});
+
+it("opens Mastery inside Profile with links to filtered quests", async () => {
+  mocks.searchParams = new URLSearchParams("tab=mastery");
+  mocks.apiRequest.mockImplementation(async (path: string) => {
+    if (path === "/quests/mastery-map") return { track: "python", concepts: [{
+      concept: "Loops & arrays", total: 3, completed: 2, mastery_percent: 67, state: "in_progress",
+      average_stars: 2.5, weak_spot: "logic_error",
+    }] };
+    if (path === "/reviews") return { locked: false, concepts: [], due_count: 0 };
+    return { locked: true, day: 0, unlock: { unlocked: false, unlock_day: 21, unlocks_on: null }, categories: [] };
+  });
+  render(<ProfilePage />);
+
+  const node = await screen.findByRole("link", { name: /Loops & arrays, 2 of 3 complete, 67% mastery/ });
+  expect(node.getAttribute("href")).toBe("/quests?concept=Loops%20%26%20arrays");
+  expect(screen.getByRole("link", { name: "Mastery" }).getAttribute("aria-current")).toBe("page");
+  expect(screen.getByRole("heading", { name: "Debugger's Codex" })).toBeTruthy();
+  expect(mocks.getMyAnalytics).not.toHaveBeenCalled();
+});
+
+it("opens the track editor from a bookmarked change-track link", async () => {
+  mocks.searchParams = new URLSearchParams("edit=track");
+  render(<ProfilePage />);
+  const language = await screen.findByRole("combobox", { name: "Language" });
+  await waitFor(() => expect(document.activeElement).toBe(language));
+  expect(mocks.router.replace).toHaveBeenCalledWith("/profile", { scroll: false });
 });
 it("opens Progress for the old overview link and exposes role-aware navigation", async () => {
   mocks.searchParams = new URLSearchParams("tab=overview");
@@ -276,7 +314,6 @@ it("opens Progress for the old overview link and exposes role-aware navigation",
 
 it("provides private account controls and student research consent without analytics dependency", async () => {
   mocks.searchParams = new URLSearchParams("tab=account");
-  mocks.getMyAnalytics.mockRejectedValueOnce(new Error("Analytics offline"));
   render(<ProfilePage />);
 
   expect(await screen.findByRole("heading", { name: "Your ByteQuest account" })).toBeTruthy();
@@ -285,6 +322,7 @@ it("provides private account controls and student research consent without analy
   fireEvent.click(screen.getByRole("button", { name: "Email reset link" }));
   expect(mocks.requestResetLink).toHaveBeenCalledWith("student@example.test");
   expect(await screen.findByRole("heading", { name: "Research participation" })).toBeTruthy();
+  expect(mocks.getMyAnalytics).not.toHaveBeenCalled();
 });
 
 const instructorAnalytics = {
@@ -335,7 +373,7 @@ it("labels faculty and admin activity views without gamifying them", async () =>
   mocks.getMyAnalytics.mockResolvedValueOnce({ role: "instructor", instructor: instructorAnalytics });
   const { unmount } = render(<ProfilePage />);
   expect((await screen.findByRole("link", { name: "Teaching" })).getAttribute("aria-current")).toBe("page");
-  expect(screen.getByRole("heading", { name: "Teaching activity" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Teaching activity" })).toBeTruthy();
   expect(screen.queryByText(/streak/i)).toBeNull();
   unmount();
 
@@ -343,7 +381,7 @@ it("labels faculty and admin activity views without gamifying them", async () =>
   mocks.getMyAnalytics.mockResolvedValueOnce({ role: "admin", admin: adminAnalytics });
   render(<ProfilePage />);
   expect((await screen.findByRole("link", { name: "Stewardship" })).getAttribute("aria-current")).toBe("page");
-  expect(screen.getByText("Accounts by role")).toBeTruthy();
+  expect(await screen.findByText("Accounts by role")).toBeTruthy();
 });
 
 it("shows faculty attention counts and the single highest-priority action", async () => {
@@ -386,6 +424,12 @@ it("renders role sections when the payload omits the newer fields", async () => 
 
 it("links recorded topics, shows badge descriptions and provides a score trend table", async () => {
   mocks.getMyAnalytics.mockResolvedValueOnce({ ...analytics, student:{...analytics.student,
+    total_attempts: 6,
+    recent_attempts: Array.from({ length: 6 }, (_, index) => ({
+      attempt_id: `attempt-${index}`, activity_id: `quiz-${index}`, title: `Practice quiz ${index}`,
+      activity_type: "quiz", score_percentage: 85, is_successful: true, created_at: "2026-11-24T04:00:00Z",
+      can_open_quest: index !== 5, is_exam: index === 5,
+    })),
     by_topic:["Strings & files","General"].map(topic => ({topic,attempts:1,average_score:40})),
     score_trend:[{title:"Intro",created_at:"2026-11-05T00:00:00Z",score_percentage:40},{title:"Practice",created_at:"2026-11-06T00:00:00Z",score_percentage:85}],
     badges:[{code:"first",name:"First steps",description:"Finish one quest.",xp_bonus:5,icon_url:"/badge.svg"}],
@@ -394,6 +438,11 @@ it("links recorded topics, shows badge descriptions and provides a score trend t
   expect((await screen.findByRole("link",{name:"Practise Strings & files"})).getAttribute("href")).toBe("/quests?concept=Strings%20%26%20files");
   expect(screen.queryByRole("link",{name:"Practise General"})).toBeNull();
   expect(screen.getByText("Finish one quest.")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Practice quiz 0" }).getAttribute("href")).toBe("/quiz/quiz-0");
+  expect(screen.queryByText("Practice quiz 5")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Show 6 recent attempts" }));
+  expect(screen.getByText("Practice quiz 5")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Practice quiz 5" })).toBeNull();
   expect(screen.getByRole("img",{name:/From 40% to 85% across 2 attempts/})).toBeTruthy();
   fireEvent.click(screen.getByText("View as table"));
   expect(screen.getByRole("table",{name:"Recent score trend"})).toBeTruthy();

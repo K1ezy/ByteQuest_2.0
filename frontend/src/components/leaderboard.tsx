@@ -20,7 +20,7 @@ interface LeaderboardStanding {
 }
 
 export interface LeaderboardData {
-  track: string;
+  track: string | null;
   entries: LeaderboardEntry[];
   you: LeaderboardStanding | null;
   total_ranked: number;
@@ -64,9 +64,9 @@ function Standing({ you, total }: { you: LeaderboardStanding; total: number }) {
     <section className="leaderboard-standing" aria-labelledby="your-standing-title">
       <div className="leaderboard-standing-rank" aria-hidden="true">{you.rank ? `#${you.rank}` : "—"}</div>
       <div className="leaderboard-standing-copy">
-        <h2 id="your-standing-title">
+        <h3 id="your-standing-title">
           {you.rank ? `You're #${you.rank} of ${total} ranked ${total === 1 ? "learner" : "learners"}` : "You're not ranked yet"}
-        </h2>
+        </h3>
         <p>
           {you.rank
             ? `${you.xp_points.toLocaleString()} XP · Level ${you.current_level}`
@@ -86,7 +86,7 @@ function Standing({ you, total }: { you: LeaderboardStanding; total: number }) {
 
 export function Leaderboard() {
   const { data, loading, error, reload } = useApi<LeaderboardData>("/quests/leaderboard");
-  const track = data ? TRACK_LABEL[data.track] ?? data.track.toUpperCase() : "your";
+  const track = data?.track ? TRACK_LABEL[data.track] ?? data.track.toUpperCase() : null;
   const entries = data?.entries ?? [];
   const you = data?.you ?? null;
   const youOutsideTop = Boolean(you?.rank) && !entries.some((entry) => entry.is_me);
@@ -95,11 +95,9 @@ export function Leaderboard() {
     <div className="leaderboard-full-view">
       <div className="leaderboard-header-row">
         <div>
-          <p className="eyebrow-label">Track rankings</p>
-          <h1>Leaderboard</h1>
-          <p className="leaderboard-desc">Top learners on the {track} track. Earn XP by passing code challenges and concept quizzes.</p>
+          <h2>Leaderboard</h2>
+          {track && <p className="leaderboard-desc">Top learners on the {track} track. Earn XP by passing code challenges and concept quizzes.</p>}
         </div>
-        <Link href="/quests" className="button button-outline leaderboard-back">← Back to Quest Map</Link>
       </div>
 
       {loading && !data ? (
@@ -112,12 +110,17 @@ export function Leaderboard() {
           <p className="notice warning" role="alert">{error}</p>
           <button type="button" className="button button-outline small" onClick={reload}>Try again</button>
         </section>
+      ) : data && !track ? (
+        <section className="panel leaderboard-panel">
+          <p>Join a workshop to choose your language and see its leaderboard.</p>
+          <Link className="button button-outline small" href="/workshops">Go to Workshops</Link>
+        </section>
       ) : data ? (
         <>
           {you ? <Standing you={you} total={data.total_ranked} /> : null}
 
           <section className="panel leaderboard-panel" aria-labelledby="top-learners-title">
-            <h2 id="top-learners-title" className="sr-only">Top learners</h2>
+            <h3 id="top-learners-title" className="sr-only">Top learners</h3>
             {entries.length === 0 ? (
               <div className="leaderboard-empty">
                 <p>No one on the {track} track has earned XP yet.</p>

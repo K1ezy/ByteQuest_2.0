@@ -111,14 +111,13 @@ class Profile(Base):
     block_section = Column(String(1), nullable=True)
     semester = Column(Integer, nullable=False, default=1)
     enrolled_language = Column(
-        Enum(ProgrammingLang, name="programminglang"),
-        nullable=False,
+        Enum(ProgrammingLang, name="programminglang").evaluates_none(),
+        nullable=True,
         default=ProgrammingLang.cpp,
     )
     xp_points = Column(Integer, nullable=False, default=0)
     current_level = Column(Integer, nullable=False, default=1)
-    # NULL until the student saves their track. enrolled_language cannot answer this:
-    # the signup trigger always writes a default, so it looks chosen from the start.
+    # Records an optional track change. New students can use the default immediately.
     track_selected_at = Column(DateTime(timezone=True), nullable=True)
     account_status = Column(String(20), nullable=False, default="active", server_default=text("'active'"))
     deactivated_at = Column(DateTime(timezone=True), nullable=True)
@@ -130,11 +129,6 @@ class Profile(Base):
     updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False)
 
     attempts = relationship("ActivityAttempt", back_populates="student", cascade="all, delete-orphan")
-
-    @property
-    def needs_track_setup(self) -> bool:
-        """The server owns this rule so every entry point routes the same way."""
-        return self.role == UserRole.student and self.track_selected_at is None
 
     @property
     def handle_chosen(self) -> bool:

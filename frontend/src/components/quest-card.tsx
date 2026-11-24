@@ -50,7 +50,7 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
       <div className="quest-card-head">
         <div className="quest-card-badges">
           {!workshop && <span className="activity-number">Quest #{quest.position ?? quest.sequence_order}</span>}
-          <span className="tag">{challenge ? "CODE CHALLENGE" : "CONCEPT CHECK"}</span>
+          <span className="tag">{challenge ? "CODE CHALLENGE" : "Concept check quiz"}</span>
           {next && <span className="next-badge" aria-label="Next recommended quest">
             <span className="status-dot pulsing" aria-hidden="true" /> NEXT UP
           </span>}

@@ -163,7 +163,7 @@ function FacultyActivities() {
   if (attention) rows.sort((a,b) => (b.health?.stuck ?? 0) - (a.health?.stuck ?? 0) ||
     (a.health?.pass_rate ?? 2) - (b.health?.pass_rate ?? 2) || (a.title || a.topic_concept).localeCompare(b.title || b.topic_concept));
   // Default to the language this class already uses; the instructor's own track only for an empty course.
-  const createLanguage = draft.language ?? rows.find((row) => row.language)?.language ?? profile.enrolled_language;
+  const createLanguage = draft.language ?? rows.find((row) => row.language)?.language ?? profile.enrolled_language ?? "python";
 
   async function copyActivity(activity: ActivityListItem, kind: "version" | "duplicate") {
     if (!courseId || rowBusy) return;

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.entities import Profile, ProgrammingLang, UserRole
+from app.models.entities import Profile, UserRole
 
 security = HTTPBearer(auto_error=False)
 _jwks_client: jwt.PyJWKClient | None = None
@@ -153,7 +153,7 @@ def get_current_user(
             role=UserRole.student,
             year_level=1,
             semester=1,
-            enrolled_language=ProgrammingLang.cpp,
+            enrolled_language=None,
             xp_points=0,
             current_level=1,
         )

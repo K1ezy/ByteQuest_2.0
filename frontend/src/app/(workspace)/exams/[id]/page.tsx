@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError, apiRequest, getErrorMessage } from "@/lib/api";
 import { resolveAuthenticatedUserId } from "@/lib/supabase";
 import { ConfirmDialog } from "@/components/workspace/ui";
+import { studentExamsHref } from "@/lib/navigation";
 import { formatManilaDateTime } from "@/lib/activity-date";
 import type { Attempt, ExamItem } from "./exam-model";
 import { useExamAnswerSync } from "./use-exam-answer-sync";
@@ -1023,7 +1024,7 @@ export default function ExamPage() {
           )}
 
           <div className="pilot-actions" style={{ marginTop: "16px" }}>
-            <Link className="button button-outline" href="/exams">All exams</Link>
+            <Link className="button button-outline" href={studentExamsHref}>All exams</Link>
             <Link className="button button-quiet" href="/dashboard">Dashboard</Link>
           </div>
         </section>
