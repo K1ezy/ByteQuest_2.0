@@ -6,6 +6,8 @@ import { getErrorMessage } from "@/lib/api";
 import { WorkspaceSuspense } from "@/components/workspace/workspace-provider";
 import {
   Button,
+  ConfirmDialog,
+  CopyButton,
   EmptyState,
   LoadingPanel,
   Notice,
@@ -21,6 +23,7 @@ import {
   formatDateTime,
   retryJob,
   serviceStateLabel,
+  type AuditItem,
   type JobRecord,
   type MonitoringResponse,
 } from "@/lib/workspace";
@@ -39,6 +42,98 @@ const JOB_STATUS_OPTIONS = [
   { value: "completed", label: "Completed" },
 ];
 
+const jobTitle = (job: JobRecord) => job.document_title || job.job_type;
+const canRetry = (job: JobRecord) => job.status === "failed" && job.retryable;
+
+function JobStatus({ job }: { job: JobRecord }) {
+  return <StatusChip
+    state={job.status === "completed" ? "ready" : job.status === "failed" ? "failed" : "processing"}
+    label={prettify(job.status)}
+    tone={job.status === "completed" ? "good" : job.status === "failed" ? "bad" : "wait"}
+  />;
+}
+
+/** The job, its material's audit history and, when eligible, a confirmed retry: one place per job. */
+function JobDrawer({ job, onClose, onRetried }: {
+  job: JobRecord | null;
+  onClose: () => void;
+  onRetried: (job: JobRecord, message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const history = useApi<{ items: AuditItem[] }>(job?.material_id ? `/admin/audit?entity_id=${encodeURIComponent(job.material_id)}` : null);
+
+  useEffect(() => {
+    // A different job starts without the previous job's result.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setResult(null);
+  }, [job?.id]);
+
+  async function retry() {
+    if (!job) return;
+    setBusy(true);
+    try {
+      const outcome = await retryJob(job.id);
+      const next = { ...outcome.job, document_title: job.document_title, material_id: job.material_id };
+      setResult({ tone: next.status === "failed" ? "error" : "success", text: outcome.message });
+      onRetried(next, outcome.message);
+      history.reload();
+    } catch (caught) {
+      setResult({ tone: "error", text: `${getErrorMessage(caught)} The job status is unchanged.` });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ConfirmDialog
+      open={Boolean(job)}
+      variant="drawer"
+      title={job ? jobTitle(job) : "Job"}
+      cancelLabel="Close"
+      confirmLabel={busy ? "Retrying…" : "Retry this job"}
+      busy={busy}
+      hideConfirm={!job || !canRetry(job)}
+      onCancel={onClose}
+      onConfirm={() => void retry()}
+    >
+      {job ? (
+        <>
+          {result ? <Notice tone={result.tone}>{result.text}</Notice> : null}
+          <dl className="ws-summary-list">
+            <div><dt>Status</dt><dd><JobStatus job={job} /></dd></div>
+            <div><dt>Cause</dt><dd>{job.cause || "No failure cause is recorded for this job."}</dd></div>
+            <div><dt>Trace</dt><dd><code>{job.trace_id}</code> <CopyButton value={job.trace_id} label={`trace ${job.trace_id}`} /></dd></div>
+            <div><dt>Attempts</dt><dd>{job.attempts} of {job.max_attempts}</dd></div>
+            <div><dt>Service</dt><dd>{job.service} · started {formatDateTime(job.created_at)}</dd></div>
+            <div><dt>Last checked</dt><dd>{formatDateTime(job.last_checked_at)}</dd></div>
+          </dl>
+          {canRetry(job) ? (
+            <p className="ws-callout">
+              Retrying reprocesses only <strong>{jobTitle(job)}</strong> (trace <code>{job.trace_id}</code>). Other jobs and
+              materials are not touched, and the outcome is added to the audit trail below.
+            </p>
+          ) : job.status === "failed" ? (
+            <p className="ws-muted">This failure can&apos;t be retried. Upload a corrected or searchable PDF instead.</p>
+          ) : null}
+          <h3 className="ws-drawer-subtitle">Audit trail for this material</h3>
+          {!job.material_id ? <p className="ws-muted">This job has no material record.</p> : null}
+          {history.loading && !history.data ? <p role="status" className="ws-muted">Loading entries…</p> : null}
+          {history.error ? <p className="ws-field-error">{history.error}</p> : null}
+          {history.data && history.data.items.length === 0 ? <p className="ws-muted">No entries yet.</p> : null}
+          {history.data && history.data.items.length > 0 ? (
+            <ul className="ws-compact-list">
+              {history.data.items.slice(0, 8).map((event) => (
+                <li key={event.id}><strong>{event.summary}</strong><span>{event.action} · {formatDateTime(event.created_at)}</span></li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      ) : null}
+    </ConfirmDialog>
+  );
+}
+
 function Monitoring() {
   const router = useRouter();
   const pathname = usePathname();
@@ -47,11 +142,10 @@ function Monitoring() {
   const jobStatus = searchParams.get("status") || "";
   const appliedSearch = searchParams.get("q") || "";
   const auditSearch = searchParams.get("audit") || "";
+  const openJobId = searchParams.get("job") || "";
   const [search, setSearch] = useState(appliedSearch);
   const [auditQuery, setAuditQuery] = useState(auditSearch);
-  const [notice, setNotice] = useState<{ tone: "success" | "error" | "warning"; text: string } | null>(null);
-  const [busyJob, setBusyJob] = useState<string | null>(null);
-  const [detailJob, setDetailJob] = useState<JobRecord | null>(null);
+  const [retried, setRetried] = useState<JobRecord | null>(null);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -80,22 +174,9 @@ function Monitoring() {
     router.replace(`${pathname}?${next.toString()}`, { scroll: false });
   }
 
-  async function doRetry(job: JobRecord) {
-    setBusyJob(job.id);
-    setNotice(null);
-    try {
-      const result = await retryJob(job.id);
-      setNotice({ tone: "success", text: result.message });
-      setDetailJob(null);
-      reload();
-    } catch (caught) {
-      setNotice({ tone: "error", text: `${getErrorMessage(caught)} The job status is unchanged.` });
-    } finally {
-      setBusyJob(null);
-    }
-  }
-
   const jobs = data?.jobs || [];
+  // The job opened from the URL keeps the list's filters; a just-retried job stays open even if a filter now hides it.
+  const openJob = jobs.find((job) => job.id === openJobId) ?? (retried?.id === openJobId ? retried : null);
   const hasJobFilters = Boolean(service || jobStatus || appliedSearch);
 
   return (
@@ -103,7 +184,7 @@ function Monitoring() {
       <PageHeading
         eyebrow="ADMINISTRATION"
         title="Platform monitoring"
-        description="Check service health, retry processing jobs and review the audit trail."
+        description="Check service health, open a job to see its cause and history, and retry it when the platform allows."
         status={
           data ? (
             <StatusChip
@@ -116,8 +197,6 @@ function Monitoring() {
         actions={<Button variant="outline" onClick={reload}>Refresh</Button>}
       />
 
-      {notice ? <Notice tone={notice.tone} onDismiss={() => setNotice(null)}>{notice.text}</Notice> : null}
-
       {error ? (
         <Notice tone="error">
           Monitoring could not load. {error}{" "}
@@ -127,19 +206,28 @@ function Monitoring() {
       {loading && !data ? <LoadingPanel label="Checking platform services…" /> : null}
 
       {data ? (
-        <div className="ws-health-grid" aria-label="Service health">
-          {data.services.map((health) => (
-            <article className={`ws-health-card ${health.status}`} key={health.service}>
-              <div className="ws-health-head">
-                <h2>{health.label}</h2>
-                <StatusChip state={health.status} label={serviceStateLabel[health.status]} tone={health.status === "healthy" ? "good" : health.status === "failed" ? "bad" : health.status === "off" ? "muted" : "wait"} />
-              </div>
-              <p>{health.detail}</p>
-              <span className="ws-row-meta">Last checked {formatDateTime(health.last_checked_at)}</span>
-              {health.trace_id ? <span className="ws-row-meta">Trace {health.trace_id}</span> : null}
-            </article>
-          ))}
-        </div>
+        <section className="ws-panel" aria-labelledby="services-title">
+          <div className="ws-panel-head">
+            <div>
+              <p className="eyebrow-label">SERVICES</p>
+              <h2 id="services-title">Service health</h2>
+            </div>
+            <span className="ws-muted">Checked {formatDateTime(data.checked_at)}</span>
+          </div>
+          <div className="ws-health-grid">
+            {data.services.map((health) => (
+              <article className={`ws-health-card ${health.status}`} key={health.service}>
+                <div className="ws-health-head">
+                  <h3>{health.label}</h3>
+                  <StatusChip state={health.status} label={serviceStateLabel[health.status]} tone={health.status === "healthy" ? "good" : health.status === "failed" ? "bad" : health.status === "off" ? "muted" : "wait"} />
+                </div>
+                <p>{health.detail}</p>
+                <span className="ws-row-meta">Last checked {formatDateTime(health.last_checked_at)}</span>
+                {health.trace_id ? <span className="ws-row-meta">Trace <code>{health.trace_id}</code> <CopyButton value={health.trace_id} label={`trace ${health.trace_id}`} /></span> : null}
+              </article>
+            ))}
+          </div>
+        </section>
       ) : null}
 
       <section className="ws-panel" aria-labelledby="jobs-title">
@@ -192,30 +280,17 @@ function Monitoring() {
                 {jobs.map((job) => (
                   <tr key={job.id}>
                     <td data-label="Job">
-                      <strong>{job.document_title || job.job_type}</strong>
+                      <strong>{jobTitle(job)}</strong>
                       <span className="ws-row-meta">{job.service} · {formatDateTime(job.created_at)}</span>
                       {job.cause ? <span className="ws-row-meta">Cause: {job.cause}</span> : null}
                     </td>
-                    <td data-label="Status">
-                      <StatusChip
-                        state={job.status === "completed" ? "ready" : job.status === "failed" ? "failed" : "processing"}
-                        label={prettify(job.status)}
-                        tone={job.status === "completed" ? "good" : job.status === "failed" ? "bad" : "wait"}
-                      />
-                    </td>
+                    <td data-label="Status"><JobStatus job={job} /></td>
                     <td data-label="Attempts">{job.attempts} / {job.max_attempts}</td>
-                    <td data-label="Trace"><code>{job.trace_id}</code></td>
+                    <td data-label="Trace"><code>{job.trace_id}</code> <CopyButton value={job.trace_id} label={`trace ${job.trace_id}`} /></td>
                     <td data-label="Action">
-                      <div className="ws-inline-actions">
-                        <Button variant="quiet" onClick={() => setDetailJob(job)}>View cause</Button>
-                        {job.status === "failed" && job.retryable ? (
-                          <Button variant="outline" disabled={busyJob !== null} onClick={() => void doRetry(job)}>
-                            {busyJob === job.id ? "Retrying…" : "Retry job"}
-                          </Button>
-                        ) : job.status === "failed" ? (
-                          <span className="ws-muted">Not retryable</span>
-                        ) : null}
-                      </div>
+                      <Button variant={canRetry(job) ? "outline" : "quiet"} onClick={() => updateQuery({ job: job.id })}>
+                        {canRetry(job) ? "Review and retry" : "Details"}
+                      </Button>
                     </td>
                   </tr>
                 ))}
@@ -223,6 +298,7 @@ function Monitoring() {
             </table>
           </div>
         ) : null}
+        <p className="ws-footnote">Retry is offered only for a failed job the platform marks retryable. Unsearchable PDFs need a replacement.</p>
       </section>
 
       <section className="ws-panel" aria-labelledby="audit-title">
@@ -256,32 +332,11 @@ function Monitoring() {
         ) : null}
       </section>
 
-      <p className="ws-footnote">Retry appears only for a failed job the platform marks retryable; unsearchable PDFs need a replacement.</p>
-
-      {detailJob ? (
-        <section className="ws-panel ws-job-detail" role="region" aria-label="Job detail">
-          <div className="ws-panel-head">
-            <div>
-              <p className="eyebrow-label">JOB DETAIL</p>
-              <h2>{detailJob.document_title || detailJob.job_type}</h2>
-            </div>
-            <button type="button" className="ws-inline-link" onClick={() => setDetailJob(null)}>Close</button>
-          </div>
-          <dl className="ws-summary-list">
-            <div><dt>Status</dt><dd>{detailJob.status}</dd></div>
-            <div><dt>Human-readable cause</dt><dd>{detailJob.cause || "No failure cause is recorded for this job."}</dd></div>
-            <div><dt>Trace identifier</dt><dd><code>{detailJob.trace_id}</code></dd></div>
-            <div><dt>Attempts</dt><dd>{detailJob.attempts} of {detailJob.max_attempts}</dd></div>
-            <div><dt>Retryable</dt><dd>{detailJob.retryable ? "Yes — safe to retry" : "No — correct the input instead"}</dd></div>
-            <div><dt>Last checked</dt><dd>{formatDateTime(detailJob.last_checked_at)}</dd></div>
-          </dl>
-          {detailJob.status === "failed" && detailJob.retryable ? (
-            <Button variant="primary" disabled={busyJob !== null} onClick={() => void doRetry(detailJob)}>
-              {busyJob === detailJob.id ? "Retrying…" : "Retry this job"}
-            </Button>
-          ) : null}
-        </section>
-      ) : null}
+      <JobDrawer
+        job={openJob}
+        onClose={() => updateQuery({ job: null })}
+        onRetried={(next) => { setRetried(next); updateQuery({ job: next.id }); reload(); }}
+      />
     </>
   );
 }

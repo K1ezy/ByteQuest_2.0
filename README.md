@@ -2,7 +2,7 @@
 
 ByteQuest is a gamified programming-learning platform for undergraduate computer science students. Students practice **Python, C++, and Java**, instructors publish and grade coursework, and administrators manage course access and monitor the services. ByteQuest is a thesis system for North Eastern Mindanao State University (NEMSU).
 
-**Development branch.** Current work is in open pull requests built on `fix/ml-pr-auc-student-disjoint-split`. The [system status log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md) records which branch holds what, the merge order, the local runtime and the latest verification. [GitHub branch](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split)
+**System status.** The [system status log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md) records the latest release candidate, workstation setup and acceptance evidence.
 
 **Release status.** Core learning workflows have local verification. Hosted classroom acceptance is pending, including capacity, security, and recovery on the intended deployment. [Release gates](docs/SYSTEM_STATUS_AND_RELEASE_PLAN.md#5-six-gates-before-a-live-classroom-pilot)
 
@@ -41,13 +41,13 @@ flowchart LR
     API -->|Verify instructor reference solutions| Judge
 ```
 
-- **Sign-in and authorization.** Supabase Auth issues the session. FastAPI validates it and checks the active profile, role, and course membership before accessing protected data. Student self-registration verifies a school-issued ID and matching roster email.
+- **Sign-in and authorization.** Supabase Auth issues the session. FastAPI validates it and checks the active profile, role, and course membership before accessing protected data. Student self-registration checks the format and uniqueness of the school-issued ID.
 - **Grading and exams.** The API records durable jobs. An independent worker claims jobs, calls Judge0, and saves grades. Sample runs use visible cases. Official submissions use the full grading set, with hidden inputs and expected outputs withheld from students. Exam content is frozen for the attempt and results follow the instructor’s release workflow.
 - **Materials and AI.** Uploaded PDFs are stored privately. Searchable passages are indexed in pgvector with Gemini Embedding 2. Gemini 3.5 Flash-Lite uses relevant authorized excerpts for tutoring and activity generation. The Studio creates drafts and assigned instructors publish them through the course workspace. The shared Materials screen calls separate instructor and admin APIs.
 - **Insights.** Shared charts and definitions support role-specific views. Activity health and Gradebook share grouped practice data. Student Progress links class history to learner detail. Course health summarizes enrollment, activity and current consent with small-cohort suppression.
-- **Research and ML.** Deterministic rules drive live recommendations. The offline pipeline compares Logistic Regression and Random Forest on student-disjoint splits. Forecasting requires approved data, a reviewed model run, and appropriate consent. [ML evaluation and activation](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/ml_pipeline/README.md)
+- **Research and ML.** Deterministic rules drive live recommendations. The offline pipeline compares Logistic Regression and Random Forest on student-disjoint splits. Forecasting requires approved data, a reviewed model run, and appropriate consent. [ML evaluation and activation](ml_pipeline/README.md)
 
-[Architecture blueprint](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/BYTEQUEST_ARCHITECTURE_BLUEPRINT.md) · [API security and privacy](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/LOCAL_API_SECURITY.md)
+[Architecture blueprint](docs/BYTEQUEST_ARCHITECTURE_BLUEPRINT.md) · [API security and privacy](docs/LOCAL_API_SECURITY.md)
 
 ## Stack and deployment
 
@@ -65,7 +65,7 @@ flowchart LR
 | Local development and demo | Next.js, FastAPI, and the grading worker run on the workstation. Supabase CLI runs the data services in Docker. A private Ubuntu VM runs Judge0. The prepared core learning flow can run offline. Gemini features require internet. |
 | Planned hosted pilot | Vercel serves the frontend. Caddy terminates HTTPS on the Hostinger KVM 2 VPS, which runs FastAPI, the grading worker, and private Judge0 with Docker Compose. Hosted Supabase holds the application data. Gemini is optional for the pilot. |
 
-The VPS rehearsal needs a matching frontend and API release, applied migrations, working sign-in and recovery, private PDF access, a class-size grading test, and a tested restore. [KVM 2 deployment checklist](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/KVM2_LIVE_PILOT_CHECKLIST.md) · [Backup and restore](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/PHASE7_BACKUP_RESTORE_RUNBOOK.md)
+The VPS rehearsal needs a matching frontend and API release, applied migrations, working sign-in and recovery, private PDF access, a class-size grading test, and a tested restore. [KVM 2 deployment checklist](docs/KVM2_LIVE_PILOT_CHECKLIST.md) · [Backup and restore](docs/PHASE7_BACKUP_RESTORE_RUNBOOK.md)
 
 ## Repository layout
 
@@ -103,24 +103,24 @@ ByteQuest_2.0/
 └── *-BYTEQUEST*.bat              Windows launch and offline verification shortcuts
 ```
 
-[Frontend](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split/frontend) · [Backend](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split/backend) · [Migrations](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split/supabase/migrations) · [Infrastructure](https://github.com/K1ezy/ByteQuest_2.0/tree/fix/ml-pr-auc-student-disjoint-split/infra)
+[Frontend](frontend) · [Backend](backend) · [Migrations](supabase/migrations) · [Infrastructure](infra)
 
 ## Start locally on Windows
 
 You’ll need Docker Desktop, Supabase CLI v2, Python 3.11, Node.js 20.9 or later with npm, PowerShell 7, and a configured private Ubuntu Judge0 VM.
 
-For a new checkout, clone the branch documented here.
+For a new checkout, clone the repository.
 
 ```powershell
-git clone --branch fix/ml-pr-auc-student-disjoint-split https://github.com/K1ezy/ByteQuest_2.0.git
+git clone https://github.com/K1ezy/ByteQuest_2.0.git
 Set-Location ByteQuest_2.0
 ```
 
-1. Run `PREPARE-BYTEQUEST-OFFLINE.bat` once while connected. This prepares the local containers, dependencies, frontend build, and Judge0 connection. [Preparation launcher](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/PREPARE-BYTEQUEST-OFFLINE.bat)
-2. Run `START-BYTEQUEST.bat` to start the local stack and open sign-in. The launcher starts the API and grading worker together. [Startup launcher](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/START-BYTEQUEST.bat)
+1. Run `PREPARE-BYTEQUEST-OFFLINE.bat` once while connected. This prepares the local containers, dependencies, frontend build, and Judge0 connection. [Preparation launcher](PREPARE-BYTEQUEST-OFFLINE.bat)
+2. Run `START-BYTEQUEST.bat` to start the local stack and open sign-in. The launcher starts the API and grading worker together. [Startup launcher](START-BYTEQUEST.bat)
 3. Open [local sign-in](http://127.0.0.1:3000/onboarding). Sign in to an existing test account or follow the local guide for account and course setup.
 
-For hot reload, run `pwsh -NoProfile -File .\infra\start-bytequest.ps1 -Development` after setup. The manual setup and offline acceptance procedure are in the local guide. [Local setup and troubleshooting](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/LOCAL_E2E.md)
+For hot reload, run `pwsh -NoProfile -File .\infra\start-bytequest.ps1 -Development` after setup. The manual setup and offline acceptance procedure are in the local guide. [Local setup and troubleshooting](docs/LOCAL_E2E.md)
 
 To open the PC's local build from an authorized phone, use the private ZeroTier relay. [Phone setup](docs/LOCAL_E2E.md#open-bytequest-on-a-phone-over-zerotier)
 
@@ -147,16 +147,16 @@ The regression workflow runs the backend suite plus frontend lint, typechecking,
 
 - Local machine settings live in ignored `.env.local` files. Keep Gemini keys, Supabase privileged credentials, database passwords, and Judge0 tokens on the server.
 - Use the dedicated production templates for the hosted pilot. Configure exact HTTPS origins for the API and keep Judge0, Redis, and the sandbox database on private networks.
-- Enable saved chat history on the hosted pilot after checking its privacy notice, retention, deletion, and scheduled purge. Use approved synthetic accounts for deployment and recovery rehearsals. [Pilot operator runbook](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/PILOT_OPERATOR_RUNBOOK.md)
+- Enable saved chat history on the hosted pilot after checking its privacy notice, retention, deletion, and scheduled purge. Use approved synthetic accounts for deployment and recovery rehearsals. [Pilot operator runbook](docs/PILOT_OPERATOR_RUNBOOK.md)
 
 ## Documentation
 
 - [System status log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md)
 - [ML evidence, operations and methodology readiness plan](docs/ML_AND_OPERATIONS_READINESS_PLAN.md)
 - [20 November weekly change log](docs/BYTEQUEST_SYSTEM_STATUS_2026-11-20.md)
-- [Release readiness and classroom acceptance gates](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/SYSTEM_STATUS_AND_RELEASE_PLAN.md)
-- [KVM 2 live pilot setup](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/KVM2_LIVE_PILOT_CHECKLIST.md)
-- [System design and roadmap](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/docs/MASTER_PLAN.md)
-- [Repository guidance for coding assistants](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/AGENTS.md)
+- [Release readiness and classroom acceptance gates](docs/SYSTEM_STATUS_AND_RELEASE_PLAN.md)
+- [KVM 2 live pilot setup](docs/KVM2_LIVE_PILOT_CHECKLIST.md)
+- [System design and roadmap](docs/MASTER_PLAN.md)
+- [Repository guidance for coding assistants](AGENTS.md)
 
-[MIT license](https://github.com/K1ezy/ByteQuest_2.0/blob/fix/ml-pr-auc-student-disjoint-split/LICENSE)
+[MIT license](LICENSE)

@@ -131,7 +131,7 @@ Work through terms one page at a time with the metric definitions and API states
 
 ## 8. Delivery order
 
-Progress: slices 1–3 were delivered on 21 November 2026 and checkpointed in commit `07df51d`. What changed, how it was checked and what remains are in the [21 November change log](verification/ui-ux-harmonization-2026-11-21.md).
+Progress: slices 1–3 were delivered on 21 November 2026 and checkpointed in commit `07df51d`. Slice 5 was delivered on 22 November 2026: the pilot admin tasks (bulk enrollment by School ID on **Course access**, course edit, archive and restore, grouped admin tab rows, and Course health links that carry the course), the job recovery flow (a failed job opens with its details and audit entries, a confirmed retry, and the outcome), and a pass on Configuration and Monitoring that keeps each edit, conflict and result beside the item it concerns. What changed, how it was checked and what remains are in the [21 November change log](verification/ui-ux-harmonization-2026-11-21.md).
 
 The [24 November implementation checklist checkpoint](verification/ui-ux-harmonization-2026-11-21.md#implementation-checklist-checkpoint-for-24-november-2026) records the student flow, Quest Map previews, exam pass marks, quiz layout protection and related system changes.
 

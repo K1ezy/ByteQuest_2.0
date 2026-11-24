@@ -16,6 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -25,6 +26,8 @@ from app.models.entities import (
     AuditEvent,
     Course,
     CourseMember,
+    Exam,
+    ExamItem,
     InstructionalDocument,
     LearningActivity,
     ProcessingJob,
@@ -639,6 +642,7 @@ def create_course(payload: CourseCreate, user: Profile = Depends(admin_user), db
         created_by=user.id,
     )
     db.add(course)
+    db.flush()  # assigns course.id, so the audit entry links to the course
     record_audit(
         db,
         actor=user,
@@ -651,6 +655,98 @@ def create_course(payload: CourseCreate, user: Profile = Depends(admin_user), db
     db.commit()
     db.refresh(course)
     return {"course": {"id": str(course.id), "code": course.code, "title": course.title}, "message": "Course created."}
+
+
+class CourseUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=3, max_length=255)
+    description: Optional[str] = Field(None, max_length=1_000)
+
+
+def _course_or_404(db: Session, course_id: uuid.UUID) -> Course:
+    course = db.query(Course).filter(Course.id == course_id).with_for_update().first()
+    if course is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "That course no longer exists."})
+    return course
+
+
+@router.patch("/courses/{course_id}")
+def update_course(course_id: uuid.UUID, payload: CourseUpdate, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
+    course = _course_or_404(db, course_id)
+    title, description = payload.title.strip(), (payload.description or "").strip() or None
+    if (title, description) == (course.title, course.description):
+        return {"course": {"id": str(course.id), "code": course.code, "title": course.title}, "message": "No changes to save."}
+    old_title = course.title
+    course.title, course.description = title, description
+    record_audit(db, actor=user, action="course.updated", entity_type="course", entity_id=course.id, course_id=course.id,
+                 summary=f"Edited course {course.code}" + (f" · renamed from {old_title}" if old_title != title else ""))
+    db.commit()
+    return {"course": {"id": str(course.id), "code": course.code, "title": course.title}, "message": "Course saved."}
+
+
+def _exams_blocking_archive(db: Session, course_id: uuid.UUID) -> list[Exam]:
+    """Published exams that are open or still to come and use this course's activities."""
+    uses_course = Exam.id.in_(
+        db.query(ExamItem.exam_id).join(LearningActivity, LearningActivity.id == ExamItem.activity_id)
+        .filter(LearningActivity.course_id == course_id)
+    )
+    return (
+        db.query(Exam)
+        .filter(Exam.published_at.is_not(None), Exam.closes_at > datetime.now(timezone.utc),
+                (Exam.restricted_course_id == course_id) | uses_course)
+        .order_by(Exam.opens_at)
+        .all()
+    )
+
+
+@router.get("/courses/{course_id}/impact")
+def course_archive_impact(course_id: uuid.UUID, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if course is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "That course no longer exists."})
+    counts = membership_map(db, [course.id])
+    published = db.query(func.count(LearningActivity.id)).filter(
+        LearningActivity.course_id == course.id, LearningActivity.review_status == "published",
+        LearningActivity.archived_at.is_(None),
+    ).scalar() or 0
+    return {
+        "course": {"id": str(course.id), "code": course.code, "title": course.title, "status": course.status},
+        "students": counts.get((course.id, "student"), 0),
+        "instructors": counts.get((course.id, "instructor"), 0),
+        "published_activities": published,
+        "blocking_exams": [{"id": str(exam.id), "title": exam.title, "opens_at": iso(exam.opens_at), "closes_at": iso(exam.closes_at)}
+                           for exam in _exams_blocking_archive(db, course.id)],
+    }
+
+
+@router.post("/courses/{course_id}/archive")
+def archive_course(course_id: uuid.UUID, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
+    course = _course_or_404(db, course_id)
+    if course.status == "archived":
+        return {"status": "archived", "message": f"{course.title} is already archived."}
+    blocking = _exams_blocking_archive(db, course.id)
+    if blocking:
+        raise HTTPException(status_code=409, detail={
+            "code": "course_has_exam",
+            "message": f"{blocking[0].title} uses this course's activities and is open or scheduled. Archive after it closes.",
+        })
+    course.status = "archived"
+    record_audit(db, actor=user, action="course.archived", entity_type="course", entity_id=course.id, course_id=course.id,
+                 summary=f"Archived course {course.code} · {course.title}")
+    db.commit()
+    return {"status": "archived", "message": f"{course.title} is archived. Its activities are closed and past results are kept."}
+
+
+@router.post("/courses/{course_id}/restore")
+def restore_course(course_id: uuid.UUID, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
+    course = _course_or_404(db, course_id)
+    if course.status == "active":
+        return {"status": "active", "message": f"{course.title} is already active."}
+    course.status = "active"
+    record_audit(db, actor=user, action="course.restored", entity_type="course", entity_id=course.id, course_id=course.id,
+                 summary=f"Restored course {course.code} · {course.title}")
+    db.commit()
+    return {"status": "active", "message": f"{course.title} is active again, with the same instructors and students."}
 
 
 def _assignment_rows(db: Session, *, course_id: uuid.UUID | None, role: str | None, state: str | None, search: str | None) -> list[dict]:
@@ -713,6 +809,112 @@ def list_assignments(
             "pending": len([row for row in all_rows if row["status"] == "pending"]),
         },
     }
+
+
+def _grant_course_access(db: Session, user: Profile, course: Course, profile: Profile, member_role: str,
+                         existing: CourseMember | None) -> CourseMember:
+    """Make one membership active and audit it. The caller checks eligibility and commits."""
+    now = datetime.now(timezone.utc)
+    if existing is not None:
+        existing.status, existing.assigned_by, existing.assigned_at, existing.updated_at = "active", user.id, now, now
+        membership = existing
+    else:
+        membership = CourseMember(course_id=course.id, profile_id=profile.id, member_role=member_role,
+                                  status="active", assigned_by=user.id)
+        db.add(membership)
+        db.flush()  # assigns membership.id, so the audit entry links to it
+    record_audit(
+        db,
+        actor=user,
+        action="assignment.created",
+        entity_type="course_member",
+        entity_id=membership.id,
+        course_id=course.id,
+        summary=f"Assigned {profile.display_name or profile.username} as {member_role} in {course.title}",
+    )
+    return membership
+
+
+SCHOOL_ID_PATTERN = re.compile(r"^\d{2}-\d{5}$")
+MAX_ENROLLMENT_IDS = 200
+
+
+class EnrollmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    course_id: uuid.UUID
+    school_ids: str = Field(min_length=1, max_length=10_000)
+
+
+def _enrollment_plan(db: Session, payload: EnrollmentRequest) -> tuple[Course, dict]:
+    """Sort pasted School IDs into what an enrollment would do. Reads only."""
+    course = db.query(Course).filter(Course.id == payload.course_id, Course.status == "active").first()
+    if course is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "That course is not available."})
+    ids = list(dict.fromkeys(token for token in re.split(r"[\s,;]+", payload.school_ids) if token))
+    if not ids:
+        raise HTTPException(status_code=422, detail={"code": "no_ids", "field": "school_ids", "message": "Paste at least one School ID."})
+    if len(ids) > MAX_ENROLLMENT_IDS:
+        raise HTTPException(status_code=422, detail={
+            "code": "too_many_ids", "field": "school_ids",
+            "message": f"Paste at most {MAX_ENROLLMENT_IDS} School IDs at a time. This list has {len(ids)}.",
+        })
+    invalid = [sid for sid in ids if not SCHOOL_ID_PATTERN.match(sid) or sid.endswith("-00000")]
+    valid = [sid for sid in ids if sid not in invalid]
+    profiles = {p.school_id: p for p in db.query(Profile).filter(Profile.school_id.in_(valid or ["-"])).all()}
+    memberships = {
+        m.profile_id: m for m in db.query(CourseMember).filter(
+            CourseMember.course_id == course.id, CourseMember.member_role == "student",
+            CourseMember.profile_id.in_([p.id for p in profiles.values()] or [uuid.uuid4()]),
+        )
+    }
+    plan: dict[str, list[dict]] = {"will_enroll": [], "already_enrolled": [], "not_found": [], "not_eligible": [],
+                                   "invalid": [{"school_id": sid} for sid in invalid]}
+    for sid in valid:
+        profile = profiles.get(sid)
+        if profile is None:
+            plan["not_found"].append({"school_id": sid})
+            continue
+        item = {"school_id": sid, "profile_id": str(profile.id),
+                "name": profile.display_name or f"@{profile.username}"}
+        if _role_value(profile) != "student":
+            plan["not_eligible"].append({**item, "reason": "Not a student account"})
+        elif profile.account_status != "active":
+            plan["not_eligible"].append({**item, "reason": "Account is deactivated"})
+        elif memberships.get(profile.id) is not None and memberships[profile.id].status == "active":
+            plan["already_enrolled"].append(item)
+        else:
+            plan["will_enroll"].append(item)
+    return course, plan
+
+
+@router.post("/enrollments/preview")
+def preview_enrollment(payload: EnrollmentRequest, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
+    course, plan = _enrollment_plan(db, payload)
+    return {"course": {"id": str(course.id), "code": course.code, "title": course.title}, "plan": plan}
+
+
+@router.post("/enrollments")
+def enroll_students(payload: EnrollmentRequest, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
+    # Planned again here, so anything that changed since the preview is skipped, never enrolled twice.
+    course, plan = _enrollment_plan(db, payload)
+    to_enroll = [uuid.UUID(item["profile_id"]) for item in plan["will_enroll"]]
+    profiles = {p.id: p for p in db.query(Profile).filter(Profile.id.in_(to_enroll or [uuid.uuid4()])).all()}
+    existing = {m.profile_id: m for m in db.query(CourseMember).filter(
+        CourseMember.course_id == course.id, CourseMember.member_role == "student",
+        CourseMember.profile_id.in_(to_enroll or [uuid.uuid4()]),
+    ).with_for_update()}
+    for profile_id in to_enroll:
+        _grant_course_access(db, user, course, profiles[profile_id], "student", existing.get(profile_id))
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail={
+            "code": "enrollment_changed", "message": "Someone changed this course's students at the same time. Preview again.",
+        }) from exc
+    count = len(to_enroll)
+    return {"course": {"id": str(course.id), "code": course.code, "title": course.title}, "enrolled": count, "plan": plan,
+            "message": f"Enrolled {count} student{'' if count == 1 else 's'} in {course.title}."}
 
 
 class AssignmentCreate(BaseModel):
@@ -781,30 +983,7 @@ def create_assignment(payload: AssignmentCreate, user: Profile = Depends(admin_u
                 "message": "This assignment is already pending. Confirm it instead of creating another.",
             },
         )
-    if existing is not None:
-        existing.status = "active"
-        existing.assigned_by = user.id
-        existing.assigned_at = datetime.now(timezone.utc)
-        existing.updated_at = datetime.now(timezone.utc)
-        membership = existing
-    else:
-        membership = CourseMember(
-            course_id=course.id,
-            profile_id=profile.id,
-            member_role=payload.member_role,
-            status="active",
-            assigned_by=user.id,
-        )
-        db.add(membership)
-    record_audit(
-        db,
-        actor=user,
-        action="assignment.created",
-        entity_type="course_member",
-        entity_id=membership.id if membership.id else None,
-        course_id=course.id,
-        summary=f"Assigned {profile.display_name or profile.username} as {payload.member_role} in {course.title}",
-    )
+    membership = _grant_course_access(db, user, course, profile, payload.member_role, existing)
     db.commit()
     db.refresh(membership)
     return {
@@ -1363,8 +1542,9 @@ async def retry_job(job_id: uuid.UUID, user: Profile = Depends(admin_user), db: 
 
 
 @router.get("/audit")
-def audit_events(search: Optional[str] = None, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
-    events = audit_query(db, search=search, limit=200).all()
+def audit_events(search: Optional[str] = None, entity_id: Optional[str] = Query(None, max_length=64),
+                 user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
+    events = audit_query(db, search=search, limit=200, entity_id=entity_id).all()
     return {
         "items": [
             {

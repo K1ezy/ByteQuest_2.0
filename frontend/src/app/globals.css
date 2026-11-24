@@ -3329,6 +3329,8 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
 .ws-option-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
 .ws-check { display: flex; align-items: flex-start; gap: 9px; color: var(--ink); font-size: var(--text-2xs); font-weight: 600; }
 .ws-check input { width: 18px; height: 18px; flex: none; margin-top: 1px; accent-color: var(--purple); }
+.enroll-preview { display: grid; gap: 10px; margin-top: 14px; }
+.enroll-preview summary { cursor: pointer; padding: 4px 0; }
 .ws-check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .ws-course-picker { padding: 10px 0 0; }
 .ws-course-picker legend { color: #2b2440; font-size: var(--text-2xs); font-weight: 700; }
@@ -3659,7 +3661,7 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
 .ws-health-card.stale { border-color: var(--warning-line); background: #fffdf7; }
 .ws-health-card.unavailable { border-color: var(--line-strong); background: var(--paper); }
 .ws-health-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.ws-health-head h2 { margin: 0; font-size: 13.5px; }
+.ws-health-head h2, .ws-health-head h3 { margin: 0; font-size: 13.5px; }
 .ws-health-card p { margin: 0 0 6px; color: var(--muted); font-size: var(--text-3xs); line-height: 1.5; }
 .ws-health-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .ws-health-list li { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
@@ -3669,15 +3671,19 @@ a.ws-stat-card:hover { border-color: #b99bdc; box-shadow: 0 8px 22px rgb(61 32 1
 /* --------------------------------------------------------------- settings */
 .ws-settings-groups { display: grid; gap: 0; }
 .ws-setting-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
-.ws-setting-list li { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.ws-setting-list li { flex-wrap: wrap; display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .ws-setting-list li:last-child { border-bottom: 0; padding-bottom: 0; }
-.ws-setting-main { min-width: 0; }
+.ws-setting-main { min-width: 0; flex: 1 1 18rem; }
+.ws-setting-inline { flex-basis: 100%; display: grid; gap: 10px; margin-top: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.ws-setting-saved { color: var(--emerald-700); font-size: 12.5px; }
+@media (pointer: coarse) { .ws-copy { min-width: 44px; min-height: 44px; } }
+.ws-callout { margin: 12px 0; padding: 10px 12px; border-left: 3px solid var(--purple); border-radius: 6px; background: var(--purple-soft); }
+.ws-drawer-subtitle { margin: 18px 0 6px; font-size: 13.5px; }
 .ws-setting-main strong { display: block; font-size: 13.5px; }
 .ws-setting-main p { margin: 3px 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 .ws-setting-main code { padding: 1px 5px; border-radius: 4px; background: var(--purple-soft); font-size: var(--text-3xs); }
 .ws-student-detail { display: grid; gap: 10px; }
 .ws-student-detail h3 { margin: 8px 0 0; font-size: var(--text-2xs); }
-.ws-job-detail { margin-top: 16px; border-color: #d9c9f7; }
 
 /* --------------------------------------------------------------- responsive */
 @media (max-width: 1200px) {
@@ -5101,6 +5107,22 @@ html[data-contrast="high"] { --chart-series: CanvasText; --chart-series-2: Canva
 .research-consent-page { display: grid; gap: 16px; }
 .research-consent-text { white-space: pre-wrap; }
 .insight-legend { display: flex; flex-wrap: wrap; gap: 1rem; }
+.insight-figure { margin: 0; }
+/* Tapping or clicking focuses the chart; keep the ring for keyboard focus only. */
+.insight-plot .recharts-surface:focus:not(:focus-visible) { outline: none; }
+.insight-tooltip { max-width: min(26rem, 90vw); padding: .5rem .7rem; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--surface); color: var(--ink); box-shadow: 0 6px 18px rgb(33 22 58 / 12%); font-size: .85rem; line-height: 1.35; }
+.insight-tooltip p { margin: 0; }
+.insight-tooltip .insight-tooltip-title { margin-bottom: .3rem; font-weight: 600; }
+.insight-tooltip ul { display: grid; gap: .2rem; margin: 0; padding: 0; list-style: none; }
+.insight-tooltip li { display: grid; grid-template-columns: 24px auto 1fr; align-items: center; column-gap: .45rem; }
+.insight-tooltip li strong { font-weight: 600; white-space: nowrap; }
+/* Phones: narrower than the chart, so Recharts can keep it inside instead of pushing the page sideways. */
+@media (max-width: 480px) {
+  .insight-tooltip { max-width: 15rem; }
+  .insight-tooltip li { grid-template-columns: 24px 1fr; }
+  .insight-tooltip li strong { grid-column: 2; white-space: normal; }
+}
 @media (pointer: coarse) {
   .insights-table-toggle summary, .insights-method summary, .insight-practice { min-height: 44px; display: inline-flex; align-items: center; }
   /* Compact buttons keep their look on desktop but get a full 44px touch target on touch screens. */

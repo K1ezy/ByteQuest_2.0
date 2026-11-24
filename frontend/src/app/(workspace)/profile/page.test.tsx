@@ -443,7 +443,7 @@ it("links recorded topics, shows badge descriptions and provides a score trend t
   fireEvent.click(screen.getByRole("button", { name: "Show 6 recent attempts" }));
   expect(screen.getByText("Practice quiz 5")).toBeTruthy();
   expect(screen.queryByRole("link", { name: "Practice quiz 5" })).toBeNull();
-  expect(screen.getByRole("img",{name:/From 40% to 85% across 2 attempts/})).toBeTruthy();
+  expect(screen.getByRole("figure",{name:/From 40% to 85% across 2 attempts/})).toBeTruthy();
   fireEvent.click(screen.getByText("View as table"));
   expect(screen.getByRole("table",{name:"Recent score trend"})).toBeTruthy();
 });
