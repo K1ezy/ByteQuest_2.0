@@ -1,6 +1,54 @@
 # Phase 7 database and file backup/restore runbook
 
-**Status: prepared, not executed.** ByteQuest has no selected production Supabase project or backup policy, and no production backup or restore rehearsal has been performed. This document is a procedure for planning and safely rehearsing recovery; it is not evidence that a backup exists.
+**Status: scripted and rehearsed locally on 11/24/26; no production backup yet.** The [scripted nightly backup](#scripted-nightly-backup-for-a-supabase-free-pilot) below was run, verified and restored against local Supabase with synthetic data. ByteQuest still has no selected production Supabase project or approved backup policy, and no backup of production data exists until the steps below run on the VPS. This document is not evidence that a backup exists.
+
+## Scripted nightly backup for a Supabase Free pilot
+
+Supabase Free has no automatic backups and pauses a project after a week without activity. Three scripts in `infra/` cover both, using only Docker, curl and OpenSSL on the VPS:
+
+| Script | What it does |
+|---|---|
+| `backup-supabase.sh` | Writes one encrypted archive: a `pg_dump` of the `public`, `bytequest_private`, `auth` and `storage` schemas (app data, research codes, sign-in accounts, file metadata), every PDF from the private bucket, a SHA-256 manifest and key row counts. Keeps 14 days locally, optionally copies offsite with rclone. |
+| `backup-supabase.sh keepalive` | One light database query and one Auth API call, so a quiet week does not pause the project. |
+| `verify-backup.sh <archive>` | Decrypts into a temporary folder, checks every checksum, confirms the dump is readable and holds data for sign-in accounts, profiles, attempts, research codes and file metadata. |
+| `restore-supabase-backup.sh <archive> --confirm` | Restores into a **new, empty** project after `supabase db push`: empties the app tables, loads the data with triggers paused in one transaction, re-uploads the PDFs and compares row counts. Refuses any target that already has accounts. |
+
+Local rehearsal, 11/24/26: the backup of 234 accounts, 4,807 attempts, 120 research codes and 14 PDFs made a 4.7 MB archive. `verify-backup.sh` passed it and rejected a wrong key and a one-byte change. A restore into a scratch database matched every row count, and its research codes and attempt rows were identical to the source. The PDF upload call was checked on a throwaway object.
+
+### One-time setup on the VPS
+
+1. Create the encryption key, readable by root only, and **store a copy in the group's password manager**. Without it, no backup can be opened:
+   ```bash
+   sudo mkdir -p /etc/bytequest
+   sudo sh -c 'openssl rand -base64 48 > /etc/bytequest/backup.key && chmod 600 /etc/bytequest/backup.key'
+   ```
+2. Check that `DATABASE_URL` in `infra/backend.prod.env` uses port 5432 (session pooler or direct). `pg_dump` cannot use the 6543 transaction pooler.
+3. Run one backup and verify it, from the repository folder:
+   ```bash
+   sudo bash infra/backup-supabase.sh
+   sudo bash infra/verify-backup.sh /var/backups/bytequest/bytequest-<stamp>.tar.enc
+   ```
+4. Schedule both jobs with `sudo crontab -e`, replacing `<repo>` with the repository path:
+   ```
+   30 2 * * * cd <repo> && bash infra/backup-supabase.sh >> /var/log/bytequest-backup.log 2>&1
+   0 */12 * * * cd <repo> && bash infra/backup-supabase.sh keepalive >> /var/log/bytequest-keepalive.log 2>&1
+   ```
+5. Get a copy **off the VPS**. Either set `BACKUP_RCLONE_REMOTE` (for example `gdrive:bytequest-backups` after `rclone config`) in the cron line, or pull the archives to a group laptop each week:
+   ```powershell
+   scp root@<vps-ip>:/var/backups/bytequest/bytequest-*.tar.enc* C:\ByteQuestBackups\
+   ```
+6. **Rehearse a restore once before the pilot**: create a second, throwaway Supabase project, run `supabase db push` with the same migrations, put its connection details in a separate env file, and run `BACKUP_ENV_FILE=<that file> bash infra/restore-supabase-backup.sh <archive> --confirm`. Sign in with a synthetic account and open a course PDF. Delete the throwaway project afterwards.
+
+### Every week
+
+Read the end of `/var/log/bytequest-backup.log` for `Backup OK`, check that an offsite copy exists, and after any quiet week confirm in the Supabase dashboard that the project is active.
+
+### Limits and duties
+
+- Up to one day of work can be lost (the nightly schedule). Supabase Pro's daily backups have the same recovery point.
+- The keep-alive is a precaution. Supabase does not publish exactly what counts as activity, so confirm after the first quiet week. A paused Free project keeps its data and is resumed from the dashboard.
+- Archives contain student data and the research-code key (`bytequest_private.research_codes`). Keep them encrypted, store copies only where the ethics approval allows, and **delete every copy, local and offsite, when `scripts.destroy_research_link` runs at the end of the study**.
+- Supabase Auth settings, API keys, redirect URLs and SMTP are configuration, not data: record their names (not secret values) so a new project can be configured the same way.
 
 ## Scope and recovery boundaries
 
