@@ -219,7 +219,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
       {/* Page Heading */}
       <div className="page-heading">
         <div>
-          <p className="eyebrow-label">{quest && `Quest #${quest.position ?? quest.sequence_order} · `}Concept check quiz · {quest?.language.toUpperCase()}</p>
+          <p className="eyebrow-label">{quest && `#${quest.position ?? quest.sequence_order} · `}Concept check quiz · {quest?.language.toUpperCase()}</p>
           <h1>{quest?.title || "Concept knowledge check"}</h1>
           <p>{quest ? `${quest.topic_concept} · ${quest.xp_reward} XP on first completion` : "Test your understanding of core concepts."}</p>
         </div>

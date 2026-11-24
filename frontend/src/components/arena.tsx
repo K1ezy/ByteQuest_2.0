@@ -700,7 +700,7 @@ export default function Arena({ activityId }: { activityId: string }) {
           </nav>
 
           <header className="arena-head">
-            <p className="eyebrow-label">Quest #{quest.position ?? quest.sequence_order} · Code challenge · {languageName}</p>
+            <p className="eyebrow-label">#{quest.position ?? quest.sequence_order} · Code challenge · {languageName}</p>
             <h1 id="arena-title">{quest.title || "Untitled challenge"}</h1>
             <ul className="arena-facts" aria-label="Challenge details">
               <li className="tag">{quest.topic_concept}</li>

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { SolveStars } from "@/components/solve-stars";
-import { formatActivityDate } from "@/lib/activity-date";
+import { formatActivityDate, formatManilaDateTime } from "@/lib/activity-date";
 import type { Quest } from "@/lib/types";
 
 export function questHref(quest: Pick<Quest, "id" | "activity_type">) {
@@ -49,7 +49,7 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
     <div className="quest-card-body">
       <div className="quest-card-head">
         <div className="quest-card-badges">
-          {!workshop && <span className="activity-number">Quest #{quest.position ?? quest.sequence_order}</span>}
+          {!workshop && <span className="activity-number">#{quest.position ?? quest.sequence_order}</span>}
           <span className="tag">{challenge ? "CODE CHALLENGE" : "Concept check quiz"}</span>
           {next && <span className="next-badge" aria-label="Next recommended quest">
             <span className="status-dot pulsing" aria-hidden="true" /> NEXT UP
@@ -69,6 +69,10 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
         <time dateTime={quest.added_at}>{formatActivityDate(quest.added_at)}</time>
       </p>}
       <p className="quest-card-desc">{briefDescription(quest)}</p>
+      {quest.closes_at && <p className="activity-added-date">
+        {quest.is_closed ? "Closed " : "Due "}
+        <time dateTime={quest.closes_at}>{formatManilaDateTime(quest.closes_at)}</time>
+      </p>}
     </div>
     {(learner || availability || !workshop) && <div className="quest-card-actions">
       <span className="quest-instructions-hint">{availability ?? (challenge

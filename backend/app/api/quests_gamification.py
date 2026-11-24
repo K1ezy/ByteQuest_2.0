@@ -90,6 +90,7 @@ class QuestCard(BaseModel):
     position: int = 0
     added_at: datetime
     added_at_estimated: bool
+    closes_at: Optional[datetime] = None
     xp_reward: int
     problem_statement: Optional[str] = None
     starter_code: Optional[str] = None
@@ -316,6 +317,7 @@ def list_published_quests(
                 sequence_order=activity.sequence_order,
                 added_at=added_at,
                 added_at_estimated=published_at is None,
+                closes_at=as_aware(activity.closes_at),
                 xp_reward=activity.xp_reward,
                 problem_statement=activity.problem_statement if include_detail else None,
                 starter_code=activity.starter_code if include_detail else None,

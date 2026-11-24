@@ -1889,13 +1889,16 @@ def test_quest_added_date_accounts_for_scheduled_opening_and_legacy_records(flow
         scheduled = db.get(LearningActivity, scheduled_id)
         scheduled.published_at = published
         scheduled.opens_at = opened
+        scheduled.closes_at = now + timedelta(days=3)
         db.commit()
 
     rows = {row["id"]: row for row in client.get("/api/v1/quests", headers=_token(users["student"])).json()}
     assert datetime.fromisoformat(rows[str(legacy_id)]["added_at"]) == created
     assert rows[str(legacy_id)]["added_at_estimated"] is True
+    assert rows[str(legacy_id)]["closes_at"] is None
     assert datetime.fromisoformat(rows[str(scheduled_id)]["added_at"]) == opened
     assert rows[str(scheduled_id)]["added_at_estimated"] is False
+    assert datetime.fromisoformat(rows[str(scheduled_id)]["closes_at"]) == now + timedelta(days=3)
 
 
 def _chat_payload(content: str = "Explain a loop invariant.", activity_id: uuid.UUID | None = None) -> dict:
@@ -2500,7 +2503,7 @@ def test_one_challenge_reads_the_same_to_admin_instructor_and_student(flow, monk
     quests = client.get("/api/v1/quests", headers=student).json()
     card = next(item for item in quests if item["id"] == activity_id)
     assert card["is_completed"] is False and HIDDEN_INPUT not in str(card)
-    # "Quest #" counts this learner's own list, not the track-wide publishing order.
+    # A card's "#" number counts this learner's own list, not the track-wide publishing order.
     assert [item["position"] for item in quests] == list(range(1, len(quests) + 1))
     assert all(item["id"] != activity_id for item in client.get("/api/v1/quests", headers=outsider).json())
 

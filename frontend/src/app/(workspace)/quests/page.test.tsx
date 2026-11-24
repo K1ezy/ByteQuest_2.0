@@ -48,6 +48,22 @@ it("opens a concept from Profile as an exact Quest Map filter", async () => {
   expect(screen.getByRole("heading", { name: "Loops in a different concept" })).toBeTruthy();
 });
 
+it("shows each quest's deadline date and time, and says Closed once it has passed", async () => {
+  mocks.api.mockResolvedValue([
+    { ...quest, closes_at: "2026-11-25T11:30:00Z" },
+    { ...quest, id: "two", title: "Past deadline", closes_at: "2026-11-01T01:00:00Z", is_closed: true },
+    { ...quest, id: "three", title: "No deadline" },
+  ]);
+  render(<QuestsPage />);
+  await screen.findByRole("heading", { name: "Repeat a step" });
+  const due = screen.getByText((_, node) => node?.tagName === "P" && /^Due /.test(node.textContent ?? ""));
+  // 11:30 UTC is 7:30 PM in Manila.
+  expect(due.textContent).toMatch(/Nov 25, 2026.*07:30\s?PM/);
+  expect(due.querySelector("time")?.getAttribute("dateTime")).toBe("2026-11-25T11:30:00Z");
+  expect(screen.getByText((_, node) => node?.tagName === "P" && /^Closed Nov 1, 2026/.test(node.textContent ?? ""))).toBeTruthy();
+  expect(screen.getAllByText((_, node) => node?.tagName === "P" && /^(Due|Closed) /.test(node.textContent ?? ""))).toHaveLength(2);
+});
+
 it("keeps all four categories visible and opens Exams when there are no practice quests", async () => {
   const list = [{
     id: "exam-one", title: "Midterm", exam_number: 1, added_at: "2026-11-24T03:00:00Z",

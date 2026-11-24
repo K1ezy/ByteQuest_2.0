@@ -339,7 +339,7 @@ export default function ExamPage() {
   return (
     <div className="page-shell pilot-dashboard exam-attempt-page">
       <p className="eyebrow-label">Timed assessment · Asia/Manila</p>
-      {info?.exam_number && <p className="activity-number">Exam #{info.exam_number}</p>}
+      {info?.exam_number && <p className="activity-number">#{info.exam_number}</p>}
       <h1>{info?.title || attempt?.title || "Exam"}</h1>
 
       {topError && (

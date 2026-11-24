@@ -39,10 +39,12 @@ export interface Quest {
   topic_concept: string;
   difficulty_level: number;
   sequence_order: number;
-  /** Place in this learner's own quest list (what "Quest #" shows). */
+  /** Place in this learner's own quest list (the "#" number on its card). */
   position?: number;
   added_at: string;
   added_at_estimated: boolean;
+  /** Scheduled deadline, if the instructor set one. */
+  closes_at?: string | null;
   /** Best solve-quality stars (1-3) on a solved code challenge; null otherwise. */
   stars?: number | null;
   xp_reward: number;

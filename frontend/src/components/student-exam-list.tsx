@@ -33,7 +33,7 @@ export function StudentExamList() {
     </div>}
     {exams.length > 0 && visibleExams.length === 0 && <p>No exams match those dates.</p>}
     {visibleExams.map((exam) => <section className="pilot-card" key={exam.id}>
-      {exam.exam_number > 0 && <p className="activity-number">Exam #{exam.exam_number}</p>}
+      {exam.exam_number > 0 && <p className="activity-number">#{exam.exam_number}</p>}
       <h3>{exam.title}</h3><p>{localTime(exam.opens_at)} to {localTime(exam.closes_at)} · {exam.duration_minutes} minutes once started</p>
       {exam.added_at && <p className="activity-added-date">Published <time dateTime={exam.added_at}>{formatActivityDate(exam.added_at)}</time></p>}
       <Link className="button button-primary" href={`/exams/${exam.id}`}>
