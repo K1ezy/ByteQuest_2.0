@@ -75,6 +75,7 @@ it("publishes eligible items in selection order with the assigned points", async
   fireEvent.change(screen.getByRole("spinbutton", { name: "Points" }), { target: { value: "20" } });
   fireEvent.click(screen.getByRole("checkbox", { name: /Loops/ }));
   fireEvent.change(screen.getByLabelText("Exam title"), { target: { value: "Term exam" } });
+  fireEvent.change(screen.getByLabelText("Whole-exam pass mark (%)"), { target: { value: "75" } });
   fireEvent.change(screen.getByLabelText(/Opens · Manila/), { target: { value: "2027-01-09T09:00" } });
   fireEvent.change(screen.getByLabelText(/Closes · Manila/), { target: { value: "2027-01-09T10:00" } });
   fireEvent.click(screen.getByRole("button", { name: "Create and publish exam" }));
@@ -85,6 +86,7 @@ it("publishes eligible items in selection order with the assigned points", async
     workshop_ids: ["python-a", "python-b"],
     items: [{ activity_id: "strings", points: 20 }, { activity_id: "loops", points: 10 }],
     opens_at: "2027-01-09T01:00:00.000Z",
+    pass_mark_percent: 75,
   });
   expect(request).toHaveBeenCalledWith("/exams/instructor/exam/publish", { method: "POST" });
 });

@@ -60,7 +60,9 @@ _TUTOR_DEPTH = {
     "challenge_hint": (
         "Give one actionable next-step hint in prose based on the public task and visible sample results. "
         "Describe a check the student can try or give a guiding question. Do not write code examples, "
-        "pseudocode, an exact edit, or the full algorithm, even with different variable names or sample data."
+        "pseudocode, an exact edit, or the full algorithm, even with different variable names or sample data.\n"
+        "Example of the expected style for a different task: \"Your program printed 1 for the sample 'Apple', "
+        "but 2 was expected. Which letters of 'Apple' are vowels, and which of them does your check recognize?\""
     ),
 }
 

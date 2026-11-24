@@ -39,7 +39,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [isError, setIsError] = useState(false);
-  const promptHeadingRef = useRef<HTMLLegendElement | null>(null);
+  const promptHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -191,7 +191,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
       : null;
 
   return (
-    <div className="page-shell">
+    <div className="page-shell quiz-page">
       {/* Top Activity Navigation Bar */}
       <nav className="activity-topbar" aria-label="Activity navigation">
         <div className="activity-nav-group">
@@ -322,7 +322,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
 
                   return (
                     <div key={q.id} className={`quiz-review-item ${isAnswered ? "" : "unanswered"}`}>
-                      <div style={{ minWidth: 0 }}>
+                      <div>
                         <div className="prompt-preview">
                           <strong>{idx + 1}.</strong> {q.prompt}
                         </div>
@@ -368,7 +368,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
             </section>
           ) : currentQuestion ? (
             /* Single Question Step View */
-            <fieldset className="panel quiz-step-card" aria-labelledby="question-prompt">
+            <section className="panel quiz-step-card" aria-labelledby="question-prompt">
               <div className="quiz-step-header">
                 <span className="quiz-step-counter">
                   Question {currentQuestionIndex + 1} of {questions.length}
@@ -378,9 +378,9 @@ export default function QuizView({ activityId }: { activityId: string }) {
                 </span>
               </div>
 
-              <legend id="question-prompt" className="quiz-question-prompt" ref={promptHeadingRef} tabIndex={-1}>
+              <h2 id="question-prompt" className="quiz-question-prompt" ref={promptHeadingRef} tabIndex={-1}>
                 {currentQuestion.prompt}
-              </legend>
+              </h2>
 
               <div className="quiz-options-group" role="radiogroup" aria-labelledby="question-prompt">
                 {currentQuestion.options.map((option) => {
@@ -411,7 +411,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
                 >
                   ← Previous question
                 </button>
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <div className="quiz-nav-group">
                   <button
                     type="button"
                     className="button button-quiet small"
@@ -428,7 +428,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
                   </button>
                 </div>
               </div>
-            </fieldset>
+            </section>
           ) : null}
         </div>
       )}

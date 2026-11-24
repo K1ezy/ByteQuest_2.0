@@ -53,6 +53,13 @@ def _chat_failure(exc: Exception) -> GeminiAPIError:
     return GeminiAPIError("Gemini chat generation failed.")
 
 
+def _thinking_config(model_id: str, level: str | None) -> types.ThinkingConfig | None:
+    """thinking_level is a Gemini 3 control; other configured models keep their own default."""
+    if level and model_id.removeprefix("models/") == "gemini-3.5-flash-lite":
+        return types.ThinkingConfig(thinking_level=types.ThinkingLevel(level.upper()))
+    return None
+
+
 class GeminiLLMService:
     @staticmethod
     @retry(
@@ -65,11 +72,13 @@ class GeminiLLMService:
         prompt: str,
         response_schema: Type[T],
         system_instruction: str = "You are an expert Computer Science professor and automated instructional designer.",
-        temperature: float = 0.2,
+        *,
+        thinking_level: Literal["minimal", "low", "medium", "high"] | None = None,
     ) -> T:
         """
         Rule 1: Configurable LLM Wrapper supporting GEMINI_MODEL_ID from environment.
         Enforces Pydantic Structured Outputs for strict JSON schema conformance.
+        Sampling parameters are not sent: Gemini 3.5 Flash-Lite deprecates and ignores them.
         """
         model_id = settings.GEMINI_MODEL_ID  # Supports gemini-3.5-flash-lite or gemini-2.5-flash
         # Check configuration before the retry wrapper; retrying an absent key cannot help.
@@ -81,9 +90,9 @@ class GeminiLLMService:
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
-                    temperature=temperature,
                     response_mime_type="application/json",
                     response_json_schema=response_schema.model_json_schema(),
+                    thinking_config=_thinking_config(model_id, thinking_level),
                 ),
             )
 
@@ -105,7 +114,6 @@ class GeminiLLMService:
         messages: list[tuple[str, str]],
         system_instruction: str,
         max_output_tokens: int,
-        temperature: float = 0.4,
         *,
         thinking_level: str | None = None,
         mode: str = "chat",
@@ -113,9 +121,6 @@ class GeminiLLMService:
         """Generate a plain-text tutoring reply and record provider usage."""
         model_id = settings.GEMINI_MODEL_ID
         client = get_gemini_client()
-        thinking_config = None
-        if thinking_level and model_id.removeprefix("models/") == "gemini-3.5-flash-lite":
-            thinking_config = types.ThinkingConfig(thinking_level=types.ThinkingLevel(thinking_level.upper()))
 
         contents = [
             types.Content(
@@ -132,9 +137,8 @@ class GeminiLLMService:
                 contents=contents,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
-                    temperature=temperature,
                     max_output_tokens=max_output_tokens,
-                    thinking_config=thinking_config,
+                    thinking_config=_thinking_config(model_id, thinking_level),
                 ),
             )
             usage = response.usage_metadata

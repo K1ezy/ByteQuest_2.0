@@ -305,7 +305,7 @@ def reveal_hint(activity_id: uuid.UUID, body: RevealHint, user: Profile = Depend
         now = _utcnow()
         if current is None or current.body != HINT_PENDING_BODY or current.created_at <= now - HINT_RESERVATION_TIME:
             raise HTTPException(409, "Hint generation expired. Retry this hint.")
-        hint_text, _ = validate_tutor_citations(explanation.hints[0], passages)
+        hint_text, _ = validate_tutor_citations(explanation.hint, passages)
         if reveals_solution(hint_text, activity.reference_solution_code, activity.starter_code, failed_sample=source):
             hint_text = WITHHELD_HINT
         result = hint_text[:2000]

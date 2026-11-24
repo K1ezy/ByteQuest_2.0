@@ -55,3 +55,9 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
+      - name: Install Chromium for layout regression tests
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Check rendered UI containment
+        run: npm run test:layout
+        working-directory: frontend

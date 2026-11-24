@@ -4,7 +4,7 @@ Signed-in destinations share a sidebar and account menu. Profile, Accessibility,
 
 | Audience | Primary destinations |
 | --- | --- |
-| Student | Dashboard, Quest Map, Workshops, Profile |
+| Student | Dashboard, Quest Map, Workshops |
 | Instructor | My Courses, Quest & Workshop Builder, Student Progress & Submissions, Exams |
 | Administrator | System Overview, Course & Instructor Management, User & Role Management, Content & Track Repository, Instructor Workspace |
 

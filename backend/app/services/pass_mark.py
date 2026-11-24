@@ -6,6 +6,8 @@ badges, the recap and the insights all read the resulting is_successful.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from app.services.gamification.sequencer import CHALLENGE_MASTERY_SCORE
 
 # Defaults when an instructor sets no pass mark: they are today's rules.
@@ -23,3 +25,10 @@ def submission_passes(
     """
     mark = default_mark if pass_mark_percent is None else float(pass_mark_percent)
     return all_passed if mark >= 100 else float(score_percentage) >= mark
+
+
+def exam_passed(score: float | None, maximum: float | None, mark: int | None) -> bool | None:
+    """Return the whole-exam outcome once a scored result and a mark exist."""
+    if score is None or maximum is None or maximum <= 0 or mark is None:
+        return None
+    return Decimal(str(score)) * 100 >= Decimal(str(maximum)) * mark

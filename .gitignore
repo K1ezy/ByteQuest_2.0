@@ -6,6 +6,7 @@ desktop.ini
 # Environment Variables & Secrets
 .env
 .env.local
+/frontend/test-results/
 .env.*.local
 *.env
 /infra/.env

@@ -9,6 +9,7 @@ import { ActivityDateFilter } from "@/components/activity-date-filter";
 import { activityDateMatches } from "@/lib/activity-date";
 import { QuestCard, questHref, questNumber } from "@/components/quest-card";
 import { StudentExamList } from "@/components/student-exam-list";
+import { ActivityPerformancePreview } from "@/components/activity-performance-preview";
 import type { Quest } from "@/lib/types";
 
 type QuestStatusFilter = "all" | "next" | "completed";
@@ -110,6 +111,7 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
 
   // Click outside the quest controls to clear the card selection.
   useEffect(() => {
+    if (isStudent) return;
     function handleBackgroundClick(e: MouseEvent) {
       const target = e.target as HTMLElement | null;
       if (!target) return;
@@ -120,7 +122,7 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
     }
     window.addEventListener("click", handleBackgroundClick);
     return () => window.removeEventListener("click", handleBackgroundClick);
-  }, []);
+  }, [isStudent]);
 
   // Filter quests by category (URL parameter), status filter, and search query
   const filteredQuests = useMemo(() => {
@@ -150,6 +152,7 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
     ? quest.activity_type === "challenge" : category === "lessons-review"
       ? quest.activity_type === "quiz" : true);
   const hasFilters = Boolean(category || selectedConcept || search.trim() || questFilter !== "all" || dateRange.from || dateRange.to);
+  if (selectedQuestId && !visibleQuests.some((quest) => quest.id === selectedQuestId)) setSelectedQuestId(null);
 
   // Keyboard navigation & activation (Enter launches selected card; arrows navigate grid)
   useEffect(() => {
@@ -298,7 +301,7 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
           </button>
         </div>
       ) : (
-        <div className="quest-grid-expanded">
+        <div className="quest-grid-expanded activity-preview-list">
           {visibleQuests.map((quest) => <QuestCard
             key={quest.id}
             quest={quest}
@@ -307,6 +310,12 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
             selected={quest.id === selectedQuestId}
             onSelect={() => setSelectedQuestId(quest.id)}
             onOpen={isStudent ? () => router.push(questHref(quest)) : undefined}
+            preview={isStudent && quest.id === selectedQuestId && (quest.activity_type === "challenge" || quest.activity_type === "quiz") && (
+              <ActivityPerformancePreview kind={quest.activity_type} activityId={quest.id} title={quest.title || quest.topic_concept}
+                details={{ number: questNumber(quest), topic: quest.topic_concept, difficulty: quest.difficulty_level,
+                  xp: quest.xp_reward, closesAt: quest.closes_at, isClosed: quest.is_closed }}
+                onClose={() => setSelectedQuestId(null)} />
+            )}
           />)}
         </div>
       )}

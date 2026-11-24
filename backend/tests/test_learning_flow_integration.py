@@ -902,7 +902,7 @@ def test_exam_snapshot_autosave_and_result_embargo(flow, monkeypatch):
     now = datetime.now(timezone.utc)
     created = client.post("/api/v1/exams/instructor", headers=instructor, json={
         "title": "Regression exam", "opens_at": (now + timedelta(minutes=5)).isoformat(),
-        "closes_at": (now + timedelta(hours=2)).isoformat(), "duration_minutes": 45,
+        "closes_at": (now + timedelta(hours=2)).isoformat(), "duration_minutes": 45, "pass_mark_percent": 75,
         "workshop_ids": [group["id"]],
         "items": [{"activity_id": str(quiz_id), "points": 40},
                   {"activity_id": str(challenge_id), "points": 60}],
@@ -981,6 +981,7 @@ def test_exam_snapshot_autosave_and_result_embargo(flow, monkeypatch):
     assert client.post(f"/api/v1/exams/instructor/{exam_id}/release", headers=instructor).status_code == 200
     released_attempt = client.get(f"/api/v1/exams/attempts/{attempt_id}", headers=student).json()
     assert released_attempt["result"]["score"] == 100
+    assert released_attempt["result"]["passed"] is True
     assert all(item.keys() == {"item_id", "points_earned", "points_possible"} for item in released_attempt["result"]["items"])
     staff_result = client.get(results_path, headers=instructor).json()["students"][0]["results"][0]
     assert staff_result["results_released"] and staff_result["xp_awarded"] > 0
@@ -1112,7 +1113,7 @@ def _started_quiz_exam(client, new_session, users) -> tuple[str, str]:
     now = datetime.now(timezone.utc)
     created = client.post("/api/v1/exams/instructor", headers=instructor, json={
         "title": "Deadline exam", "opens_at": (now + timedelta(minutes=5)).isoformat(),
-        "closes_at": (now + timedelta(hours=2)).isoformat(), "duration_minutes": 30,
+        "closes_at": (now + timedelta(hours=2)).isoformat(), "duration_minutes": 30, "pass_mark_percent": 75,
         "workshop_ids": [group.json()["id"]], "items": [{"activity_id": str(quiz_id), "points": 10}],
     })
     assert created.status_code == 201, created.text
@@ -2198,7 +2199,7 @@ def test_exam_and_retake_pause_practice_help_through_the_answer_window(flow, mon
     monkeypatch.setattr(chat_api, "_generate_chat_reply",
                         lambda *args: provider_calls.append("chat") or "Trace the values.")
     monkeypatch.setattr(pilot, "explain_code_error",
-                        lambda **kwargs: provider_calls.append("hint") or SimpleNamespace(hints=["Check the input."]))
+                        lambda **kwargs: provider_calls.append("hint") or SimpleNamespace(hint="Check the input."))
     monkeypatch.setattr(exam_worker, "SessionLocal", new_session)
 
     hint_path = f"/api/v1/pilot/activities/{challenge_id}/hints"
@@ -2303,7 +2304,7 @@ def test_help_in_flight_is_withheld_if_an_exam_begins(flow, monkeypatch, source)
         monkeypatch.setattr(chat_api, "_generate_chat_reply", lambda *args: start_attempt() or "Explanation.")
         response = client.post(f"{root}/{conversation_id}/turns", headers=student, json=turn)
     else:
-        monkeypatch.setattr(pilot, "explain_code_error", lambda **kwargs: start_attempt() or SimpleNamespace(hints=["Hint."]))
+        monkeypatch.setattr(pilot, "explain_code_error", lambda **kwargs: start_attempt() or SimpleNamespace(hint="Hint."))
         response = client.post(f"{hint_path}/reveal", headers=student,
                                json={"source": "ai", "request_key": "in-flight-hint-1"})
     assert response.status_code == 403, response.text
@@ -2789,7 +2790,7 @@ def test_chat_and_hints_are_grounded_in_own_course_pdfs(flow, monkeypatch):
 
     def fake_explainer(**kwargs):
         hint_kwargs.update(kwargs)
-        return SimpleNamespace(hints=[GROUNDED_REFERENCE])
+        return SimpleNamespace(hint=GROUNDED_REFERENCE)
 
     monkeypatch.setattr(pilot, "explain_code_error", fake_explainer)
     hint = client.post(f"/api/v1/pilot/activities/{challenge_id}/hints/reveal", headers=student,
@@ -3040,11 +3041,8 @@ def test_ai_failures_leave_drafts_and_hint_allowance_intact(flow, monkeypatch, c
             raise TimeoutError("provider-private-detail")
         if failure == "provider_quota":
             raise ClientError(429, {"error": {"message": "provider-private-detail", "status": "RESOURCE_EXHAUSTED"}})
-        if config.response_json_schema and "hints" in config.response_json_schema.get("properties", {}):
-            return SimpleNamespace(text=(
-                '{"title":"Loop","summary":"Check the count.","concept_explanation":"Count from zero.",'
-                '"hints":["   "],"pedagogical_tip":"Trace a small input."}'
-            ))
+        if config.response_json_schema and "hint" in config.response_json_schema.get("properties", {}):
+            return SimpleNamespace(text='{"diagnosis":"The loop counts from zero.","hint":"   "}')
         return SimpleNamespace(text="{provider-private-detail" if config.response_json_schema else "   ")
 
     def get_client():
@@ -3087,7 +3085,7 @@ def test_ai_failures_leave_drafts_and_hint_allowance_intact(flow, monkeypatch, c
 
     graded = _graded_job(client, student, activity_id, "PRINT_INPUT", dry_run=False)
     assert graded["evaluation"]["is_successful"]
-    monkeypatch.setattr(pilot, "explain_code_error", lambda **kwargs: SimpleNamespace(hints=["Trace the first input."]))
+    monkeypatch.setattr(pilot, "explain_code_error", lambda **kwargs: SimpleNamespace(hint="Trace the first input."))
     retry = client.post(f"{hint_url}/reveal", headers=student, json=hint_body)
     assert retry.status_code == 200 and retry.json()["remaining"] == 4
     assert "provider-private-detail" not in caplog.text

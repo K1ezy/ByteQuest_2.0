@@ -436,7 +436,7 @@ h1, h2, h3, p { margin-top: 0; }
   letter-spacing: -.4px;
   color: var(--ink);
 }
-.quest-card p, .quest-card-desc {
+.quest-card-body p, .quest-card-desc {
   color: #4a5d58;
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
@@ -493,11 +493,19 @@ h1, h2, h3, p { margin-top: 0; }
 }
 .activity-nav-group {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
 }
 
 /* Focused Quiz Activity View */
+.quiz-page .page-heading {
+  overflow-wrap: anywhere;
+}
+.quiz-page .page-heading > * {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
 .quiz-activity-container {
   max-width: 760px;
   margin: 0 auto;
@@ -510,10 +518,15 @@ h1, h2, h3, p { margin-top: 0; }
   background: var(--surface);
   box-shadow: var(--shadow);
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
+  min-inline-size: 0;
+  inline-size: 100%;
+  overflow-wrap: anywhere;
 }
 .quiz-step-header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
@@ -531,13 +544,14 @@ h1, h2, h3, p { margin-top: 0; }
   color: var(--green);
   font: 600 var(--text-xs) var(--font-mono);
 }
-.quiz-question-prompt {
+.quiz-step-card .quiz-question-prompt {
   font: 700 var(--text-xl)/var(--leading-snug) var(--font-heading);
   color: var(--ink);
   margin: 0;
 }
 .quiz-options-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   margin: 8px 0;
 }
@@ -572,8 +586,10 @@ h1, h2, h3, p { margin-top: 0; }
   accent-color: var(--green);
   cursor: pointer;
 }
+.quiz-option-radio-label span { min-inline-size: 0; }
 .quiz-nav-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
@@ -581,8 +597,21 @@ h1, h2, h3, p { margin-top: 0; }
   padding-top: 18px;
   border-top: 1px solid var(--line);
 }
+.quiz-nav-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-inline-size: 0;
+}
+.quiz-step-card .button {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  text-align: center;
+}
 .quiz-review-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 .quiz-review-item {
@@ -590,8 +619,8 @@ h1, h2, h3, p { margin-top: 0; }
   border: 1.5px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
 }
@@ -603,9 +632,6 @@ h1, h2, h3, p { margin-top: 0; }
   font-size: var(--text-base);
   font-weight: 600;
   color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .quiz-review-item .answer-preview {
   font-size: var(--text-sm);
@@ -825,6 +851,8 @@ h1, h2, h3, p { margin-top: 0; }
   .filter-button { padding: 0 8px; font-size: var(--text-xs); min-height: 38px; }
   .quiz-nav-actions { flex-direction: column; align-items: stretch; }
   .quiz-nav-actions .button { width: 100%; }
+  .quiz-review-item { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .quiz-review-item .button { justify-self: start; }
   .activity-topbar { flex-direction: column; align-items: stretch; }
   .activity-nav-group { justify-content: space-between; }
   .quest-card-actions { flex-direction: column; align-items: stretch; }
@@ -2267,10 +2295,200 @@ html[data-contrast="high"] .a11y-keyboard-reference {
 }
 
 .quest-map-page .quest-card.is-selected-card,
-.bq-quest-page .quest-card.is-selected-card {
+.bq-quest-page .quest-card.is-selected-card,
+.bq-quest-page .exam-preview-card.is-selected-card {
   border-color: var(--purple);
   background: var(--purple-soft);
   box-shadow: inset 3px 0 var(--purple);
+}
+
+.bq-quest-page :is(.quest-card, .exam-preview-card).is-selected-card {
+  position: relative;
+  outline: 2px solid var(--purple);
+  outline-offset: -2px;
+  overflow: visible;
+  z-index: 2;
+}
+
+.activity-preview-list[data-preview-reserved] {
+  padding-inline-end: var(--preview-reserve);
+}
+.bq-quest-map .quest-grid-expanded[data-preview-reserved] {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18.75rem), 1fr));
+}
+
+.activity-performance-preview {
+  margin-block-start: 1rem;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-block-start: 3px solid var(--purple);
+  border-radius: 1rem;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 12px 32px rgb(35 23 70 / 14%);
+  overflow: auto;
+}
+
+.activity-performance-preview[data-placement="side"] {
+  position: absolute;
+  top: var(--preview-top);
+  left: var(--preview-left);
+  width: var(--preview-width);
+  max-height: var(--preview-room);
+  margin: 0;
+}
+
+.activity-preview-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: var(--purple-soft);
+  border-block-end: 1px solid var(--line);
+}
+
+.activity-performance-preview :is(h3, p, dl, dd) { margin: 0; }
+.activity-preview-heading > div { min-width: 0; }
+.activity-preview-heading h3 {
+  font-size: clamp(1.125rem, 1.7vw, 1.375rem);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.activity-preview-kind, .activity-preview-scope {
+  color: var(--purple);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.activity-performance-preview .activity-preview-kind { margin-block-end: 0.25rem; }
+.activity-preview-control {
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  padding-inline: 0.5rem;
+}
+
+.activity-preview-number {
+  margin-inline-end: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.35rem;
+  background: var(--purple);
+  color: var(--ink-inverse);
+}
+.activity-preview-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.75rem 1rem 0;
+  list-style: none;
+  font-size: var(--text-xs);
+}
+.activity-preview-facts li {
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+}
+.activity-preview-facts .is-xp { border-color: var(--violet-200); background: var(--violet-50); color: var(--violet-800); }
+.activity-preview-facts .is-due { border-color: var(--purple); color: var(--purple-dark); font-weight: 650; }
+.activity-preview-facts .is-closed { text-decoration: line-through; }
+
+.activity-preview-body { padding: 1.125rem 1rem; min-height: 6.5rem; }
+.activity-preview-results { display: grid; gap: 0.75rem; }
+.activity-preview-empty { display: grid; gap: 0.25rem; padding: 0.75rem; border: 1px dashed var(--line-strong); border-radius: 0.75rem; }
+.activity-preview-empty p:first-child { font-weight: 650; }
+.activity-preview-empty p:last-child { color: var(--muted); font-size: var(--text-sm); }
+.activity-preview-summary { display: flex; align-items: center; gap: 1rem; }
+.activity-preview-ring {
+  flex: none;
+  width: 4.5rem;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(var(--purple) var(--ring), var(--purple-soft) 0);
+}
+.activity-preview-ring span {
+  width: 72%;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--purple-dark);
+  font-size: var(--text-sm);
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.activity-preview-metric { display: grid; gap: 0.25rem; }
+.activity-preview-metric strong {
+  color: var(--purple);
+  font-size: clamp(1.625rem, 3vw, 2.25rem);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.activity-preview-readout {
+  padding: 0.55rem 0.7rem;
+  border-inline-start: 3px solid var(--purple);
+  background: var(--purple-soft);
+  font-size: var(--text-sm);
+}
+
+.activity-preview-metric span, .activity-preview-note { color: var(--muted); }
+.activity-preview-breakdown { display: grid; gap: 0.5rem; }
+.activity-preview-bar {
+  height: 0.625rem;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--purple-soft);
+}
+
+.activity-preview-bar span { display: block; background: var(--purple); }
+.activity-preview-breakdown dt { display: flex; align-items: center; gap: 0.35rem; }
+.activity-preview-breakdown dt i { width: 0.6rem; height: 0.6rem; border-radius: 50%; }
+.activity-preview-breakdown dt i.is-pass { background: var(--purple); }
+.activity-preview-breakdown dt i.is-fail { background: var(--purple-soft); border: 1px solid var(--line-strong); }
+.activity-preview-breakdown dl {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem 0.8rem;
+  font-size: var(--text-xs);
+}
+.activity-preview-breakdown dl div { display: flex; gap: 0.4rem; }
+.activity-preview-breakdown dd { font-weight: 750; }
+.activity-preview-mark {
+  padding: 0.55rem 0.7rem;
+  background: var(--purple-soft);
+  border-radius: 0.5rem;
+}
+
+.activity-preview-tip {
+  padding: 0.85rem 1rem;
+  background: var(--purple-soft);
+  border-block-start: 1px solid var(--line);
+}
+.activity-preview-tip ul { display: grid; gap: 0.3rem; margin: 0.4rem 0 0; padding: 0; list-style: none; font-size: var(--text-sm); }
+.activity-preview-tip li { display: flex; gap: 0.45rem; }
+.activity-preview-tip li::before { content: "✓"; color: var(--purple); font-weight: 750; }
+.activity-preview-error { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .activity-performance-preview { animation: activity-preview-enter 150ms ease-out; }
+  @keyframes activity-preview-enter {
+    from { opacity: 0; translate: 0 4px; }
+    to { opacity: 1; translate: 0; }
+  }
+}
+
+html[data-contrast="high"] .activity-performance-preview {
+  border-color: var(--ink);
+  box-shadow: none;
 }
 
 .tag:not(.xp) {
@@ -2314,7 +2532,8 @@ html[data-contrast="high"] .next-badge {
   box-shadow: none !important;
 }
 
-html[data-contrast="high"] .quest-card.is-selected-card {
+html[data-contrast="high"] .quest-card.is-selected-card,
+html[data-contrast="high"] .exam-preview-card.is-selected-card {
   background: #ffffff !important;
   border-color: #000000 !important;
   box-shadow: 0 0 0 3px #000000 !important;

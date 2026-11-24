@@ -25,6 +25,7 @@ from app.models.entities import (
     TestCase,
     UserRole,
 )
+from app.services.activity_preview import ActivityPreview, practice_preview
 from app.services.gamification.badges import award_badges
 from app.services.gamification.completion_rewards import completed_activity_ids
 from app.services.gamification.codex import CodexResponse, codex_summary
@@ -236,6 +237,21 @@ def get_mastery_map(
 ) -> MasteryMapResponse:
     _ensure_student(current_user)
     return mastery_map(db, current_user)
+
+
+@router.get("/{activity_id}/performance-preview", response_model=ActivityPreview)
+def quest_performance_preview(
+    activity_id: uuid.UUID, current_user: Profile = Depends(get_current_user), db: Session = Depends(get_db),
+) -> ActivityPreview:
+    _ensure_student(current_user)
+    activity = db.query(LearningActivity).filter(
+        LearningActivity.id == activity_id, published_track_clause(current_user),
+        LearningActivity.activity_type.in_((ActivityKind.challenge, ActivityKind.quiz)),
+        LearningActivity.exam_only.is_(False),
+    ).first()
+    if activity is None:
+        raise HTTPException(404, "Quest not found.")
+    return practice_preview(db, current_user, activity)
 
 
 @router.get("", response_model=list[QuestCard])

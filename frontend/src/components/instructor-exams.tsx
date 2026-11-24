@@ -12,7 +12,7 @@ type ExamMode = "practice" | "restricted";
 interface Catalog { workshops: { id: string; name: string; language: string }[];
   activities: { id: string; title: string; kind: string; language: string; exam_only?: boolean }[] }
 interface Exam { id: string; title: string; opens_at: string; closes_at: string; published: boolean;
-  results_released: boolean; has_unreleased_results?: boolean }
+  results_released: boolean; has_unreleased_results?: boolean; pass_mark_percent?: number | null }
 interface AttemptResult {
   id: string;
   grading_state?: "needs_retry" | "retry_scheduled" | "running" | "queued" | null;
@@ -47,6 +47,7 @@ export default function InstructorExamsPage({ defaultWorkshopId }: { defaultWork
   const [open, setOpen] = useState("");
   const [close, setClose] = useState("");
   const [duration, setDuration] = useState(45);
+  const [passMark, setPassMark] = useState("");
   const [workshopIds, setWorkshopIds] = useState<string[]>(defaultWorkshopId ? [defaultWorkshopId] : []);
   const [activityIds, setActivityIds] = useState<string[]>([]);
   const [points, setPoints] = useState<Record<string, number>>({});
@@ -93,12 +94,25 @@ export default function InstructorExamsPage({ defaultWorkshopId }: { defaultWork
     try {
       const created = await apiRequest<{ id: string }>("/exams/instructor", { method: "POST",
         body: JSON.stringify({ title, content_mode: contentMode, opens_at: manilaIso(open), closes_at: manilaIso(close),
-          duration_minutes: duration, workshop_ids: eligibleWorkshops.map((workshop) => workshop.id),
+          duration_minutes: duration, pass_mark_percent: Number(passMark), workshop_ids: eligibleWorkshops.map((workshop) => workshop.id),
           items: selectedActivityIds.map((id) => ({ activity_id: id, points: points[id] || 10 })) }) });
       await apiRequest(`/exams/instructor/${created.id}/publish`, { method: "POST" });
       setMessage("Exam published with a frozen copy of the reviewed activities.");
-      setTitle(""); setWorkshopIds([]); setActivityIds([]); setPoints({});
+      setTitle(""); setPassMark(""); setWorkshopIds([]); setActivityIds([]); setPoints({});
       await load();
+    } catch (cause) { setError(getErrorMessage(cause)); }
+    finally { setBusy(false); }
+  }
+  async function savePassMark(event: FormEvent<HTMLFormElement>, examId: string) {
+    event.preventDefault();
+    const mark = Number(new FormData(event.currentTarget).get("pass-mark"));
+    setBusy(true); setError(""); setMessage("");
+    try {
+      await apiRequest(`/exams/instructor/${examId}/pass-mark`, {
+        method: "PATCH", body: JSON.stringify({ pass_mark_percent: mark }),
+      });
+      await load();
+      setMessage("Pass mark saved.");
     } catch (cause) { setError(getErrorMessage(cause)); }
     finally { setBusy(false); }
   }
@@ -149,8 +163,14 @@ export default function InstructorExamsPage({ defaultWorkshopId }: { defaultWork
     </div>
       {exams.map((exam) => <div className="row" key={exam.id}><div><strong>{exam.title}</strong>
         <p>{examStage(exam)}</p>
+        {exam.published && exam.pass_mark_percent != null && <p>Pass mark {exam.pass_mark_percent}%</p>}
+        {!exam.published && <form onSubmit={(event) => void savePassMark(event, exam.id)}>
+          <label>Pass mark (%) for {exam.title} <input name="pass-mark" type="number" min={1} max={100} required
+            defaultValue={exam.pass_mark_percent ?? ""} /></label>
+          <button className="button button-outline" type="submit" disabled={busy}>Save pass mark</button>
+        </form>}
         <p className="ws-row-meta">Opens {formatManilaDateTime(exam.opens_at)} · Closes {formatManilaDateTime(exam.closes_at)} (Asia/Manila)</p></div>
-        <div className="pilot-actions">{!exam.published && <button className="button button-outline" disabled={busy} onClick={() => void act(exam.id,"publish")}>Publish</button>}
+        <div className="pilot-actions">{!exam.published && <button className="button button-outline" disabled={busy || exam.pass_mark_percent == null} onClick={() => void act(exam.id,"publish")}>Publish</button>}
           {exam.published && (!exam.results_released || exam.has_unreleased_results) && <button className="button button-outline" disabled={busy} onClick={() => setReleaseTarget(exam)}>Release results</button>}
           <button className="button button-outline" disabled={busy} onClick={() => void manage(exam.id)}>Results and retakes</button>
         </div></div>)}
@@ -185,6 +205,9 @@ export default function InstructorExamsPage({ defaultWorkshopId }: { defaultWork
       <div className="field"><label htmlFor="exam-duration">Minutes per student</label>
         <input id="exam-duration" type="number" min={1} max={240} required value={duration}
           onChange={(event) => setDuration(Number(event.target.value))} /></div>
+      <div className="field"><label htmlFor="exam-pass-mark">Whole-exam pass mark (%)</label>
+        <input id="exam-pass-mark" type="number" min={1} max={100} required value={passMark}
+          onChange={(event) => setPassMark(event.target.value)} /></div>
       <fieldset className="pilot-question"><legend>Assign workshops</legend>
         {catalog.workshops.length > 0 ? <p>Each exam uses one language track. Clear your workshop selection to switch tracks.</p> :
           <p><Link href="/workshops">Create a workshop</Link> to assign learners to this exam.</p>}

@@ -76,6 +76,35 @@ is recorded the first time they are signed in, as their first answer to the
 current form. Students with accounts from before sign-up asked are asked once
 on the Dashboard. Either way they can change it in Research participation.
 
+### Rehearse with the synthetic four-section scenario
+
+To see the export fill every input before real students exist, seed the local
+database with 120 synthetic students, all consenting: 30 each in 1CSA and 1CSC
+(course `SYNML-Y1-PY`, Python) and 2CSB and 2CSC (course `SYNML-Y2-JAVA`,
+Java). Each course has a diagnostic quiz, 10 challenges and 3 more quizzes. A
+seeded simulation gives every student graded attempts with compile, runtime,
+time-limit and wrong-answer failures, retries until a pass, hint reveals and
+quiz scores. Research consent must be on. From `backend/`:
+
+```powershell
+.venv\Scripts\python -m scripts.seed_local_ml_scenario
+.venv\Scripts\python -m scripts.export_ml_dataset --research-approved
+```
+
+The export then writes 1,200 ten-input rows. Each student's first challenge
+leaves the two error-rate inputs blank, because there is no earlier coding
+attempt to count. The seeder refuses any database that isn't on this machine,
+reseeding replaces the scenario, and
+`.venv\Scripts\python -m scripts.seed_local_ml_scenario --remove` deletes it.
+Don't train this data with `--research-approved`: that labels the run as
+approved research. Train it as a synthetic run instead, which goes to
+`artifacts/development/` and is never served:
+
+```powershell
+cd ..
+backend\.venv\Scripts\python -c "import pandas as pd; from ml_pipeline.train_compare import run_training_and_comparison as run, DATASET_SOURCE_SYNTHETIC as S; run(pd.read_csv('ml_pipeline/data/attempts.csv'), hints_df=pd.read_csv('ml_pipeline/data/hints.csv'), dataset_source=S)"
+```
+
 Released exam results are not model features. Student Progress still shows
 them to instructors.
 

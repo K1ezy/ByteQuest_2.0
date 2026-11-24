@@ -67,7 +67,7 @@ async def prepare_exam(session: qa.Session, instructor: str, students: list[str]
     assert all(response.status_code == 200 for response in joined), session.failures
     now = utcnow()
     body = {"title": "Mixed workload rehearsal", "opens_at": (now + timedelta(minutes=1)).isoformat(),
-            "closes_at": (now + timedelta(hours=1)).isoformat(), "duration_minutes": duration_minutes,
+            "closes_at": (now + timedelta(hours=1)).isoformat(), "duration_minutes": duration_minutes, "pass_mark_percent": 75,
             "workshop_ids": [group["id"]], "items": [{"activity_id": ids[key], "points": 10} for key in ("double", "quiz")]}
     exam_id = (await session.call(instructor, "POST", "/exams/instructor", json=body)).json()["id"]
     await session.call(instructor, "POST", f"/exams/instructor/{exam_id}/publish")

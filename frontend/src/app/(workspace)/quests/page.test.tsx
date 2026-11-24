@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ProgrammingLanguage, Quest } from "@/lib/types";
 
@@ -118,4 +118,103 @@ it("keeps assigned exams reachable before a student chooses a language", async (
   rerender(<QuestsPage />);
   expect(await screen.findByRole("heading", { name: "No assigned exams yet" })).toBeTruthy();
   expect(mocks.api.mock.calls.map(([path]) => path)).toEqual(["/exams"]);
+});
+
+it("shows the selected activity's history, ignores a late response, and closes on Escape or filtering", async () => {
+  const quiz = { ...quest, id: "quiz", title: "Loop quiz", activity_type: "quiz" };
+  let resolveChallenge!: (data: object) => void;
+  let aborted: AbortSignal | undefined;
+  mocks.api.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === "/quests") return Promise.resolve([quest, quiz]);
+    if (path === "/quests/one/performance-preview") {
+      aborted = init?.signal ?? undefined;
+      return new Promise((resolve) => { resolveChallenge = resolve; });
+    }
+    return Promise.resolve({ scope: "course", total: 4, passed: 3, pass_marked: 4 });
+  });
+  render(<QuestsPage />);
+  fireEvent.click(await screen.findByRole("heading", { name: "Repeat a step" }));
+  expect(screen.getByText("Loading past results…")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Performance preview for Loop quiz" }));
+  const panel = await screen.findByRole("region", { name: "Performance preview for Loop quiz" });
+  expect(await within(panel).findByText("3 of 4")).toBeTruthy();
+  expect(within(panel).getByText("Passed on the first try")).toBeTruthy();
+  expect(within(panel).getByText("Needed another try").nextElementSibling?.textContent).toBe("1");
+  expect(within(panel).getByText("Your record in this course")).toBeTruthy();
+  expect(within(panel).getByRole("img", { name: "75% passed on the first try" })).toBeTruthy();
+  expect(within(panel).getByText("You usually pass these on your first try.")).toBeTruthy();
+  const facts = within(panel).getByRole("list", { name: "Activity details" });
+  expect(within(facts).getByText("Difficulty 1 of 5")).toBeTruthy();
+  expect(within(facts).getByText("20 XP")).toBeTruthy();
+  expect(within(panel).getByText("#1")).toBeTruthy();
+  expect(aborted?.aborted).toBe(true);
+  await act(async () => resolveChallenge({ scope: "workshop", total: 2, passed: 1 }));
+  expect(screen.queryByText("1 of 2")).toBeNull();
+  fireEvent.keyDown(screen.getByRole("button", { name: "Close performance preview" }), { key: "Escape" });
+  expect(screen.queryByRole("region", { name: "Performance preview for Loop quiz" })).toBeNull();
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Performance preview for Loop quiz" }));
+  fireEvent.click(screen.getByRole("button", { name: "Performance preview for Loop quiz" }));
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Repeat a step" } });
+  expect(screen.queryByRole("region", { name: "Performance preview for Loop quiz" })).toBeNull();
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "" } });
+  expect(screen.queryByRole("region", { name: "Performance preview for Loop quiz" })).toBeNull();
+});
+
+it("retries a failed exam preview and preserves the exam action", async () => {
+  mocks.params = new URLSearchParams("category=exams");
+  let attempts = 0;
+  mocks.api.mockImplementation(async (path: string) => {
+    if (path === "/exams") return [{
+      id: "exam", title: "Midterm", added_at: "2026-11-24T03:00:00Z", opens_at: "2026-11-24T03:00:00Z",
+      closes_at: "2026-11-25T03:00:00Z", duration_minutes: 30, pass_mark_percent: 75, can_resume: true,
+    }];
+    if (attempts++ === 0) throw new Error("Unavailable");
+    if (attempts === 3) return { scope: "workshop", total: 2, pass_marked: 0, passed: 0, average_percent: 81, pass_mark_percent: null };
+    return { scope: "workshop", total: 4, pass_marked: 3, passed: 2, average_percent: 76, pass_mark_percent: 75 };
+  });
+  render(<QuestsPage />);
+  fireEvent.click(await screen.findByRole("button", { name: "Performance preview for Midterm" }));
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("2 of 3")).toBeTruthy();
+  expect(screen.getByText("Your average across 4 released exams")).toBeTruthy();
+  expect(screen.getByText("76%")).toBeTruthy();
+  expect(screen.getByText("1 released exam has a score only.")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Resume exam" }).getAttribute("href")).toBe("/exams/exam");
+  fireEvent.click(document.body);
+  expect(screen.queryByRole("region", { name: "Performance preview for Midterm" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Performance preview for Midterm" }));
+  expect(await screen.findByText("81%")).toBeTruthy();
+  expect(screen.queryByText("Did not pass")).toBeNull();
+  expect(screen.getByText("2 released exams have a score only.")).toBeTruthy();
+});
+
+it("keeps the activity tip available and dismisses the preview when focus leaves the card", async () => {
+  mocks.api.mockImplementation(async (path: string) => path === "/quests" ? [quest] : {
+    scope: "workshop", total: 0, pass_marked: 0, passed: 0,
+  });
+  render(<QuestsPage />);
+  fireEvent.click(await screen.findByRole("button", { name: "Performance preview for Repeat a step" }));
+  const panel = screen.getByRole("region", { name: "Performance preview for Repeat a step" });
+  expect(await within(panel).findByText("No comparable results yet.")).toBeTruthy();
+  expect(within(panel).getByText(/first of these code challenges here/)).toBeTruthy();
+  expect(within(panel).getByText("Before you start")).toBeTruthy();
+  expect(within(panel).getByText("Run the sample cases before you submit.")).toBeTruthy();
+  fireEvent.click(within(panel).getByText("Before you start"));
+  expect(panel.isConnected).toBe(true);
+  const search = screen.getByRole("searchbox");
+  act(() => search.focus());
+  expect(panel.isConnected).toBe(false);
+  expect(document.activeElement).toBe(search);
+});
+
+it("shows zero passes as real practice history", async () => {
+  mocks.api.mockImplementation(async (path: string) => path === "/quests" ? [quest] : {
+    scope: "workshop", total: 2, pass_marked: 2, passed: 0,
+  });
+  render(<QuestsPage />);
+  fireEvent.click(await screen.findByRole("heading", { name: "Repeat a step" }));
+  expect(await screen.findByText("0 of 2")).toBeTruthy();
+  expect(screen.getByText("Needed another try").nextElementSibling?.textContent).toBe("2");
+  expect(screen.getByText("Based on 2 earlier results only, so the pattern is still forming.")).toBeTruthy();
 });

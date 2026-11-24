@@ -133,6 +133,8 @@ Work through terms one page at a time with the metric definitions and API states
 
 Progress: slices 1–3 were delivered on 21 November 2026 and checkpointed in commit `07df51d`. What changed, how it was checked and what remains are in the [21 November change log](verification/ui-ux-harmonization-2026-11-21.md).
 
+The [24 November implementation checklist checkpoint](verification/ui-ux-harmonization-2026-11-21.md#implementation-checklist-checkpoint-for-24-november-2026) records the student flow, Quest Map previews, exam pass marks, quiz layout protection and related system changes.
+
 | Slice | Work to ship | Gate before moving on |
 | --- | --- | --- |
 | 0 · Baseline and flow map | Record actual role screens and loaded states. Build a navigation/name map, a term inventory, and a role/visibility matrix. Capture representative small-screen, exam, and instructor/admin data views. Resolve conflicts between outdated docs and current behavior. | Three critical journeys documented with their real data, gates, and entry/exit links. Current pain points reproducible or recorded as verification questions. |

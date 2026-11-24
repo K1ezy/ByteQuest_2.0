@@ -38,6 +38,7 @@ export interface AttemptResultItem {
 export interface AttemptResult {
   score: number;
   max_score: number;
+  passed?: boolean | null;
   items: AttemptResultItem[];
 }
 

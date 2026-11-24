@@ -181,7 +181,7 @@ def test_expired_hint_recovers_allowance_and_same_key_delivers_once(flow, monkey
         db.commit()
     _graded_job(client, student, activity_id, "FAIL", dry_run=True)
     monkeypatch.setattr(pilot, "reserve", lambda *args: None)
-    monkeypatch.setattr(pilot, "explain_code_error", lambda **kwargs: SimpleNamespace(hints=["Trace the visible sample."]))
+    monkeypatch.setattr(pilot, "explain_code_error", lambda **kwargs: SimpleNamespace(hint="Trace the visible sample."))
     hints = f"/api/v1/pilot/activities/{activity_id}/hints"
     assert client.get(hints, headers=student).json()["remaining"] == 5
     body = {"source": "ai", "request_key": "pending-hint"}
@@ -289,7 +289,7 @@ def test_restricted_exam_keeps_items_out_of_practice_and_requires_course_enrollm
     practice = client.get("/api/v1/quests", headers=student).json()
     assert str(ids["draft"]) not in {item["id"] for item in practice}
     payload = {"title": "Restricted assessment", "opens_at": (now+timedelta(minutes=1)).isoformat(),
-               "closes_at": (now+timedelta(hours=1)).isoformat(), "duration_minutes": 30,
+               "closes_at": (now+timedelta(hours=1)).isoformat(), "duration_minutes": 30, "pass_mark_percent": 75,
                "workshop_ids": [str(group_id)], "items": [{"activity_id": str(ids["draft"]), "points": 10}]}
     assert client.post("/api/v1/exams/instructor", headers=instructor, json=payload).status_code == 422
     created = client.post("/api/v1/exams/instructor", headers=instructor, json=payload | {"content_mode": "restricted"})

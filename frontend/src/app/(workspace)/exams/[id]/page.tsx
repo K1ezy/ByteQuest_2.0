@@ -20,6 +20,7 @@ interface ExamInfo {
   opens_at: string;
   closes_at: string;
   duration_minutes: number;
+  pass_mark_percent?: number | null;
   can_start: boolean;
   latest_attempt_id: string | null;
   latest_status: string | null;
@@ -341,6 +342,7 @@ export default function ExamPage() {
       <p className="eyebrow-label">Timed assessment · Asia/Manila</p>
       {info?.exam_number && <p className="activity-number">#{info.exam_number}</p>}
       <h1>{info?.title || attempt?.title || "Exam"}</h1>
+      {info?.pass_mark_percent != null && <p>Pass mark {info.pass_mark_percent}%</p>}
 
       {topError && (
         <p className="notice error" role="alert">
@@ -989,6 +991,7 @@ export default function ExamPage() {
               <p style={{ fontSize: "1.1rem", fontWeight: 700 }}>
                 Score: {attempt.result.score} / {attempt.result.max_score}
               </p>
+              {attempt.result.passed != null && <p><strong>{attempt.result.passed ? "Passed" : "Did not pass"}</strong></p>}
               {attempt.result.items.map((res) => (
                 <div
                   key={res.item_id}

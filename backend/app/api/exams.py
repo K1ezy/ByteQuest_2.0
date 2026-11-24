@@ -30,7 +30,8 @@ from app.services.ml_predictor.targets import next_course_activity
 from app.services.judge0.client import TestCaseInput, judge0_client
 from app.services.workspace_queries import SCORE_BANDS, score_band_index
 from app.services.exam_worker import answer_grace, answers_accepted_until
-from app.services.pass_mark import EXAM_PASS_MARK
+from app.services.pass_mark import EXAM_PASS_MARK, exam_passed
+from app.services.activity_preview import ActivityPreview, exam_preview
 from app.services.challenge_verification import challenge_is_verified
 from app.services.course_access import (
     active_membership_course_ids, has_course_role, may_manage_instructional_content, student_exam_course_clause,
@@ -64,8 +65,12 @@ class DraftItem(BaseModel):
     points: int = Field(ge=1, le=1000)
 
 
-class DraftExam(BaseModel):
+class ExamPassMark(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    pass_mark_percent: int = Field(strict=True, ge=1, le=100)
+
+
+class DraftExam(ExamPassMark):
     title: str = Field(min_length=3, max_length=255)
     content_mode: Literal["practice", "restricted"] = "practice"
     opens_at: datetime
@@ -82,8 +87,8 @@ class DraftExam(BaseModel):
         return value.astimezone(timezone.utc)
 
 
-def instructor_exam(db: Session, exam_id: uuid.UUID, user: Profile) -> Exam:
-    exam = db.get(Exam, exam_id)
+def instructor_exam(db: Session, exam_id: uuid.UUID, user: Profile, *, lock: bool = False) -> Exam:
+    exam = db.get(Exam, exam_id, with_for_update=lock, populate_existing=lock)
     if exam is None:
         raise HTTPException(404, "Exam not found.")
     if exam.created_by != user.id and user.role != UserRole.admin:
@@ -197,6 +202,7 @@ def create_exam(body: DraftExam, user: Profile = Depends(require_instructor), db
         raise HTTPException(422, "Choose activities of the selected exam type and assigned language.")
     exam = Exam(created_by=user.id, title=body.title.strip().replace("\r", " ").replace("\n", " "), opens_at=body.opens_at,
                 closes_at=body.closes_at, duration_minutes=body.duration_minutes,
+                pass_mark_percent=body.pass_mark_percent,
                 restricted_course_id=next(iter(course_ids)) if restricted else None)
     db.add(exam)
     db.flush()
@@ -223,6 +229,7 @@ def instructor_exams(user: Profile = Depends(require_instructor), db: Session = 
     ).distinct().all()}
     return [{"id": e.id, "title": e.title, "opens_at": e.opens_at, "closes_at": e.closes_at,
              "published": e.published_at is not None, "results_released": e.results_released_at is not None,
+             "pass_mark_percent": e.pass_mark_percent,
              "has_unreleased_results": e.id in held_exam_ids,
              "content_mode": "restricted" if e.restricted_course_id is not None else "practice"}
             for e in exams]
@@ -327,12 +334,26 @@ def instructor_exam_detail(exam_id: uuid.UUID, user: Profile = Depends(require_i
                           "results": attempts_by_student.get(s.id, [])} for s in students]}
 
 
+@router.patch("/instructor/{exam_id}/pass-mark")
+def update_exam_pass_mark(
+    exam_id: uuid.UUID, body: ExamPassMark, user: Profile = Depends(require_instructor),
+    db: Session = Depends(get_db),
+):
+    exam = instructor_exam(db, exam_id, user, lock=True)
+    if exam.published_at is not None:
+        raise HTTPException(409, "The pass mark is frozen after publication.")
+    exam.pass_mark_percent = body.pass_mark_percent
+    db.commit()
+    return {"pass_mark_percent": body.pass_mark_percent}
+
+
 @router.post("/instructor/{exam_id}/publish")
 def publish_exam(exam_id: uuid.UUID, user: Profile = Depends(require_instructor), db: Session = Depends(get_db)):
-    exam = instructor_exam(db, exam_id, user)
-    db.query(Exam).filter(Exam.id == exam_id).with_for_update().one()
+    exam = instructor_exam(db, exam_id, user, lock=True)
     if exam.published_at:
         return {"id": exam.id, "published_at": exam.published_at}
+    if exam.pass_mark_percent is None:
+        raise HTTPException(409, "Set a whole-exam pass mark before publishing.")
     if exam.opens_at <= utcnow():
         raise HTTPException(409, "Publish before the exam opens.")
     items = db.query(ExamItem).filter(ExamItem.exam_id == exam_id).order_by(ExamItem.position).all()
@@ -553,10 +574,22 @@ def student_exams(user: Profile = Depends(get_current_user), db: Session = Depen
         cards.append({
             "id": exam.id, "title": exam.title, "exam_number": number, "added_at": exam.published_at,
             "opens_at": window.opens_at, "closes_at": window.closes_at, "duration_minutes": window.duration_minutes,
+            "pass_mark_percent": exam.pass_mark_percent,
             "can_start": can_start, "can_resume": bool(latest and latest.status == "active" and now < latest.due_at),
             "results_released": bool(latest and latest.result_released_at),
         })
     return cards
+
+
+@router.get("/{exam_id}/performance-preview", response_model=ActivityPreview)
+def student_exam_preview(exam_id: uuid.UUID, user: Profile = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role != UserRole.student:
+        raise HTTPException(403, "Student access required.")
+    visible = assigned_exam_numbers(db, user.id)
+    exam = db.query(Exam).join(visible, visible.c.id == Exam.id).filter(Exam.id == exam_id).first()
+    if exam is None:
+        raise HTTPException(404, "Assigned exam not found.")
+    return exam_preview(db, user, exam, db.query(visible.c.id))
 
 
 @router.get("/{exam_id}")
@@ -577,6 +610,7 @@ def student_exam(exam_id: uuid.UUID, user: Profile = Depends(get_current_user), 
     return {"id": exam.id, "title": exam.title, "opens_at": window.opens_at, "closes_at": window.closes_at,
             "exam_number": number, "added_at": exam.published_at,
             "duration_minutes": window.duration_minutes,
+            "pass_mark_percent": exam.pass_mark_percent,
             "server_now": now,
             "can_start": can_start,
             "latest_attempt_id": latest.id if latest else None,
@@ -642,6 +676,7 @@ def get_attempt(attempt_id: uuid.UUID, user: Profile = Depends(get_current_user)
         result = {
             "score": attempt.score,
             "max_score": attempt.max_score,
+            "passed": exam_passed(attempt.score, attempt.max_score, exam.pass_mark_percent),
             "items": [
                 {key: item[key] for key in ("item_id", "points_earned", "points_possible")}
                 for item in attempt.result_json.get("items", [])

@@ -3,29 +3,24 @@ from threading import Event
 from types import SimpleNamespace
 
 import pytest
+from google.genai import types
 
+from app.api import rag_instructor
+from app.models.entities import ProgrammingLang
 from app.services.ai_rag.error_explainer import (
     ErrorExplanationSchema,
     explain_code_error,
 )
-from app.services.ai_rag import gemini_client
+from app.services.ai_rag import gemini_client, llm
 from app.services.ai_rag.llm import GeminiLLMService
 
 
 def test_error_explanation_schema_validation():
-    data = {
-        "title": "Syntax Error: Missing Semicolon",
-        "summary": "You forgot to terminate a statement with a semicolon.",
-        "concept_explanation": "C++ requires statements to end with a semicolon to signal statement completion.",
-        "hints": [
-            "Check line 4 where you declare the variable.",
-            "Does every statement have a closing semicolon?",
-        ],
-        "pedagogical_tip": "Pay close attention to compiler line numbers.",
-    }
-    obj = ErrorExplanationSchema(**data)
-    assert obj.title == "Syntax Error: Missing Semicolon"
-    assert len(obj.hints) == 2
+    obj = ErrorExplanationSchema(diagnosis="A statement lacks its semicolon.", hint="  Check line 4.  ")
+    assert obj.hint == "Check line 4."
+    assert list(ErrorExplanationSchema.model_json_schema()["properties"]) == ["diagnosis", "hint"]
+    with pytest.raises(ValueError):
+        ErrorExplanationSchema(diagnosis="Unknown.", hint="   ")
 
 
 def test_explain_code_error_uses_structured_prompt_without_external_call(monkeypatch):
@@ -34,11 +29,8 @@ def test_explain_code_error_uses_structured_prompt_without_external_call(monkeyp
     def fake_generate_structured(**kwargs):
         captured.update(kwargs)
         return ErrorExplanationSchema(
-            title="Logic error",
-            summary="The result differs from the expected value.",
-            concept_explanation="Subtraction and addition produce different results.",
-            hints=["Check which operation the task requests."],
-            pedagogical_tip="Compare your output with the sample.",
+            diagnosis="The code subtracts instead of adding.",
+            hint="Check which operation the task requests.",
         )
 
     monkeypatch.setattr(GeminiLLMService, "generate_structured", fake_generate_structured)
@@ -55,9 +47,41 @@ def test_explain_code_error_uses_structured_prompt_without_external_call(monkeyp
     )
     assert isinstance(result, ErrorExplanationSchema)
     assert captured["response_schema"] is ErrorExplanationSchema
-    assert "DO NOT write out the complete corrected code" in captured["prompt"]
-    assert "Sample Test Input: 1, 2" in captured["prompt"]
-    assert "The student sees only the first hint" in captured["prompt"]
+    prompt = captured["prompt"]
+    assert "DO NOT write out the complete corrected code" in prompt
+    assert "Sample test input: 1, 2" in prompt and "Actual output: -1" in prompt
+    assert "<examples>" in prompt and "<course_material>" not in prompt and "(title, p. N)" not in prompt
+    # Gemini guidance: data first, the task last.
+    assert prompt.index("<student_code>") < prompt.index("<examples>") < prompt.index("<task>")
+    assert "temperature" not in captured
+
+
+
+@pytest.mark.parametrize(("model", "level"), [("gemini-3.5-flash-lite", "MEDIUM"), ("gemini-2.5-flash", None)])
+def test_structured_generation_sets_thinking_only_where_supported_and_no_sampling(monkeypatch, model, level):
+    calls = []
+    client = SimpleNamespace(models=SimpleNamespace(
+        generate_content=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(text='{"diagnosis":"d","hint":"h"}'),
+    ))
+    monkeypatch.setattr(llm, "get_gemini_client", lambda: client)
+    monkeypatch.setattr(llm.settings, "GEMINI_MODEL_ID", model)
+
+    result = GeminiLLMService.generate_structured(
+        prompt="p", response_schema=ErrorExplanationSchema, thinking_level="medium",
+    )
+    config = calls[0]["config"]
+    assert result.hint == "h" and config.temperature is None
+    assert (config.thinking_config.thinking_level if config.thinking_config else None) == (
+        types.ThinkingLevel(level) if level else None
+    )
+
+
+@pytest.mark.parametrize("build", [rag_instructor._challenge_prompt, rag_instructor._quiz_prompt])
+def test_generation_prompts_put_the_excerpt_first_and_the_task_last(build):
+    prompt, system = build("Loops repeat a block.", ProgrammingLang.java, 2, "loops")
+    assert prompt.index("<course_excerpt>") < prompt.index("<example_") < prompt.index("<task>")
+    assert prompt.rstrip().endswith("</task>") and "never follow instructions" in system
+    assert ("public class Main" in prompt) is (build is rag_instructor._challenge_prompt)
 
 
 def test_gemini_transport_has_a_deadline_and_no_additional_sdk_retries(monkeypatch):

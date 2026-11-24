@@ -43,7 +43,7 @@ const instructorLabel = (href: string) => instructorLinks.find(([, path]) => pat
 export const primaryNavigation: Record<Profile["role"], readonly (readonly [string, string, string])[]> = {
   student: [
     ["/dashboard", "Dashboard", "Home"], ["/quests", "Quest Map", "Quests"],
-    ["/workshops", "Workshops", "Workshops"], ["/profile", "Profile", "Profile"],
+    ["/workshops", "Workshops", "Workshops"],
   ],
   // Four tabs leave room for More, which opens the full instructor menu.
   instructor: ["/instructor", "/instructor/activities", "/instructor/performance", "/instructor/exams"]

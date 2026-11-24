@@ -532,6 +532,9 @@ class ResearchConsent(Base):
 
 class Exam(Base):
     __tablename__ = "exams"
+    __table_args__ = (
+        CheckConstraint("pass_mark_percent between 1 and 100", name="exams_pass_mark_percent_range"),
+    )
 
     restricted_course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=True)
 
@@ -541,6 +544,7 @@ class Exam(Base):
     opens_at = Column(DateTime(timezone=True), nullable=False)
     closes_at = Column(DateTime(timezone=True), nullable=False)
     duration_minutes = Column(Integer, nullable=False)
+    pass_mark_percent = Column(Integer, nullable=True)
     published_at = Column(DateTime(timezone=True), nullable=True)
     results_released_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

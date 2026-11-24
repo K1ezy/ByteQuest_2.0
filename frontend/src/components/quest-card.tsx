@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { SolveStars } from "@/components/solve-stars";
 import { formatActivityDate, formatManilaDateTime } from "@/lib/activity-date";
 import type { Quest } from "@/lib/types";
@@ -25,7 +26,7 @@ function briefDescription(quest: Quest): string {
     : `Implement a solution for ${quest.topic_concept} and verify your code with automated test cases.`;
 }
 
-export function QuestCard({ quest, learner, next = false, selected = false, onSelect, onOpen, workshop = false, availability }: {
+export function QuestCard({ quest, learner, next = false, selected = false, onSelect, onOpen, workshop = false, availability, preview }: {
   quest: Quest;
   learner: boolean;
   next?: boolean;
@@ -34,6 +35,7 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
   onOpen?: () => void;
   workshop?: boolean;
   availability?: string;
+  preview?: ReactNode;
 }) {
   const Heading = workshop ? "h4" : "h2";
   const concept = quest.topic_concept;
@@ -45,10 +47,13 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
     : quest.is_completed ? "Review quiz" : next ? "Start next quiz →" : "Start quiz →";
   return <article className={`quest-card ${selected ? "is-selected-card" : ""}`}
     id={`quest-${quest.id}`} tabIndex={onSelect ? 0 : undefined} role={onSelect ? "region" : undefined}
-    onClick={onSelect} onKeyDown={onOpen ? (event) => {
-      if (event.key === "Enter" && event.target === event.currentTarget) {
+    onClick={onSelect ? (event) => {
+      if (!(event.target as Element).closest("a, button, .activity-performance-preview")) onSelect();
+    } : undefined} onKeyDown={onSelect ? (event) => {
+      if ((event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) {
         event.preventDefault();
-        onOpen();
+        if (selected && event.key === "Enter" && onOpen) onOpen();
+        else onSelect();
       }
     } : undefined}>
     <div className="quest-card-body">
@@ -83,6 +88,10 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
       <span className="quest-instructions-hint">{availability ?? (challenge
         ? "Full instructions & test cases open in arena"
         : "Questions & explanations open in quiz")}</span>
+      {learner && onSelect && <button type="button" className="text-button" id={`preview-trigger-${quest.id}`}
+        aria-label={`Performance preview for ${quest.title || concept}`}
+        aria-expanded={selected} aria-controls={selected ? `activity-preview-${quest.id}` : undefined}
+        onClick={onSelect}>Preview</button>}
       {learner && <Link className={`button ${next ? "button-primary" : "button-outline"}`}
         href={questHref(quest)} data-tooltip={quest.is_completed ? (challenge
           ? "Reopen the editor to practice this challenge again."
@@ -90,5 +99,6 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
         {label}
       </Link>}
     </div>}
+    {preview}
   </article>;
 }
