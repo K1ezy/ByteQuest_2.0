@@ -9,6 +9,11 @@ export function questHref(quest: Pick<Quest, "id" | "activity_type">) {
   return `/${quest.activity_type === "challenge" ? "arena" : "quiz"}/${quest.id}`;
 }
 
+/** The "#" number a learner sees on the card; search matches this same value. */
+export function questNumber(quest: Pick<Quest, "position" | "sequence_order">) {
+  return quest.position ?? quest.sequence_order;
+}
+
 function briefDescription(quest: Quest): string {
   if (quest.problem_statement) {
     const firstParagraph = quest.problem_statement.split(/\n\s*\n/)[0]?.trim() ?? "";
@@ -49,7 +54,7 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
     <div className="quest-card-body">
       <div className="quest-card-head">
         <div className="quest-card-badges">
-          {!workshop && <span className="activity-number">#{quest.position ?? quest.sequence_order}</span>}
+          {!workshop && <span className="activity-number">#{questNumber(quest)}</span>}
           <span className="tag">{challenge ? "CODE CHALLENGE" : "Concept check quiz"}</span>
           {next && <span className="next-badge" aria-label="Next recommended quest">
             <span className="status-dot pulsing" aria-hidden="true" /> NEXT UP

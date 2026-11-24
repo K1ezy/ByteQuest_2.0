@@ -7,7 +7,7 @@ import { apiRequest, getErrorMessage } from "@/lib/api";
 import { useShellProfile } from "@/components/app-shell";
 import { ActivityDateFilter } from "@/components/activity-date-filter";
 import { activityDateMatches } from "@/lib/activity-date";
-import { QuestCard, questHref } from "@/components/quest-card";
+import { QuestCard, questHref, questNumber } from "@/components/quest-card";
 import { StudentExamList } from "@/components/student-exam-list";
 import type { Quest } from "@/lib/types";
 
@@ -125,6 +125,8 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
   // Filter quests by category (URL parameter), status filter, and search query
   const filteredQuests = useMemo(() => {
     const normalizedSearch = search.trim().toLocaleLowerCase();
+    // "4" or "#4" finds quest #4 exactly, rather than every title that contains a 4.
+    const searchedNumber = /^#?\d+$/.test(normalizedSearch) ? Number(normalizedSearch.replace("#", "")) : null;
     return quests.filter((quest) => {
       // Status filter
       const matchesStatus =
@@ -135,6 +137,7 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
       // Search filter
       const matchesSearch = selectedConcept !== null
         ? quest.topic_concept === selectedConcept
+        : searchedNumber !== null ? questNumber(quest) === searchedNumber
         : !normalizedSearch || `${quest.title ?? ""} ${quest.topic_concept} ${quest.activity_type}`
           .toLocaleLowerCase()
           .includes(normalizedSearch);

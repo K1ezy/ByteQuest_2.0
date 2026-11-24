@@ -48,6 +48,29 @@ it("opens a concept from Profile as an exact Quest Map filter", async () => {
   expect(screen.getByRole("heading", { name: "Loops in a different concept" })).toBeTruthy();
 });
 
+it("finds a quest by its # number, not by digits inside other titles", async () => {
+  const list = Array.from({ length: 9 }, (_, index) => ({
+    ...quest, id: `q${index + 1}`, position: index + 1, sequence_order: index + 20,
+    title: index === 8 ? "Print 4 squares" : `Quest title ${String.fromCharCode(65 + index)}`,
+  }));
+  mocks.api.mockResolvedValue(list);
+  render(<QuestsPage />);
+  await screen.findByRole("heading", { name: "Print 4 squares" });
+  const search = screen.getByRole("searchbox");
+  const shown = () => screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent);
+
+  fireEvent.change(search, { target: { value: "4" } });
+  expect(shown()).toEqual(["Quest title D"]);
+  expect(screen.getByText("#4")).toBeTruthy();
+  fireEvent.change(search, { target: { value: "#9" } });
+  expect(shown()).toEqual(["Print 4 squares"]);
+  // Words still search titles, topics and types as before.
+  fireEvent.change(search, { target: { value: "squares" } });
+  expect(shown()).toEqual(["Print 4 squares"]);
+  fireEvent.change(search, { target: { value: "12" } });
+  expect(screen.getByRole("heading", { name: "No quests match that view" })).toBeTruthy();
+});
+
 it("shows each quest's deadline date and time, and says Closed once it has passed", async () => {
   mocks.api.mockResolvedValue([
     { ...quest, closes_at: "2026-11-25T11:30:00Z" },

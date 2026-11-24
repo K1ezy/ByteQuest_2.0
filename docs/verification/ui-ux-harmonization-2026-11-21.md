@@ -136,3 +136,11 @@ The numbers themselves did not change: quests use the learner's own list order a
 **How it was checked.** All 239 frontend tests in 51 files passed, including a new Quest Map test for the Due line, the Closed line and a card without a deadline. TypeScript and lint on the changed files were clean. The quest-date backend integration test now also checks `closes_at`, and passed.
 
 **Not checked.** The cards and page headers were not viewed in a signed-in browser. On exam cards and the exam page, "#2" now sits above the title without the word "Exam", so it carries less context there than on quest cards. Workshop activity cards share the quest card but get no deadline line, because the workshop API does not send `closes_at`.
+
+### Fix: searching by number, 24 November 2026
+
+| Change | What users see | Main files |
+| --- | --- | --- |
+| Number search | Typing `4` or `#4` in the Quest Map search shows quest #4 only. Before, the search ignored the card number and matched any title or topic containing a "4", so `4` could show #9. Words still search titles, topics and activity types as before. | `quests/page.tsx`, `components/quest-card.tsx` (one `questNumber` function now feeds both the card's "#" and the search) |
+
+The numbering itself was already correct: the server numbers each learner's quests 1, 2, 3 in list order. A new Quest Map test reproduces the report (nine quests, #9 titled "Print 4 squares"); it failed on the old code and passes with the fix. All frontend tests, TypeScript and lint pass. Not checked in a signed-in browser.
