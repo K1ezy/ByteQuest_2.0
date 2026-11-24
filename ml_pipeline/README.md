@@ -43,76 +43,29 @@ exposure but cannot prove that arbitrary identifiers are anonymous. The hint
 export carries who, where and when only: never the hint text, its source or
 the request key.
 
-Both export queries below require the named SQL parameter
-`:current_consent_version`. Bind it to the currently active backend
-`RESEARCH_CONSENT_VERSION` using a parameter-aware SQL client, after confirming
-`RESEARCH_CONSENT_ACTIVE` and institutional approval. In a SQL editor without
-named parameters, replace the parameter with a correctly quoted literal of
-that exact version before running either query. An unbound parameter fails;
-an unmatched version returns no rows. The latest consent event for each learner
-must accept that version. A past acceptance does not override a later decline
-or withdrawal. Use the same version for both exports.
+The export script holds both queries and runs them for you. It reads
+`RESEARCH_CONSENT_VERSION` from the backend settings, refuses to run while
+`RESEARCH_CONSENT_ACTIVE` is off, and needs `--research-approved` as the same
+operator attestation as the trainer. The latest consent event for each learner
+must accept that version: a past acceptance does not override a later decline
+or withdrawal. Run it from `backend/` with the database owner's `DATABASE_URL`:
 
-```sql
-WITH latest_consent AS (
-    SELECT DISTINCT ON (student_id) student_id, choice, document_version
-    FROM public.research_consents
-    ORDER BY student_id, event_order DESC
-)
-SELECT
-    md5(rc.code || ':' || aa.id::text) AS id,
-    rc.code AS student_id,
-    aa.activity_id::text AS activity_id,
-    la.course_id::text AS course_id,
-    aa.exam_attempt_id::text AS exam_attempt_id,
-    aa.attempt_number,
-    aa.created_at,
-    la.language::text AS language,
-    la.activity_type::text AS activity_type,
-    aa.is_successful,
-    aa.score_percentage,
-    aa.error_category,
-    aa.compiler_status_id
-FROM public.activity_attempts AS aa
-JOIN latest_consent AS consent ON consent.student_id = aa.student_id
-    AND consent.choice = 'accepted'
-    AND consent.document_version = :current_consent_version
-JOIN bytequest_private.research_codes AS rc ON rc.student_id = aa.student_id
-JOIN public.learning_activities AS la ON la.id = aa.activity_id
-WHERE aa.exam_attempt_id IS NULL AND la.course_id IS NOT NULL
-ORDER BY rc.code, aa.created_at, aa.attempt_number, aa.id;
+```powershell
+.venv\Scripts\python -m scripts.export_ml_dataset --research-approved
 ```
 
-Export hint reveals with the same research codes and consent version:
-
-```sql
-WITH latest_consent AS (
-    SELECT DISTINCT ON (student_id) student_id, choice, document_version
-    FROM public.research_consents
-    ORDER BY student_id, event_order DESC
-)
-SELECT
-    md5(rc.code || ':' || hu.id::text) AS id,
-    rc.code AS student_id,
-    hu.activity_id::text AS activity_id,
-    la.course_id::text AS course_id,
-    la.language::text AS language,
-    hu.created_at
-FROM public.hint_uses AS hu
-JOIN latest_consent AS consent ON consent.student_id = hu.student_id
-    AND consent.choice = 'accepted'
-    AND consent.document_version = :current_consent_version
-JOIN bytequest_private.research_codes AS rc ON rc.student_id = hu.student_id
-JOIN public.learning_activities AS la ON la.id = hu.activity_id
-WHERE la.course_id IS NOT NULL
-ORDER BY rc.code, hu.created_at, hu.id;
-```
+It writes `ml_pipeline/data/attempts.csv` (one row per graded, non-exam
+attempt) and `ml_pipeline/data/hints.csv` (one row per hint reveal), which git
+ignores. The ten features are not columns in these files: the trainer derives
+them from this history at each target's t0 with the same code the live
+predictor uses, so precomputing them elsewhere could drift from what is served.
+The SQL is `ATTEMPTS_SQL` and `HINTS_SQL` in
+[`backend/scripts/export_ml_dataset.py`](../backend/scripts/export_ml_dataset.py).
 
 Released exam results are not model features. Student Progress still shows
 them to instructors.
 
-Save the approved, de-identified results as CSVs and train from the repository
-root only after approval. A hint CSV with headers and no rows is valid when no
+Train from the repository root only after approval. A hint CSV with headers and no rows is valid when no
 learner revealed a hint:
 
 ```powershell

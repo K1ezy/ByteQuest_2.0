@@ -1,13 +1,15 @@
-"""Execute the documented research exports against rollback-only synthetic rows."""
+"""Execute the research export script's queries against rollback-only synthetic rows."""
 
 from __future__ import annotations
 
+import csv
 import os
-import re
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
@@ -16,20 +18,16 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.services.usernames import starter_username
-from scripts import destroy_research_link
+from scripts import destroy_research_link, export_ml_dataset
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from ml_pipeline.train_compare import _validate_hint_frame, _validate_training_frame  # noqa: E402
 
 
 pytestmark = pytest.mark.integration
-README = Path(__file__).resolve().parents[2] / "ml_pipeline" / "README.md"
 
 
-def _export_queries() -> list[str]:
-    queries = re.findall(r"```sql\s*\n(.*?)```", README.read_text(encoding="utf-8"), re.S)
-    assert len(queries) == 2, "Expected the attempt and hint-reveal export examples"
-    return queries
-
-
-def test_documented_exports_require_latest_current_consent() -> None:
+def test_documented_exports_require_latest_current_consent(tmp_path: Path) -> None:
     database_url = os.getenv("BYTEQUEST_TEST_DATABASE_URL") or settings.DATABASE_URL
     parsed = make_url(database_url)
     if parsed.get_backend_name() != "postgresql" or parsed.host not in {"localhost", "127.0.0.1", "::1"}:
@@ -37,7 +35,7 @@ def test_documented_exports_require_latest_current_consent() -> None:
     if parsed.drivername == "postgresql":
         parsed = parsed.set(drivername="postgresql+psycopg2")
 
-    queries = [text(query) for query in _export_queries()]
+    queries = [text(export_ml_dataset.ATTEMPTS_SQL), text(export_ml_dataset.HINTS_SQL)]
     current_version = f"synthetic-current-{uuid.uuid4().hex}"
     old_version = f"synthetic-old-{uuid.uuid4().hex}"
     now = datetime.now(timezone.utc)
@@ -178,6 +176,23 @@ def test_documented_exports_require_latest_current_consent() -> None:
 
                 def session_factory():
                     return Session(bind=connection, join_transaction_mode="create_savepoint")
+
+                # The script writes the same rows as CSVs the trainer reads.
+                assert export_ml_dataset.export(
+                    tmp_path, version=current_version, session_factory=session_factory
+                ) == (2, 2)
+                with (tmp_path / "attempts.csv").open(encoding="utf-8") as handle:
+                    exported_rows = list(csv.DictReader(handle))
+                assert {row["student_id"] for row in exported_rows} == {
+                    codes[students["accepted"][0]], codes[students["renewed"][0]]
+                }
+                # The trainer's own validation accepts the files as written.
+                assert len(_validate_training_frame(pd.read_csv(tmp_path / "attempts.csv"))) == 2
+                assert len(_validate_hint_frame(pd.read_csv(tmp_path / "hints.csv"))) == 2
+                assert export_ml_dataset.export(
+                    tmp_path, version="no-approved-version", session_factory=session_factory
+                ) == (0, 0)
+                assert (tmp_path / "hints.csv").read_text(encoding="utf-8").startswith("id,student_id")
 
                 assert destroy_research_link.destroy(confirm=False, session_factory=session_factory) >= len(codes)
                 assert connection.execute(text("SELECT count(*) FROM bytequest_private.research_codes")).scalar_one() >= len(codes)

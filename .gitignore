@@ -75,6 +75,8 @@ ml_pipeline/artifacts/development/
 ml_pipeline/artifacts/runs/
 !ml_pipeline/artifacts/.gitkeep
 ml_pipeline/data/raw/
+# Research exports from scripts.export_ml_dataset: student data, never committed.
+ml_pipeline/data/*.csv
 *.h5
 *.pkl
 
