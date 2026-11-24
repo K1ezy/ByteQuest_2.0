@@ -45,10 +45,10 @@ COURSES = {
 }
 # section -> (year level, block, course, username stem, School ID prefix, mean ability)
 SECTIONS = {
-    "1CSA": (1, "A", "y1", "onecsa", "26-9", -0.1),
-    "1CSC": (1, "C", "y1", "onecsc", "26-9", -0.3),
-    "2CSB": (2, "B", "y2", "twocsb", "25-9", 0.3),
-    "2CSC": (2, "C", "y2", "twocsc", "25-9", 0.1),
+    "1CSA": (1, "A", "y1", "onecsa", "26-7", -0.1),
+    "1CSC": (1, "C", "y1", "onecsc", "26-7", -0.3),
+    "2CSB": (2, "B", "y2", "twocsb", "25-7", 0.3),
+    "2CSC": (2, "C", "y2", "twocsc", "25-7", 0.1),
 }
 STUDENTS_PER_SECTION = 30
 TOPICS = ["variables", "conditionals", "loops", "nested loops", "functions", "lists", "strings",
