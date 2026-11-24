@@ -26,50 +26,53 @@ def lock_activity_for_publication(db: Session, activity: LearningActivity) -> No
     db.expire(activity, ["test_cases"])
 
 
-def apply_publish_rules(db: Session, activity: LearningActivity, actor: Profile, *, require_review: bool = False) -> None:
-    lock_activity_for_publication(db, activity)
-    if activity.review_status != ReviewState.draft:
-        raise HTTPException(409, "Only unpublished drafts can be published.")
-    if activity.exam_only:
-        raise HTTPException(409, detail={"code": "exam_only", "message": "Add this exam-only activity to a restricted exam."})
-    if require_review and activity.reviewed_by is None:
-        raise HTTPException(409, "Review the saved activity and confirm review before publishing.")
+def publication_issues(activity: LearningActivity) -> list[dict[str, str]]:
+    """Describe the current revision's grading and schedule blockers."""
+    issues = []
     if activity.activity_type == ActivityKind.challenge:
         if not activity.test_cases:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "missing_tests", "field": "test_cases", "message": "Add at least one grading case before publishing."},
-            )
-        if not any(not case.is_hidden for case in activity.test_cases):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "missing_sample", "field": "test_cases",
-                        "message": "Make at least one grading case visible so students can run a sample."},
-            )
+            issues.append({"code": "missing_tests", "field": "test_cases", "message": "Add at least one grading case before publishing."})
+        if not activity.exam_only and not any(not case.is_hidden for case in activity.test_cases):
+            issues.append({"code": "missing_sample", "field": "test_cases",
+                           "message": "Make at least one grading case visible so students can run a sample."})
         if not challenge_is_verified(activity):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "code": "not_verified",
-                    "message": "Verify the saved reference solution and test cases with Judge0 before publishing.",
-                },
-            )
+            issues.append({"code": "not_verified", "message": "Verify the saved reference solution and test cases with Judge0 before publishing."})
     if activity.activity_type == ActivityKind.quiz:
         try:
             questions = parse_quiz_questions(activity.quiz_questions_json)
             if not 3 <= len(questions) <= 10:
                 raise ValueError("A published quiz must contain between 3 and 10 questions.")
         except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "invalid_quiz", "message": f"Cannot publish this quiz: {exc}"},
-            ) from exc
+            issues.append({"code": "invalid_quiz", "message": f"Cannot publish this quiz: {exc}"})
     opens_at = as_aware(activity.opens_at)
     closes_at = as_aware(activity.closes_at)
     if opens_at and closes_at and closes_at <= opens_at:
+        issues.append({"code": "invalid_schedule", "field": "closes_at", "message": "The closing time must be after the opening time."})
+    return issues
+
+
+def apply_publish_rules(
+    db: Session, activity: LearningActivity, actor: Profile, *,
+    require_review: bool = False, content_version: int | None = None,
+) -> None:
+    lock_activity_for_publication(db, activity)
+    if activity.review_status != ReviewState.draft:
+        raise HTTPException(409, "Only unpublished drafts can be published.")
+    if content_version is not None and content_version != (activity.content_version or 1):
+        raise HTTPException(409, detail={
+            "code": "version_conflict",
+            "message": "This draft changed. Reload it and review the current student preview before publishing.",
+        })
+    if activity.exam_only:
+        raise HTTPException(409, detail={"code": "exam_only", "message": "Add this exam-only activity to a restricted exam."})
+    if require_review and activity.reviewed_by is None:
+        raise HTTPException(409, "Review the saved activity and confirm review before publishing.")
+    issues = publication_issues(activity)
+    if issues:
+        first = issues[0]
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_schedule", "field": "closes_at", "message": "The closing time must be after the opening time."},
+            status.HTTP_422_UNPROCESSABLE_ENTITY if first["code"] == "invalid_schedule" else status.HTTP_400_BAD_REQUEST,
+            detail=first,
         )
     highest = (
         db.query(func.max(LearningActivity.sequence_order))

@@ -27,6 +27,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from app.api import admin as admin_api
 from app.api import exams as exams_api
 from app.api import faculty_ml as faculty_ml_api
+from app.api import rag_instructor
 from app.api.faculty.common import _save_activity_revision
 from app.core.config import settings
 from app.core.database import get_db
@@ -535,10 +536,25 @@ def test_draft_save_never_publishes_and_approval_publishes(workspace):
     assert unconfirmed.status_code == 422
     assert unconfirmed.json()["detail"]["code"] == "confirmation_required"
 
+    for endpoint, preview_field in [
+        ("drafts/{}/approve", "student_preview_confirmed"),
+        ("activities/{}/publish", "preview_confirmed"),
+    ]:
+        stale_publish = client.post(
+            f"/api/v1/faculty/{endpoint.format(ids['draft'])}",
+            headers=headers,
+            json={"confirm": True, preview_field: True, "content_version": draft["content_version"]},
+        )
+        assert stale_publish.status_code == 409
+        assert stale_publish.json()["detail"]["code"] == "version_conflict"
+
     approved = client.post(
         f"/api/v1/faculty/drafts/{ids['draft']}/approve",
         headers=headers,
-        json={"confirm": True, "student_preview_confirmed": True},
+        json={
+            "confirm": True, "student_preview_confirmed": True,
+            "content_version": revision.json()["draft"]["content_version"],
+        },
     )
     assert approved.status_code == 200, approved.text
     assert approved.json()["review_status"] == "published"
@@ -558,6 +574,66 @@ def test_draft_save_never_publishes_and_approval_publishes(workspace):
         f"/api/v1/faculty/drafts?course_id={ids['course_a']}&status=open", headers=headers
     ).json()
     assert str(ids["draft"]) not in [item["activity_id"] for item in queue["items"]]
+
+
+@pytest.mark.parametrize("kind", ["quiz", "challenge"])
+def test_gemini_instructions_reach_the_provider_and_create_a_private_draft(workspace, monkeypatch, kind):
+    client, sessions, ids = workspace
+    headers = _token(ids["faculty"])
+    preferences = 'Focus on "loop boundaries."\nUse small inputs.'
+    excerpt = "Example of checking the boundary of a loop."
+    with sessions() as db:
+        chunk = db.query(DocumentChunk).filter_by(document_id=ids["document"], chunk_index=0).one()
+        chunk_id = str(chunk.id)
+
+    def search(_db, _vector, document_ids, *_settings):
+        assert document_ids == [ids["document"]]
+        return [{"chunk_id": chunk_id, "page_number": 12, "content_text": excerpt}]
+
+    def generate(*, prompt, response_schema, **_kwargs):
+        assert excerpt in prompt
+        marker = "Instructor preferences (JSON string): "
+        assert json.loads(prompt.split(marker, 1)[1].splitlines()[0]) == preferences
+        content = {"title": "Check loop boundaries", "problem_statement": "Check the loop boundaries using small inputs."}
+        if kind == "quiz":
+            content.update(QUIZ_QUESTIONS)
+        else:
+            content.update({
+                "starter_code": "",
+                "reference_solution_code": "print(int(input()) + 1)",
+                "difficulty_level": 1,
+                "test_cases": [
+                    {"order_index": i, "stdin": str(i), "expected_stdout": str(i + 1), "is_hidden": i > 0}
+                    for i in range(3)
+                ],
+            })
+        return response_schema.model_validate(content)
+
+    async def verify(**_kwargs):
+        return True, {}
+
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "")
+    monkeypatch.setattr(rag_instructor, "generate_embedding", lambda *_: [1.0] + [0.0] * 767)
+    monkeypatch.setattr(rag_instructor, "nearest_chunks", search)
+    monkeypatch.setattr(rag_instructor.GeminiLLMService, "generate_structured", generate)
+    monkeypatch.setattr(rag_instructor, "run_reference_check", verify)
+    endpoint = f"/api/v1/instructor/documents/{ids['document']}/generate-{kind}"
+    form = {"topic_query": "Loops", "language": "python", "difficulty": "3"}
+    oversized = client.post(endpoint, headers=headers, data={**form, "instructor_instructions": "x" * 4001})
+    assert oversized.status_code == 422
+    generated = client.post(endpoint, headers=headers, data={**form, "instructor_instructions": preferences})
+    assert generated.status_code == 200, generated.text
+    body = generated.json()
+    assert body["review_status"] == "draft"
+    assert body["difficulty_level"] == 3
+    if kind == "challenge":
+        assert body["judge0_verified"]
+
+    reviewed = client.get(f"/api/v1/faculty/drafts/{body['activity_id']}", headers=headers).json()
+    assert reviewed["course"]["id"] == str(ids["course_a"])
+    assert reviewed["citations"][0]["page_number"] == 12
+    assert reviewed["published_at"] is None
+    assert preferences not in json.dumps(reviewed)
 
 
 def test_reject_requires_a_reason_and_returns_to_queue(workspace):
@@ -625,7 +701,7 @@ def test_material_list_and_dashboard_counts_agree(workspace):
     body = dashboard.json()
     assert body["counts"]["drafts_awaiting_review"] == 1
     assert body["counts"]["materials_needing_attention"] == 1
-    assert body["queue_hrefs"]["drafts"] == f"/instructor/review?course={ids['course_a']}&status=open"
+    assert body["queue_hrefs"]["drafts"] == f"/instructor/activities?course={ids['course_a']}&status=draft"
 
     drafts = client.get(f"/api/v1/faculty/drafts?course_id={ids['course_a']}&status=open", headers=headers).json()
     assert len(drafts["items"]) == body["counts"]["drafts_awaiting_review"]
@@ -638,6 +714,51 @@ def test_material_list_and_dashboard_counts_agree(workspace):
     assert materials["items"][0]["state"] == "needs_review"
     for item in body["action_queue"]:
         assert f"course={ids['course_a']}" in item["href"]
+
+
+def test_activities_combines_manual_drafts_with_gemini_review_and_saved_readiness(workspace):
+    client, _db, ids = workspace
+    headers = _token(ids["faculty"])
+    course_id = str(ids["course_a"])
+    created = client.post(
+        "/api/v1/faculty/activities",
+        headers=headers,
+        json={
+            "course_id": course_id,
+            "activity_type": "quiz",
+            "language": "python",
+            "title": "Manual loops practice",
+            "topic_concept": "Loops",
+            "problem_statement": "Follow the loops and choose the right answer.",
+        },
+    )
+    assert created.status_code == 201, created.text
+    manual = created.json()["activity"]
+    assert manual["publication_issues"] == ["invalid_quiz"]
+
+    list_url = "/api/v1/faculty/activities"
+    params = {"course_id": course_id, "status": "draft"}
+    rows = client.get(list_url, headers=headers, params=params).json()
+    assert {row["activity_id"] for row in rows["items"]} == {manual["activity_id"], str(ids["draft"])}
+    review = client.get(list_url, headers=headers, params={**params, "review": "needs-review"}).json()
+    assert [row["activity_id"] for row in review["items"]] == [str(ids["draft"])]
+    assert review["items"][0]["generated"] is True
+    assert review["counts"]["needs-review"] == 1
+
+    detail_url = f"{list_url}/{manual['activity_id']}"
+    saved = client.patch(detail_url, headers=headers, json={
+        "content_version": manual["content_version"],
+        "quiz_questions": QUIZ_QUESTIONS,
+        "opens_at": "2026-12-01T10:00:00+08:00",
+    })
+    assert saved.status_code == 200, saved.text
+    ready = saved.json()["activity"]
+    assert ready["publication_issues"] == []
+    assert ready["state"] == "draft"
+    assert ready["opens_at"] == "2026-12-01T02:00:00Z"
+    cleared = client.patch(detail_url, headers=headers, json={"content_version": ready["content_version"], "opens_at": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["activity"]["opens_at"] is None
 
 
 def test_performance_and_ml_are_course_scoped(workspace):

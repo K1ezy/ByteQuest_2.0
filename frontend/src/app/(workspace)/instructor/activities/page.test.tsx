@@ -15,8 +15,7 @@ it("sorts published activity health by stuck learners then pass rate and links t
   }))}});
   render(<Page/>);
   const rows=within(screen.getByRole("list",{name:"Activities"})).getAllByRole("listitem");
-  expect(rows.map(r=>r.querySelector(".ic-row-title")?.textContent)).toEqual(["B","A","Z"]);
+  expect(rows.map(r=>within(r).getByRole("heading").textContent)).toEqual(["B","A","Z"]);
   expect(rows[0].textContent).toContain("2 of 7 passed · 3 stuck · 2 not started");
   expect(within(rows[0]).getByRole("link",{name:"3 stuck"}).getAttribute("href")).toBe("/instructor/performance?activity=B&stuck=1");
-  expect(within(rows[0]).getByText("Needs attention")).toBeTruthy();
 });

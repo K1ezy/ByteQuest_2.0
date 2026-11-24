@@ -1,8 +1,8 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import ActivityPage from "@/app/(workspace)/instructor/activities/[id]/page";
-import ReviewPage from "@/app/(workspace)/instructor/review/[id]/page";
+import { ApiError } from "@/lib/api";
 import type { ActivityDetail } from "@/lib/workspace";
 
 const { apiRequest, setUnsaved, refreshCourses } = vi.hoisted(() => ({
@@ -12,7 +12,6 @@ const { apiRequest, setUnsaved, refreshCourses } = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "activity" }),
   useRouter: () => ({ push: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
 }));
 vi.mock("@/lib/api", async (original) => ({ ...await original<typeof import("@/lib/api")>(), apiRequest }));
 vi.mock("@/components/workspace/workspace-provider", () => ({
@@ -47,25 +46,61 @@ function draft(isHidden: boolean): ActivityDetail {
   };
 }
 
-it.each([true, false])("checks the visible sample in the activity editor (hidden: %s)", async (isHidden) => {
-  apiRequest.mockResolvedValue(draft(isHidden));
+it.each([true, false])("guides the instructor through the visible sample check (hidden: %s)", async (isHidden) => {
+  apiRequest.mockImplementation((path: string) => Promise.resolve(path.endsWith("/hints") ? { items: [] } : draft(isHidden)));
   render(<ActivityPage />);
-  fireEvent.click(await screen.findByRole("button", { name: /^Preview/ }));
-  const publish = screen.getByRole<HTMLButtonElement>("button", { name: "Publish activity" });
-  expect(publish.disabled).toBe(isHidden);
   if (isHidden) {
-    fireEvent.click(screen.getByRole("button", { name: "Go to grading cases" }));
+    const fix = await screen.findByRole("link", { name: "Make a grading case visible" });
+    expect(screen.queryByRole("button", { name: "Publish activity" })).toBeNull();
+    fireEvent.click(fix);
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Grading cases" }));
+  } else {
+    fireEvent.click(await screen.findByRole("button", { name: "Review student preview" }));
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Publish activity" }).disabled).toBe(false);
   }
 });
 
-it.each([true, false])("checks the visible sample in the draft review (hidden: %s)", async (isHidden) => {
-  apiRequest.mockResolvedValue(draft(isHidden));
-  render(<ReviewPage />);
-  const publish = await screen.findByRole<HTMLButtonElement>("button", { name: "Approve and publish" });
-  expect(publish.disabled).toBe(isHidden);
-  if (isHidden) {
-    expect(screen.getByRole("link", { name: "Go to grading cases" }).getAttribute("href"))
-      .toBe(`#${screen.getByRole("heading", { name: "Grading cases" }).id}`);
-  }
+it("serializes autosaves and keeps text typed while the prior revision is saving", async () => {
+  const initial = draft(false);
+  let resolveFirst!: (value: unknown) => void;
+  const firstResponse = new Promise((resolve) => { resolveFirst = resolve; });
+  const requests: Record<string, unknown>[] = [];
+  apiRequest.mockImplementation((path: string, options?: RequestInit) => {
+    if (path.endsWith("/hints")) return Promise.resolve({ items: [] });
+    if (options?.method !== "PATCH") return Promise.resolve(initial);
+    const change = JSON.parse(String(options.body));
+    requests.push(change);
+    if (requests.length === 1) return firstResponse;
+    return Promise.resolve({ activity: { ...initial, ...change, content_version: 3 } });
+  });
+  render(<ActivityPage />);
+  const title = await screen.findByRole<HTMLInputElement>("textbox", { name: /^Title$/ });
+  fireEvent.change(title, { target: { value: "Revision one" } });
+  await waitFor(() => expect(requests).toHaveLength(1));
+  fireEvent.change(title, { target: { value: "Revision two" } });
+  resolveFirst({ activity: { ...initial, title: "Revision one", content_version: 2 } });
+  await waitFor(() => expect(requests).toHaveLength(2), { timeout: 1800 });
+  expect(requests).toEqual([
+    { title: "Revision one", content_version: 1 },
+    { title: "Revision two", content_version: 2 },
+  ]);
+  expect(title.value).toBe("Revision two");
+  await screen.findByText("Saved · just now");
+});
+
+it("keeps edits and pauses autosave when another tab saved first", async () => {
+  const initial = draft(false);
+  const patch = vi.fn().mockRejectedValue(new ApiError("The saved version changed.", 409, "version_conflict"));
+  apiRequest.mockImplementation((path: string, options?: RequestInit) => {
+    if (path.endsWith("/hints")) return Promise.resolve({ items: [] });
+    if (options?.method === "PATCH") return patch();
+    return Promise.resolve(initial);
+  });
+  render(<ActivityPage />);
+  const title = await screen.findByRole<HTMLInputElement>("textbox", { name: /^Title$/ });
+  fireEvent.change(title, { target: { value: "Keep this edit" } });
+  await screen.findByRole("button", { name: "Reload saved version" });
+  expect(title.value).toBe("Keep this edit");
+  expect(patch).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button", { name: "Publish activity" })).toBeNull();
 });

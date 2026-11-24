@@ -75,7 +75,7 @@ it("uses the instructor navigation for a workshop without course context", () =>
 it("names each page the same on desktop and phone, and reaches every page from More", () => {
   render(<InstructorCourseShell><p>Dashboard contents</p></InstructorCourseShell>);
   const pages = [
-    "Dashboard", "Activities", "Workshops", "Review drafts", "Materials", "Exams", "Announcements", "Progress", "Gradebook", "Gamification", "Model evaluation",
+    "Dashboard", "Activities", "Workshops", "Materials", "Exams", "Announcements", "Progress", "Gradebook", "Gamification", "Model evaluation",
   ];
   const desktop = within(screen.getByRole("navigation", { name: "Instructor" }));
   expect(desktop.getAllByRole("link").map((link) => link.textContent)).toEqual(pages);

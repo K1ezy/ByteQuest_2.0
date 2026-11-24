@@ -12,6 +12,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.security import get_current_user
 from app.models.entities import Course, InstructionalDocument, LearningActivity, Profile
+from app.services.activity_publishing import publication_issues
 from app.services.challenge_verification import verification_status
 from app.services.course_access import require_course_instructor, resolve_workspace_course
 from app.services.materials import material_draft_count, serialize_material
@@ -104,6 +105,7 @@ def _draft_item(activity: LearningActivity, course: Course, document: Instructio
 def _activity_response(activity: LearningActivity, course: Course, *, attempt_count: int | None = None) -> dict:
     detail = activity_detail(activity, include_grading=True, attempt_count=attempt_count)
     detail["course"] = _course_brief(course)
+    detail["publication_issues"] = _publication_codes(activity)
     return detail
 
 
@@ -122,6 +124,10 @@ def _draft_response(db: Session, activity: LearningActivity, course: Course, att
     return detail
 
 
+def _publication_codes(activity: LearningActivity) -> list[str]:
+    return [issue["code"] for issue in publication_issues(activity)] if activity_state(activity) == "draft" else []
+
+
 def _activity_brief(activity: LearningActivity, course: Course, attempt_count: int) -> dict:
     questions = (activity.quiz_questions_json or {}).get("questions") or []
     return {
@@ -132,6 +138,10 @@ def _activity_brief(activity: LearningActivity, course: Course, attempt_count: i
         "topic_concept": activity.topic_concept,
         "state": activity_state(activity),
         "review_status": getattr(activity.review_status, "value", activity.review_status),
+        "draft_state": draft_state(activity),
+        "publication_issues": _publication_codes(activity),
+        "exam_only": activity.exam_only,
+        "generated": bool(activity.source_document_id or activity.generation_json),
         "version_number": activity.version_number or 1,
         "version_of": str(activity.version_of) if activity.version_of else None,
         "judge0_verified": verification_status(activity),

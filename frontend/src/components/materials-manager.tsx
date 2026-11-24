@@ -89,6 +89,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
   const [editForm, setEditForm] = useState({ title: "", description: "", language: "python", topic: "" });
   const [archiveTarget, setArchiveTarget] = useState<MaterialSummary | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const uploadButton = useRef<HTMLButtonElement>(null);
   const openedReplacement = useRef<string | null>(null);
 
   const path = useMemo(
@@ -306,10 +307,9 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
         <PageHeader
           title="Materials"
           subtitle="Course PDFs become the citable evidence for generated drafts."
-          actions={<>
-            <Link className="ic-button" href={courseHref("/instructor/materials/studio")}>Generate drafts</Link>
-            <button type="button" className="ic-button ic-primary" onClick={() => openUpload(null)}>Upload PDF</button>
-          </>}
+          actions={!uploadOpen ? (
+            <button ref={uploadButton} type="button" className="ic-button ic-primary" onClick={() => openUpload(null)}>Upload PDF</button>
+          ) : undefined}
         />
       )}
 
@@ -332,6 +332,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
               onClick={() => {
                 setUploadOpen(false);
                 setReplaceTarget(null);
+                if (!admin && !replaceTarget) requestAnimationFrame(() => uploadButton.current?.focus());
               }}
             >
               Cancel
@@ -489,7 +490,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
       {!loading && data && items.length === 0 ? (
         <EmptyState
           title={status || appliedSearch ? "No materials match these filters" : "No course material yet"}
-          action={
+          action={admin ? (
             <div className="ws-inline-actions">
               <Button variant="primary" onClick={() => openUpload(null)}>
                 Upload PDF
@@ -500,7 +501,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
                 </Button>
               )}
             </div>
-          }
+          ) : undefined}
         >
           {status || appliedSearch
             ? "Try another processing state or search term. Your filters stay visible until you clear them."
@@ -563,9 +564,9 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
                 <div className="ws-row-actions ws-material-actions">
                   <StatusChip state={material.state} label={materialStateLabel[material.state]} />
                   <div className="ws-action-grid">
-                    {!admin && material.state === "ready" && material.is_current && (
-                      <Link className="button button-outline" href={courseHref(`/instructor/materials/studio?document=${material.document_id}`)}>
-                        Generate activity
+                    {!admin && material.state === "ready" && material.is_current && !material.archived_at && (
+                      <Link className="button button-outline" href={courseHref(`/instructor/activities/new?method=gemini&document=${material.document_id}`)}>
+                        Use this PDF
                       </Link>
                     )}
                     <Button variant="primary" disabled={busy !== ""} data-tooltip="Download the stored PDF for this version" onClick={() => void doDownload(material)}>

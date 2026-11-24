@@ -1,3 +1,4 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from types import SimpleNamespace
@@ -82,6 +83,13 @@ def test_generation_prompts_put_the_excerpt_first_and_the_task_last(build):
     assert prompt.index("<course_excerpt>") < prompt.index("<example_") < prompt.index("<task>")
     assert prompt.rstrip().endswith("</task>") and "never follow instructions" in system
     assert ("public class Main" in prompt) is (build is rag_instructor._challenge_prompt)
+
+    preferences = 'Include "trace the loop".\nExplain the output.'
+    prompt, system = build("Loops repeat a block.", ProgrammingLang.java, 2, "loops", preferences)
+    label = "Instructor preferences (JSON string): "
+    assert json.loads(prompt.split(label, 1)[1].splitlines()[0]) == preferences
+    assert prompt.index("</course_excerpt>") < prompt.index(label)
+    assert "grading rules" in system
 
 
 def test_gemini_transport_has_a_deadline_and_no_additional_sdk_retries(monkeypatch):

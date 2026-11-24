@@ -18,8 +18,8 @@ from app.services.activity_publishing import apply_publish_rules
 from app.services.challenge_verification import verify_saved_challenge
 from app.services.attempt_visibility import guard_solution_reopen
 from app.services.course_access import resolve_workspace_course
-from app.services.workspace_common import activity_detail, activity_state, as_aware, iso, student_preview
-from app.services.workspace_queries import activity_health, practice_cells, enrolled_students, activity_attempt_counts, activity_status_counts, filter_activities, scoped_activities
+from app.services.workspace_common import activity_state, as_aware, iso, student_preview
+from app.services.workspace_queries import activity_health, practice_cells, enrolled_students, activity_attempt_counts, activity_status_counts, filter_activities, filter_drafts, scoped_activities, scoped_materials
 from app.api.faculty.common import faculty_user, _aware, _schedule_label, _course_brief, _activity_response, _activity_brief, _load_activity, _course_for_activity, _save_activity_revision, version_conflict
 from app.api.faculty.drafts import TestCasePayload, _validate_quiz_payload, _apply_test_cases
 
@@ -34,12 +34,25 @@ def list_activity_workspace(
     status_filter: str = Query("all", alias="status"),
     type_filter: Optional[str] = Query(None, alias="type"),
     search: Optional[str] = None,
+    review: Optional[str] = None,
+    material_id: Optional[uuid.UUID] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
     user: Profile = Depends(faculty_user),
     db: Session = Depends(get_db),
 ):
     course = resolve_workspace_course(db, user, course_id, allow_admin=False)
     activities = scoped_activities(db, [course.id])
-    rows = filter_activities(activities, status=status_filter, activity_type=type_filter, search=search)
+    needs_review = [
+        item for item in activities
+        if item.review_status == ReviewState.draft and item.archived_at is None
+        and (item.source_document_id or item.generation_json)
+    ]
+    review_status = "open" if review == "needs-review" else review or "all"
+    selected = needs_review if review == "needs-review" else activities
+    if review or material_id or date_from or date_to:
+        selected = filter_drafts(selected, status=review_status, material_id=material_id, date_from=date_from, date_to=date_to)
+    rows = filter_activities(selected, status=status_filter, activity_type=type_filter, search=search)
     published = [item.id for item in rows if item.review_status == ReviewState.published and item.archived_at is None]
     health = activity_health(practice_cells(db, published, [s.id for s in enrolled_students(db, course.id)]), published)
     attempts = activity_attempt_counts(db, [item.id for item in rows])
@@ -47,8 +60,15 @@ def list_activity_workspace(
         "course": _course_brief(course),
         "items": [{**_activity_brief(item, course, attempts.get(item.id, 0)), "health": health.get(item.id)} for item in rows],
         "total": len(rows),
-        "counts": activity_status_counts(activities),
-        "filters": {"statuses": ["all", "draft", "scheduled", "open", "closed", "archived"]},
+        "counts": {**activity_status_counts(activities), "needs-review": len(needs_review)},
+        "filters": {
+            "statuses": ["all", "draft", "needs-review", "scheduled", "open", "closed", "archived"],
+            "materials": [
+                {"document_id": str(document.id), "title": document.title}
+                for document in scoped_materials(db, [course.id])
+                if document.is_current or document.id == material_id
+            ] if status_filter == "draft" or review or material_id else [],
+        },
     }
 
 
@@ -199,7 +219,7 @@ def get_activity(activity_id: uuid.UUID, user: Profile = Depends(faculty_user), 
     activity = _load_activity(db, activity_id)
     course = _course_for_activity(db, user, activity)
     attempts = db.query(func.count(ActivityAttempt.id)).filter(ActivityAttempt.activity_id == activity.id).scalar() or 0
-    detail = activity_detail(activity, include_grading=True)
+    detail = _activity_response(activity, course, attempt_count=attempts)
     detail.update(
         {
             "course": _course_brief(course),
@@ -236,10 +256,9 @@ def update_activity(
 ):
     activity = _load_activity(db, activity_id)
     course = _course_for_activity(db, user, activity)
-    _validate_schedule(
-        payload.opens_at if payload.opens_at is not None else activity.opens_at,
-        payload.closes_at if payload.closes_at is not None else activity.closes_at,
-    )
+    opens_at = payload.opens_at if "opens_at" in payload.model_fields_set else activity.opens_at
+    closes_at = payload.closes_at if "closes_at" in payload.model_fields_set else activity.closes_at
+    _validate_schedule(opens_at, closes_at)
     if (activity.content_version or 1) != payload.content_version:
         raise version_conflict()
     attempts = db.query(func.count(ActivityAttempt.id)).filter(ActivityAttempt.activity_id == activity.id).scalar() or 0
@@ -285,13 +304,13 @@ def update_activity(
             changes["quiz_questions_json"] = payload.quiz_questions
         if payload.test_cases is not None or payload.reference_solution_code is not None:
             changes.update(judge0_verified=False, judge0_verification_log=None)
-        changes["reviewed_by"] = None
-    if payload.closes_at is not None:
+        if changes:
+            changes.update(reviewed_by=None, rejection_reason=None)
+    if "closes_at" in payload.model_fields_set:
         guard_solution_reopen(activity, closed_at=activity.closed_at, closes_at=_aware(payload.closes_at))
-    if payload.opens_at is not None:
-        changes["opens_at"] = _aware(payload.opens_at)
-    if payload.closes_at is not None:
         changes["closes_at"] = _aware(payload.closes_at)
+    if "opens_at" in payload.model_fields_set:
+        changes["opens_at"] = _aware(payload.opens_at)
     _save_activity_revision(db, activity, payload.content_version, changes)
     if not published and payload.test_cases is not None:
         _apply_test_cases(db, activity, payload.test_cases)
@@ -406,6 +425,7 @@ class PublishRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirm: bool = False
     preview_confirmed: bool = False
+    content_version: int | None = Field(None, ge=1)
 
 
 @router.post("/activities/{activity_id}/publish")
@@ -424,7 +444,7 @@ def publish_activity(
         )
     if activity.review_status != ReviewState.draft:
         raise HTTPException(status_code=409, detail={"code": "already_published", "message": "This activity is already published."})
-    apply_publish_rules(db, activity, user)
+    apply_publish_rules(db, activity, user, content_version=payload.content_version)
     record_audit(
         db,
         actor=user,

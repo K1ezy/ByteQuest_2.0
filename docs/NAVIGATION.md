@@ -21,7 +21,7 @@ Signed-in destinations share a sidebar and account menu. Profile, Accessibility,
 | `/faculty` | Permanent redirect to `/instructor`. |
 | `/faculty/activities`, `/faculty/activities/[id]`, `/faculty/materials`, `/faculty/ml`, `/faculty/performance`, `/faculty/review`, `/faculty/review/[id]` | Permanent redirects to the matching suffix under `/instructor`. |
 | `/faculty/accessibility`, `/admin/accessibility` | Permanent redirects to `/account/accessibility`. |
-| `/instructor` | My Courses. Legacy authoring is reachable through Materials and the authoring studio. |
+| `/instructor` | Instructor Dashboard for the selected course. Shows items needing attention and upcoming activities. |
 | `/instructor/exams` | Retained as the Instructor exam management page. |
 | `/admin`, `/admin/accounts`, `/admin/activities`, `/admin/assignments`, `/admin/configuration`, `/admin/courses`, `/admin/materials`, `/admin/monitoring` | Retained with section-level navigation. |
 
@@ -42,7 +42,16 @@ The former `/onboarding?mode=change_track` opens the student's language field in
 
 Instructor Preview is at `/instructor/preview`. Administrator teaching tools are at `/admin/teaching`, with `/preview` and `/exams` below it. Preview filters published content by language and performs no student writes.
 
-Instructor Materials links to `/instructor/materials/studio` for PDF-to-activity generation and the existing authoring controls. Generated drafts can open directly in Review drafts.
+## Instructor authoring
+
+| Page | Where to act |
+| --- | --- |
+| **Dashboard** | Drafts and upcoming activities use the same title, course, status and action as Activities. Open the row to continue. |
+| **Activities** | Choose **New Activity**, then **Generate with Gemini** or **Create manually**. The new activity appears as the highlighted first row. **Continue** opens the editor and **← Activities** returns to that row. **Needs review** filters Gemini drafts. |
+| **Activity editor** | Edit details, content and schedule on one page. Valid edits save automatically. Use the readiness checklist to find the next step, then review the student preview and confirm publication. The list highlights the published row and shows when students can open it. |
+| **Materials** | Select **Upload PDF** to add a course document. **Use this PDF** on a ready document opens Gemini authoring with that source selected. |
+
+Gemini authoring supports uploading a searchable PDF in place or selecting a ready PDF from the selected course. Its drafts display cited pages beside the content. Old Review drafts links open Activities or the linked activity. Old studio and manual creation links preserve their course and source where applicable.
 
 ## Workshops (11/21/26)
 

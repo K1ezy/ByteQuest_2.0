@@ -1,25 +1,20 @@
 "use client";
 
-import { fromManilaDateTimeInput, formatManilaDateTime } from "@/lib/activity-date";
-
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getErrorMessage } from "@/lib/api";
+import { ActivityRow } from "@/components/instructor/activity-identity";
+import { activityListHref } from "@/lib/instructor-activity";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
-import { DataRow, InlineEmpty, InlineError, InstructorIcon, PageHeader, RowSkeleton, StatusBadge } from "@/components/instructor/course-ui";
-import type { ProgrammingLanguage } from "@/lib/types";
+import { InlineEmpty, InlineError, InstructorIcon, PageHeader, RowSkeleton } from "@/components/instructor/course-ui";
 import {
-  Button,
-  FieldError,
   Notice,
   SearchField,
-  StatusChip,
   SelectField,
   useApi,
 } from "@/components/workspace/ui";
 import {
-  activityStateLabel,
   createActivity,
   createActivityVersion,
   getActivity,
@@ -29,7 +24,8 @@ import {
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All" },
-  { value: "draft", label: "Draft" },
+  { value: "draft", label: "Drafts" },
+  { value: "needs-review", label: "Needs review" },
   { value: "scheduled", label: "Scheduled" },
   { value: "open", label: "Open" },
   { value: "closed", label: "Closed" },
@@ -37,57 +33,56 @@ const STATUS_OPTIONS = [
 ];
 
 function FacultyActivities() {
-  const { courseId, courseHref, refreshCourses, profile } = useWorkspace();
+  const { activeCourse, courseId, courseHref, refreshCourses } = useWorkspace();
   const router = useRouter();
   const searchParams = useSearchParams();
   const status = searchParams.get("status") || "all";
   const type = searchParams.get("type") || "";
+  const review = searchParams.get("review") || "";
+  const material = searchParams.get("material") || "";
+  const from = searchParams.get("from") || "";
+  const to = searchParams.get("to") || "";
+  const highlight = searchParams.get("highlight");
+  const published = searchParams.get("published") === "1";
+  const focused = useRef<string | null>(null);
   const appliedSearch = searchParams.get("q") || "";
-  const createRequested = searchParams.get("create") === "1";
   const [search, setSearch] = useState(appliedSearch);
-  const [createOpen, setCreateOpen] = useState(createRequested);
   const [notice, setNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
   const [rowBusy, setRowBusy] = useState<string | null>(null);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [draft, setDraft] = useState({
-    activity_type: "quiz",
-    // Null until the instructor picks one: then the class's language is shown (see createLanguage).
-    language: null as ProgrammingLanguage | null,
-    title: "",
-    topic_concept: "",
-    problem_statement: "",
-    difficulty_level: 2,
-    xp_reward: 30,
-    reference_solution_code: "",
-    starter_code: "",
-    exam_only: false,
-    opens_at: "",
-    closes_at: "",
-  });
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSearch(appliedSearch);
-    if (createRequested) setCreateOpen(true);
-  }, [appliedSearch, createRequested]);
+  }, [appliedSearch]);
+
+  useEffect(() => {
+    if (courseId && searchParams.get("create") === "1") {
+      router.replace(courseHref("/instructor/activities/new?method=manual"));
+    }
+  }, [courseHref, courseId, router, searchParams]);
 
   const path = useMemo(
     () =>
       courseId
         ? `/faculty/activities?${new URLSearchParams({
             course_id: courseId,
-            status,
+            status: status === "needs-review" ? "all" : status,
+            ...(status === "needs-review" || review ? { review: status === "needs-review" ? status : review } : {}),
+            ...(material ? { material_id: material } : {}),
+            ...(from ? { date_from: from.length === 10 ? `${from}T00:00:00+08:00` : from } : {}),
+            ...(to ? { date_to: to.length === 10 ? `${to}T23:59:59.999+08:00` : to } : {}),
             ...(type ? { type } : {}),
             ...(appliedSearch ? { search: appliedSearch } : {}),
           }).toString()}`
         : null,
-    [appliedSearch, courseId, status, type],
+    [appliedSearch, courseId, from, material, review, status, to, type],
   );
   const { data, error, loading, reload } = useApi<ActivityList>(path, true);
 
   function updateQuery(patch: Record<string, string | null>) {
     const next = new URLSearchParams(searchParams.toString());
+    next.delete("highlight");
+    next.delete("published");
     for (const [key, value] of Object.entries(patch)) {
       if (!value) next.delete(key);
       else next.set(key, value);
@@ -95,75 +90,26 @@ function FacultyActivities() {
     router.replace(`${window.location.pathname}?${next.toString()}`, { scroll: false });
   }
 
-  async function submitCreate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!courseId) return;
-    const found: Record<string, string> = {};
-    if (draft.title.trim().length < 3) found.title = "Enter a title of at least 3 characters.";
-    if (draft.topic_concept.trim().length < 2) found.topic_concept = "Enter the topic or concept.";
-    if (draft.problem_statement.trim().length < 20) found.problem_statement = "Write at least 20 characters of student instructions.";
-    if (draft.activity_type === "challenge" && !draft.reference_solution_code.trim()) {
-      found.reference_solution_code = "Add the reference solution so grading can be validated.";
-    }
-    const opensAt = fromManilaDateTimeInput(draft.opens_at);
-    const closesAt = fromManilaDateTimeInput(draft.closes_at);
-    if (draft.opens_at && !opensAt) found.opens_at = "Enter a valid opening time in Asia/Manila.";
-    if (draft.closes_at && !closesAt) found.closes_at = "Enter a valid closing time in Asia/Manila.";
-    if (opensAt && closesAt && closesAt <= opensAt) found.closes_at = "The closing time must be after the opening time.";
-    setErrors(found);
-    if (Object.keys(found).length > 0) return;
-
-    setBusy(true);
-    setNotice(null);
-    try {
-      const body: Record<string, unknown> = {
-        course_id: courseId,
-        activity_type: draft.activity_type,
-        exam_only: draft.exam_only,
-        language: createLanguage,
-        title: draft.title.trim(),
-        topic_concept: draft.topic_concept.trim(),
-        problem_statement: draft.problem_statement.trim(),
-        difficulty_level: draft.difficulty_level,
-        xp_reward: draft.xp_reward,
-        opens_at: opensAt,
-        closes_at: closesAt,
-      };
-      if (draft.activity_type === "challenge") {
-        body.starter_code = draft.starter_code;
-        body.reference_solution_code = draft.reference_solution_code;
-        body.test_cases = [];
-      } else {
-        body.quiz_questions = {
-          questions: [
-            {
-              id: "q1",
-              prompt: "Replace this with the first question.",
-              options: [
-                { key: "A", text: "First option" },
-                { key: "B", text: "Second option" },
-              ],
-              correct_answer: "A",
-            },
-          ],
-        };
-      }
-      const result = await createActivity(body);
-      await refreshCourses();
-      router.push(`${courseHref(`/instructor/activities/${result.activity.activity_id}`)}&created=1`);
-    } catch (caught) {
-      setNotice({ tone: "error", text: `${getErrorMessage(caught)} Your entered values are still here.` });
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const attention = searchParams.get("sort") === "attention";
   const rows = [...(data?.items || [])];
   if (attention) rows.sort((a,b) => (b.health?.stuck ?? 0) - (a.health?.stuck ?? 0) ||
     (a.health?.pass_rate ?? 2) - (b.health?.pass_rate ?? 2) || (a.title || a.topic_concept).localeCompare(b.title || b.topic_concept));
-  // Default to the language this class already uses; the instructor's own track only for an empty course.
-  const createLanguage = draft.language ?? rows.find((row) => row.language)?.language ?? profile.enrolled_language ?? "python";
+  const highlighted = highlight ? rows.find((row) => row.activity_id === highlight) : undefined;
+  if (highlighted) {
+    rows.splice(rows.indexOf(highlighted), 1);
+    rows.unshift(highlighted);
+  }
+
+  useEffect(() => {
+    if (!highlighted || highlighted.activity_id === focused.current) return;
+    const row = document.getElementById(`activity-${highlighted.activity_id}`);
+    if (!row) return;
+    focused.current = highlighted.activity_id;
+    row.scrollIntoView({ block: "nearest" });
+    row.focus({ preventScroll: true });
+  }, [highlighted]);
+
+  const filtered = Boolean(status !== "all" || type || appliedSearch || review || material || from || to);
 
   async function copyActivity(activity: ActivityListItem, kind: "version" | "duplicate") {
     if (!courseId || rowBusy) return;
@@ -183,7 +129,7 @@ function FacultyActivities() {
           })),
         });
       })();
-      router.push(courseHref(`/instructor/activities/${result.activity.activity_id}`));
+      router.push(activityListHref(courseId, result.activity.activity_id));
       await refreshCourses();
     } catch (caught) {
       setNotice({ tone: "error", text: getErrorMessage(caught) });
@@ -196,102 +142,16 @@ function FacultyActivities() {
     <div className="ic-activity-shell">
       <PageHeader
         title="Activities"
-        subtitle="Create, schedule and preview lessons, quizzes and coding challenges."
-        actions={<button type="button" className={`ic-button${createOpen ? "" : " ic-primary"}`} onClick={() => setCreateOpen((open) => !open)}>
-          {!createOpen ? <InstructorIcon name="plus" /> : null}{createOpen ? "Close create form" : "New activity"}
-        </button>}
+        subtitle={activeCourse?.title}
+        actions={courseId ? (
+          <Link className={`ic-button${highlighted ? "" : " ic-primary"}`} href={courseHref("/instructor/activities/new")}>
+            <InstructorIcon name="plus" />New Activity
+          </Link>
+        ) : undefined}
       />
 
       {notice ? <Notice tone={notice.tone} onDismiss={() => setNotice(null)}>{notice.text}</Notice> : null}
 
-      {createOpen ? (
-        <section className="ws-panel" aria-labelledby="create-activity-title">
-          <div className="ws-panel-head">
-            <div>
-              <p className="eyebrow-label">NEW ACTIVITY</p>
-              <h2 id="create-activity-title">Create an activity draft</h2>
-            </div>
-            <button type="button" className="ws-inline-link" onClick={() => setCreateOpen(false)}>
-              Cancel
-            </button>
-          </div>
-          <form className="ws-form-grid" onSubmit={(event) => void submitCreate(event)}>
-            <div className="ws-field">
-              <label htmlFor="create-type">Type</label>
-              <select id="create-type" value={draft.activity_type} onChange={(event) => setDraft({ ...draft, activity_type: event.target.value })}>
-                <option value="quiz">Quiz / review lesson</option>
-                <option value="challenge">Coding challenge</option>
-              </select>
-            </div>
-            <div className="ws-field">
-              <label htmlFor="create-language">Language</label>
-              <select id="create-language" value={createLanguage} onChange={(event) => setDraft({ ...draft, language: event.target.value as ProgrammingLanguage })}>
-                <option value="python">Python</option>
-                <option value="cpp">C++</option>
-                <option value="java">Java</option>
-              </select>
-            </div>
-            <div className="ws-field">
-              <label htmlFor="create-title">Title</label>
-              <input id="create-title" value={draft.title} maxLength={255} onChange={(event) => setDraft({ ...draft, title: event.target.value })} aria-invalid={Boolean(errors.title)} />
-              <FieldError>{errors.title}</FieldError>
-            </div>
-            <label className="ws-checkbox-row">
-              <input type="checkbox" checked={draft.exam_only} onChange={(event) => setDraft({ ...draft, exam_only: event.target.checked })} />
-              Exam-only activity for a restricted assessment
-            </label>
-            <div className="ws-field">
-              <label htmlFor="create-topic">Topic or concept</label>
-              <input id="create-topic" value={draft.topic_concept} maxLength={100} onChange={(event) => setDraft({ ...draft, topic_concept: event.target.value })} aria-invalid={Boolean(errors.topic_concept)} />
-              <FieldError>{errors.topic_concept}</FieldError>
-            </div>
-            <div className="ws-field">
-              <label htmlFor="create-difficulty">Difficulty</label>
-              <select id="create-difficulty" value={draft.difficulty_level} onChange={(event) => setDraft({ ...draft, difficulty_level: Number(event.target.value) })}>
-                {[1, 2, 3, 4, 5].map((value) => (
-                  <option key={value} value={value}>
-                    Level {value}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="ws-field full">
-              <label htmlFor="create-problem">Student instructions</label>
-              <textarea id="create-problem" rows={4} value={draft.problem_statement} onChange={(event) => setDraft({ ...draft, problem_statement: event.target.value })} aria-invalid={Boolean(errors.problem_statement)} />
-              <FieldError>{errors.problem_statement}</FieldError>
-            </div>
-            {draft.activity_type === "challenge" ? (
-              <>
-                <div className="ws-field">
-                  <label htmlFor="create-starter">Starter code</label>
-                  <textarea id="create-starter" className="ws-code-input" rows={5} value={draft.starter_code} onChange={(event) => setDraft({ ...draft, starter_code: event.target.value })} />
-                </div>
-                <div className="ws-field">
-                  <label htmlFor="create-reference">Reference solution (instructors only)</label>
-                  <textarea id="create-reference" className="ws-code-input" rows={5} value={draft.reference_solution_code} onChange={(event) => setDraft({ ...draft, reference_solution_code: event.target.value })} aria-invalid={Boolean(errors.reference_solution_code)} />
-                  <FieldError>{errors.reference_solution_code}</FieldError>
-                </div>
-              </>
-            ) : null}
-            <div className="ws-field">
-              <label htmlFor="create-opens">Opens at (optional, Manila time)</label>
-              <input id="create-opens" type="datetime-local" value={draft.opens_at} onChange={(event) => setDraft({ ...draft, opens_at: event.target.value })} aria-invalid={Boolean(errors.opens_at)} />
-              <FieldError>{errors.opens_at}</FieldError>
-            </div>
-            <div className="ws-field">
-              <label htmlFor="create-closes">Closes at (optional, Manila time)</label>
-              <input id="create-closes" type="datetime-local" value={draft.closes_at} onChange={(event) => setDraft({ ...draft, closes_at: event.target.value })} aria-invalid={Boolean(errors.closes_at)} />
-              <FieldError>{errors.closes_at}</FieldError>
-            </div>
-            <div className="ws-inline-actions full">
-              <Button variant="primary" type="submit" disabled={busy}>
-                {busy ? "Saving draft…" : "Save draft and continue"}
-              </Button>
-              <span className="ws-muted">The activity stays private until you preview and publish it.</span>
-            </div>
-          </form>
-        </section>
-      ) : null}
 
       <div className="ws-chip-row" role="group" aria-label="Filter activities by state">
         {STATUS_OPTIONS.map((option) => (
@@ -301,7 +161,7 @@ function FacultyActivities() {
             className={`ws-filter-chip${status === option.value ? " is-selected" : ""}`}
             aria-pressed={status === option.value}
             data-tooltip={option.value === "all" ? "Show all activities" : `Show only ${option.label.toLowerCase()} activities`}
-            onClick={() => updateQuery({ status: option.value === "all" ? null : option.value })}
+            onClick={() => updateQuery({ status: option.value === "all" ? null : option.value, review: null })}
           >
             {option.label}
             {data?.counts[option.value] !== undefined ? <span className="ws-chip-count">{data.counts[option.value]}</span> : null}
@@ -312,54 +172,49 @@ function FacultyActivities() {
       <div className="ic-activity-filters" role="region" aria-label="Activity filters">
         <SearchField value={search} onChange={setSearch} onSubmit={() => updateQuery({ q: search || null })} placeholder="Search activities" label="Search activities" />
         <SelectField label="Sort" value={attention ? "attention" : ""} onChange={v => updateQuery({sort:v || null})}
-          options={[{value:"",label:"Default order"},{value:"attention",label:"Needs attention first"}]}/>
+          options={[{value:"",label:"Newest first"},{value:"attention",label:"Needs attention first"}]}/>
         <SelectField label="Type" value={type} onChange={(value) => updateQuery({ type: value || null })} options={[
           { value: "quiz", label: "Quiz" }, { value: "challenge", label: "Coding challenge" },
         ]} includeAll allLabel="All types" />
-        {status !== "all" || type || appliedSearch ? (
-          <button type="button" className="ic-button" onClick={() => { setSearch(""); updateQuery({ status: null, type: null, q: null }); }}>Clear filters</button>
+        {filtered ? (
+          <button type="button" className="ic-button" onClick={() => {
+            setSearch("");
+            updateQuery({ status: null, type: null, q: null, review: null, material: null, from: null, to: null });
+          }}>Clear filters</button>
         ) : null}
       </div>
+      {status === "draft" || status === "needs-review" || review || material || from || to ? (
+        <details className="ic-review-filters" open={Boolean(review || material || from || to) || undefined}>
+          <summary>Review filters</summary>
+          <div className="ic-activity-filters">
+            {status !== "needs-review" ? <SelectField label="Review status" value={review}
+              onChange={(value) => updateQuery({ review: value || null, ...(value === "published" ? { status: null } : {}) })}
+              options={[
+                { value: "open", label: "All unpublished" }, { value: "pending", label: "Awaiting review" },
+                { value: "ready", label: "Review confirmed" }, { value: "rejected", label: "Changes requested" },
+                { value: "published", label: "Published" },
+              ]} includeAll allLabel="Any review status" /> : null}
+            <SelectField label="Source PDF" value={material} onChange={(value) => updateQuery({ material: value || null })}
+              options={(data?.filters?.materials ?? []).map((item) => ({ value: item.document_id, label: item.title }))}
+              includeAll allLabel="All source PDFs" />
+            <label className="ws-field">Created from <input type="date" value={from.slice(0, 10)}
+              onChange={(event) => updateQuery({ from: event.target.value || null })} /></label>
+            <label className="ws-field">Created through <input type="date" value={to.slice(0, 10)}
+              onChange={(event) => updateQuery({ to: event.target.value || null })} /></label>
+          </div>
+        </details>
+      ) : null}
 
       {error ? <InlineError onRetry={reload} /> : loading && !data ? <RowSkeleton /> : null}
       {!error && !loading && data && !rows.length ? (
-        <InlineEmpty>{status !== "all" || type || appliedSearch ? "No activities match these filters." : "No activities yet."}</InlineEmpty>
+        <InlineEmpty>{filtered ? "No activities match these filters." : "No activities yet."}</InlineEmpty>
       ) : null}
 
       {!error && rows.length > 0 ? (
         <ul className="ic-list" aria-label="Activities">
           {rows.map((activity) => {
-            const base = courseHref("/instructor/activities/" + activity.activity_id);
-            const href = base + (base.includes("?") ? "&" : "?") + "returnTo=" + encodeURIComponent("/instructor/activities?" + searchParams.toString());
-            const items = activity.activity_type === "quiz"
-              ? activity.question_count + (activity.question_count === 1 ? " question" : " questions")
-              : activity.test_case_count + (activity.test_case_count === 1 ? " grading case" : " grading cases");
-            const meta = [activity.activity_type === "quiz" ? "Quiz / review" : "Coding challenge", items, "v" + activity.version_number,
-              activity.attempt_count + (activity.attempt_count === 1 ? " attempt" : " attempts")].join(" · ");
             const mayAnalyze = activity.review_status === "published" && activity.state !== "archived";
-            return <DataRow key={activity.activity_id} title={activity.title || activity.topic_concept} href={href}
-              status={<StatusBadge tone={activity.state === "archived" ? "warning" : "dot"}>{activityStateLabel[activity.state]}</StatusBadge>}
-              description={<>
-                {activity.title && activity.topic_concept ? <div>{activity.topic_concept}</div> : null}
-                <div>{meta}</div>
-                {activity.health && <div className="activity-health">{activity.health.passed} of {activity.health.attempted + activity.health.not_started} passed · <Link href={courseHref("/instructor/performance?activity=" + activity.activity_id + "&stuck=1")}>{activity.health.stuck} stuck</Link> · {activity.health.not_started} not started
-                  {activity.health.stuck > 0 && <> <StatusChip state="pending" label="Needs attention"/></>}</div>}
-                {activity.state === "scheduled" && activity.opens_at ? <div>Opens {formatManilaDateTime(activity.opens_at)}</div> : null}
-              </>}
-              indicators={<>
-                {activity.activity_type === "challenge" ? (
-                  <span className={activity.judge0_verified ? "ic-judge-passed" : "ic-judge-pending"} role="img"
-                    aria-label={activity.judge0_verified ? "Judge0 passed" : "Needs verification"}
-                    data-tooltip={activity.judge0_verified
-                      ? "Judge0 passed: the reference solution passed the grading cases in this saved version."
-                      : "Needs verification: run the reference solution against the grading cases before publishing."}>
-                    <InstructorIcon name={activity.judge0_verified ? "check" : "warning"} />
-                  </span>
-                ) : null}
-                {activity.grading_locked ? <span role="img" aria-label="Grading locked"
-                  data-tooltip="Grading locked: students have attempted this activity. Create a new version to change grading content."><InstructorIcon name="lock" /></span> : null}
-              </>}
-              action={mayAnalyze ? <Link className="ic-button" href={courseHref("/instructor/activities/" + activity.activity_id + "/analysis")}>Analysis</Link> : <Link className="ic-button" href={href}>Edit</Link>}
+            return <ActivityRow key={activity.activity_id} activity={activity} highlighted={highlight === activity.activity_id} published={published}
               menu={<details className="ic-row-menu" onKeyDown={(event) => {
                 if (event.key !== "Escape") return;
                 event.currentTarget.open = false;
@@ -367,7 +222,7 @@ function FacultyActivities() {
               }}>
                 <summary className="ic-button" aria-label={"More actions for " + (activity.title || activity.topic_concept)}>⋯</summary>
                 <div className="ic-menu-options">
-                  {mayAnalyze && <Link className="ic-button" href={href}>Edit</Link>}
+                  {mayAnalyze && <Link className="ic-button" href={courseHref("/instructor/activities/" + activity.activity_id + "/analysis")}>Analysis</Link>}
                   <button type="button" className="ic-button" disabled={rowBusy !== null} onClick={() => void copyActivity(activity, "version")}>New version</button>
                   <button type="button" className="ic-button" disabled={rowBusy !== null} onClick={() => void copyActivity(activity, "duplicate")}>Duplicate</button>
                   <button type="button" className="ic-button" disabled title="Only administrators can archive activities at present">Archive</button>
@@ -376,7 +231,6 @@ function FacultyActivities() {
           })}
         </ul>
       ) : null}
-      <p className="ws-footnote">Draft and unpublished activities are never visible to students.</p>
     </div>
   );
 }

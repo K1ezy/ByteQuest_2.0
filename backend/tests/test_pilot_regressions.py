@@ -265,6 +265,17 @@ def test_studio_and_faculty_follow_active_course_assignments(workspace):
     assert str(ids["draft"]) not in {row["activity_id"] for row in removed_workspace["activities"]}
     assert str(ids["document"]) in {row["document_id"] for row in assigned_workspace["documents"]}
 
+    studio = "/api/v1/instructor/workspace"
+    for course, document, draft in (("course_a", "document", "draft"), ("course_b", "other_document", "other_draft")):
+        response = client.get(studio, params={"course_id": str(ids[course])}, headers=assigned)
+        assert response.status_code == 200, response.text
+        assert str(ids[document]) in {row["document_id"] for row in response.json()["documents"]}
+        assert str(ids[draft]) in {row["activity_id"] for row in response.json()["activities"]}
+        if course == "course_a":
+            assert str(ids["other_document"]) not in {row["document_id"] for row in response.json()["documents"]}
+            assert str(ids["other_draft"]) not in {row["activity_id"] for row in response.json()["activities"]}
+    assert client.get(studio, params={"course_id": str(ids["course_a"])}, headers=author).status_code == 403
+
 
 def test_restricted_exam_keeps_items_out_of_practice_and_requires_course_enrollment(workspace):
     client, sessions, ids = workspace

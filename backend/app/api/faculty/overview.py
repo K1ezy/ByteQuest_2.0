@@ -101,12 +101,12 @@ def faculty_dashboard(
                 "kind": "draft",
                 "id": str(activity.id),
                 "title": activity.title or activity.topic_concept,
-                "detail": "Generated draft waiting for your review before students can see it.",
+                "detail": "Private activity draft.",
                 "status": "Awaiting review" if draft_state(activity) == "pending" else draft_state(activity).title(),
                 "severity": "wait",
                 "course": _course_brief(course),
                 "updated_at": iso(activity.created_at),
-                "href": f"/instructor/review/{activity.id}?course={course.id}",
+                "href": f"/instructor/activities/{activity.id}?course={course.id}",
             }
         )
     for activity in upcoming:
@@ -151,7 +151,7 @@ def faculty_dashboard(
         },
         "action_queue": queue[:8],
         "queue_hrefs": {
-            "drafts": f"/instructor/review?course={course.id}&status=open",
+            "drafts": f"/instructor/activities?course={course.id}&status=draft",
             "materials": f"/instructor/materials?course={course.id}&status=attention",
             "activities": f"/instructor/activities?course={course.id}&status=scheduled",
             "performance": f"/instructor/performance?course={course.id}",

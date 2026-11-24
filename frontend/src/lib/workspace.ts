@@ -296,6 +296,7 @@ export interface ActivityDetail {
   pass_mark_percent?: number | null;
   review_status: string;
   draft_state?: string;
+  publication_issues?: string[];
   state: string;
   judge0_verified: boolean;
   reviewed_by: string | null;
@@ -341,6 +342,10 @@ export interface ActivityListItem {
   topic_concept: string;
   state: "draft" | "scheduled" | "open" | "closed" | "archived";
   review_status: string;
+  draft_state?: string;
+  publication_issues?: string[];
+  exam_only?: boolean;
+  generated?: boolean;
   version_number: number;
   version_of: string | null;
   judge0_verified: boolean;
@@ -359,7 +364,7 @@ export interface ActivityList {
   items: ActivityListItem[];
   total: number;
   counts: Record<string, number>;
-  filters: { statuses: string[] };
+  filters: { statuses: string[]; materials?: { document_id: string; title: string }[] };
 }
 
 export interface PerformanceRow {
@@ -476,10 +481,10 @@ export function rejectDraft(activityId: string, reason: string) {
   });
 }
 
-export function approveDraft(activityId: string) {
+export function approveDraft(activityId: string, contentVersion: number) {
   return apiRequest<{ message: string; review_status: string; published_at: string | null }>(
     `/faculty/drafts/${activityId}/approve`,
-    { method: "POST", body: JSON.stringify({ confirm: true, student_preview_confirmed: true }) },
+    { method: "POST", body: JSON.stringify({ confirm: true, student_preview_confirmed: true, content_version: contentVersion }) },
   );
 }
 
@@ -561,10 +566,10 @@ export function scheduleActivity(activityId: string, opensAt: string | null, clo
   });
 }
 
-export function publishActivity(activityId: string) {
+export function publishActivity(activityId: string, contentVersion: number) {
   return apiRequest<{ activity: ActivityDetail; message: string }>(`/faculty/activities/${activityId}/publish`, {
     method: "POST",
-    body: JSON.stringify({ confirm: true, preview_confirmed: true }),
+    body: JSON.stringify({ confirm: true, preview_confirmed: true, content_version: contentVersion }),
   });
 }
 

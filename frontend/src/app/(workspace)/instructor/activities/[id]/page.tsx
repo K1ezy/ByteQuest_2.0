@@ -1,100 +1,26 @@
 "use client";
 
-import { workshopLanguages } from "@/components/workshops/workshop-ui";
-import { fromManilaDateTimeInput, formatManilaDateTime, toManilaDateTimeInput } from "@/lib/activity-date";
-
 import Link from "next/link";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, getErrorMessage } from "@/lib/api";
-import { safeReturnTo, useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
-import { StudentPreviewCard } from "@/components/workspace/student-preview";
+import { useParams, useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIdentity } from "@/components/instructor/activity-identity";
+import { InstructorIcon } from "@/components/instructor/course-ui";
 import { SaveConflict } from "@/components/instructor/save-conflict";
 import { InstructorHints } from "@/components/instructor-hints";
-import { PageHeader } from "@/components/instructor/course-ui";
+import { useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
+import { StudentPreviewCard } from "@/components/workspace/student-preview";
+import { Button, ConfirmDialog, EmptyState, FieldError, LoadingPanel, Notice, useApi, useNow } from "@/components/workspace/ui";
+import { workshopLanguages } from "@/components/workshops/workshop-ui";
+import { formatManilaDateTime, fromManilaDateTimeInput } from "@/lib/activity-date";
+import { activityForm, editsAfterSave, pendingActivityUpdate, type ActivityForm } from "@/lib/activity-editor";
+import { ApiError, getErrorMessage } from "@/lib/api";
+import { activityEditorHref, activityListHref, publicationChecks } from "@/lib/instructor-activity";
 import {
-  Button,
-  ConfirmDialog,
-  EmptyState,
-  FieldError,
-  LoadingPanel,
-  Notice,
-  StatusChip,
-  useApi,
-} from "@/components/workspace/ui";
-import {
-  activityStateLabel,
-  createActivityVersion,
-  friendlyLoadError,
-  getActivity,
-  publishActivity,
-  scheduleActivity,
-  updateActivity,
-  verifyActivity,
-  type ActivityDetail,
-  type StudentPreview,
-  type TestCasePayload,
+  approveDraft, createActivityVersion, friendlyLoadError, getActivity, publishActivity, rejectDraft, updateActivity, verifyActivity,
+  type ActivityDetail, type StudentPreview,
 } from "@/lib/workspace";
 
-type Question = {
-  id: string;
-  prompt: string;
-  options: { key: string; text: string }[];
-  correct_answer: string;
-};
-
-type EditorForm = {
-  title: string;
-  topic: string;
-  problem: string;
-  difficulty: number;
-  xp: number;
-  /** Blank keeps the default pass rule. */
-  passMark: string;
-  starter: string;
-  reference: string;
-  tests: TestCasePayload[];
-  questions: Question[];
-  contentVersion: number;
-  opensAt: string;
-  closesAt: string;
-};
-
-const STEPS = ["Details", "Content & tests", "Schedule", "Preview"] as const;
-
-function formFrom(detail: ActivityDetail): EditorForm {
-  return {
-    title: detail.title || "",
-    topic: detail.topic_concept || "",
-    problem: detail.problem_statement || "",
-    difficulty: detail.difficulty_level,
-    xp: detail.xp_reward,
-    passMark: detail.pass_mark_percent == null ? "" : String(detail.pass_mark_percent),
-    starter: detail.starter_code || "",
-    reference: detail.reference_solution_code || "",
-    tests: (detail.test_cases || []).map((test) => ({ ...test })),
-    questions: (detail.quiz_questions?.questions || []).map((question) => ({
-      id: question.id,
-      prompt: question.prompt,
-      options: question.options.map((option) => ({ ...option })),
-      correct_answer: question.correct_answer,
-    })),
-    contentVersion: detail.content_version,
-    opensAt: toManilaDateTimeInput(detail.opens_at),
-    closesAt: toManilaDateTimeInput(detail.closes_at),
-  };
-}
-
-function fieldErrorFrom(error: unknown): { field?: string; message: string } {
-  if (error instanceof ApiError) {
-    const payload = error.details as { detail?: { field?: string; message?: string } } | undefined;
-    const detail = payload?.detail;
-    if (detail && typeof detail === "object") return { field: detail.field, message: detail.message || error.message };
-  }
-  return { message: getErrorMessage(error) };
-}
-
-function localPreview(detail: ActivityDetail, form: EditorForm): StudentPreview {
+function localPreview(detail: ActivityDetail, form: ActivityForm): StudentPreview {
   return {
     ...detail.student_preview,
     title: form.title,
@@ -112,355 +38,291 @@ function localPreview(detail: ActivityDetail, form: EditorForm): StudentPreview 
   };
 }
 
-function ActivityEditor() {
-  const params = useParams<{ id: string }>();
-  const searchParams = useSearchParams();
+function ActivitySources({ activity }: { activity: ActivityDetail }) {
+  return (
+    <details className="ic-activity-sources">
+      <summary>Source PDF {activity.citations.length ? `· ${activity.citations.length} cited excerpt${activity.citations.length === 1 ? "" : "s"}` : ""}</summary>
+      {activity.citations.length ? activity.citations.map((citation, index) => (
+        <details key={`${citation.id}-${index}`} className="ic-activity-source">
+          <summary>Page {citation.page_number ?? "?"} · {citation.document_title} · v{citation.version_number ?? 1}</summary>
+          {citation.available ? <blockquote>{citation.excerpt}</blockquote> : <p>Source excerpt unavailable.</p>}
+        </details>
+      )) : <p>No cited pages were recorded for this draft.</p>}
+    </details>
+  );
+}
+
+function ActivityEditor({ activityId }: { activityId: string }) {
   const router = useRouter();
   const { courseId, setUnsaved, refreshCourses } = useWorkspace();
-  const activityId = params.id;
-  const returnTo = safeReturnTo(searchParams.get("returnTo"), `/instructor/activities${courseId ? `?course=${courseId}` : ""}`);
-
-  const { data, error, loading, reload, setData } = useApi<ActivityDetail>(activityId ? `/faculty/activities/${activityId}` : null);
-  const [form, setForm] = useState<EditorForm | null>(null);
-  const [baseline, setBaseline] = useState<EditorForm | null>(null);
-  const [step, setStep] = useState(0);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [notice, setNotice] = useState<{ tone: "success" | "error" | "info" | "warning"; text: string } | null>(null);
+  const { data, error, loading, reload, setData } = useApi<ActivityDetail>(`/faculty/activities/${encodeURIComponent(activityId)}`, true);
+  const [edits, setEdits] = useState<Partial<ActivityForm>>({});
+  const [busy, setBusy] = useState<"" | "save" | "verify" | "publish" | "version" | "reject">("");
+  const [saveError, setSaveError] = useState("");
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [returnPending, setReturnPending] = useState(false);
   const [conflict, setConflict] = useState(false);
-  const [busy, setBusy] = useState<"save" | "schedule" | "verify" | "publish" | "version" | "">("");
-  const [publishOpen, setPublishOpen] = useState(false);
-  const [publishChecked, setPublishChecked] = useState(false);
+  const [notice, setNotice] = useState<{ text: string; tone: "error" | "success" } | null>(null);
+  const [publishVersion, setPublishVersion] = useState<number | null>(null);
   const [publishError, setPublishError] = useState("");
-  const [previewSeen, setPreviewSeen] = useState(false);
-  const focusGradingCases = useRef(false);
-  const loadedActivityId = useRef<string | null>(null);
+  const [previewedVersion, setPreviewedVersion] = useState<number | null>(null);
+  const [checklistOpen, setChecklistOpen] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectError, setRejectError] = useState("");
+  const saving = useRef(false);
+  const now = useNow();
+  const saved = useMemo(() => data ? activityForm(data) : null, [data]);
+  const form = useMemo(() => saved ? { ...saved, ...edits } : null, [saved, edits]);
+  const pending = useMemo(() => data && saved && form ? pendingActivityUpdate(data, saved, form) : null, [data, form, saved]);
+  const errors = pending?.errors ?? {};
+  const hasChanges = Boolean(pending && Object.keys(pending.sent).length);
+  const unfinished = Object.keys(errors).length > 0;
+  const dirty = hasChanges || unfinished;
+  const scope = data?.course?.id ?? courseId;
+  const returnTo = activityListHref(scope, data ? activityId : undefined);
+  const editable = data?.state === "draft" && !data.grading_locked && !data.attempt_count;
+  const generated = Boolean(data?.source_document_id || data?.generation?.model_version);
+  const editingLocked = Boolean(busy && busy !== "save") || publishVersion !== null || rejectOpen;
 
   useEffect(() => {
-    if (!data) return;
-    const next = formFrom(data);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setForm(next);
-    setBaseline(next);
-    // Start at Details only for a newly opened activity; a save or verification keeps the current step.
-    if (loadedActivityId.current !== data.activity_id) setStep(0);
-    loadedActivityId.current = data.activity_id;
-    setPreviewSeen(data.review_status === "published");
-  }, [data]);
-
-  const dirty = Boolean(form && baseline) && JSON.stringify(form) !== JSON.stringify(baseline);
-
-  useEffect(() => {
-    setUnsaved(dirty, "You have unsaved activity changes. Leave and lose them?");
+    setUnsaved(dirty || busy === "save", "Some activity changes are still unsaved. Leave anyway?");
     return () => setUnsaved(false);
-  }, [dirty, setUnsaved]);
+  }, [busy, dirty, setUnsaved]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (step === 3) setPreviewSeen(true);
-    if (step === 1 && focusGradingCases.current) {
-      focusGradingCases.current = false;
-      document.getElementById("activity-grading-cases")?.focus();
+    if (returnPending && !dirty && !busy && !conflict && !saveError) {
+      setUnsaved(false);
+      router.push(returnTo);
     }
-  }, [step]);
+  }, [busy, conflict, dirty, returnPending, returnTo, router, saveError, setUnsaved]);
 
-  const locked = Boolean(data) && (data?.review_status === "published" || (data?.attempt_count || 0) > 0);
-  const editable = Boolean(data) && data?.review_status === "draft";
-
-  // Students see an activity in their course when their track matches its language.
-  const audience = `Students in ${data?.course?.title ?? "this course"}${data?.language ? ` on the ${workshopLanguages[data.language]} track` : ""}`;
-  const completion = useMemo(() => {
-    if (!form) return [false, false, false, false];
-    const details = form.title.trim().length >= 3 && form.topic.trim().length >= 2 && form.problem.trim().length >= 20;
-    const content =
-      data?.activity_type === "quiz"
-        ? form.questions.length >= 3 && form.questions.every((question) => question.prompt.trim() && question.options.every((option) => option.text.trim()))
-        : form.reference.trim().length > 0 && form.tests.length > 0;
-    // The schedule is optional: empty opens on publish; it is incomplete only when it closes before it opens.
-    const schedule = !form.opensAt || !form.closesAt || form.opensAt < form.closesAt;
-    return [details, content, schedule, previewSeen];
-  }, [data?.activity_type, form, previewSeen]);
-
-  function update(patch: Partial<EditorForm>) {
-    setForm((current) => (current ? { ...current, ...patch } : current));
-  }
-
-  function validate(target: EditorForm): Record<string, string> {
-    const found: Record<string, string> = {};
-    if (target.title.trim().length < 3) found.title = "Enter a title of at least 3 characters.";
-    if (target.topic.trim().length < 2) found.topic = "Enter the topic or concept.";
-    if (target.problem.trim().length < 20) found.problem = "The student instructions need at least 20 characters.";
-    if (data?.activity_type === "challenge") {
-      if (!target.reference.trim()) found.reference = "Add the reference solution.";
-      if (target.tests.length === 0) found.tests = "Add at least one grading case.";
-      target.tests.forEach((test, index) => {
-        if (!test.expected_stdout.trim()) found[`test-${index}-expected`] = "Expected output is required.";
-        if (!(test.time_limit_ms >= 250 && test.time_limit_ms <= 15000)) found[`test-${index}-time`] = "Enter 250–15000 ms.";
-        if (!(test.memory_limit_kb >= 32000 && test.memory_limit_kb <= 1048576)) found[`test-${index}-memory`] = "Enter 32000–1048576 KB.";
-      });
-    } else {
-      if (target.questions.length === 0) found.questions = "Add at least one question.";
-      target.questions.forEach((question, index) => {
-        if (!question.prompt.trim()) found[`question-${index}-prompt`] = "Enter the question text.";
-        if (question.options.some((option) => !option.text.trim())) found[`question-${index}-options`] = "Every option needs text.";
-      });
-    }
-    if (target.opensAt && target.closesAt && target.closesAt <= target.opensAt) {
-      found.closesAt = "The closing time must be after the opening time.";
-    }
-    if (target.opensAt && !fromManilaDateTimeInput(target.opensAt)) found.opensAt = "Enter a valid opening time in Asia/Manila.";
-    if (target.closesAt && !fromManilaDateTimeInput(target.closesAt)) found.closesAt = "Enter a valid closing time in Asia/Manila.";
-    return found;
-  }
-
-  function diffPayload(target: EditorForm): Record<string, unknown> {
-    const payload: Record<string, unknown> = { content_version: target.contentVersion };
-    if (!baseline) return payload;
-    if (target.title !== baseline.title) payload.title = target.title.trim();
-    if (target.topic !== baseline.topic) payload.topic_concept = target.topic.trim();
-    if (target.problem !== baseline.problem) payload.problem_statement = target.problem.trim();
-    if (target.difficulty !== baseline.difficulty) payload.difficulty_level = target.difficulty;
-    if (target.xp !== baseline.xp) payload.xp_reward = target.xp;
-    if (data?.activity_type === "challenge") {
-      if (target.passMark !== baseline.passMark) {
-        payload.pass_mark_percent = target.passMark.trim() === "" ? null : Number(target.passMark);
-      }
-      if (target.starter !== baseline.starter) payload.starter_code = target.starter;
-      if (target.reference !== baseline.reference) payload.reference_solution_code = target.reference;
-      if (JSON.stringify(target.tests) !== JSON.stringify(baseline.tests)) {
-        payload.test_cases = target.tests.map((test, index) => ({ ...test, order_index: index }));
-      }
-    } else if (JSON.stringify(target.questions) !== JSON.stringify(baseline.questions)) {
-      payload.quiz_questions = { questions: target.questions };
-    }
-    return payload;
-  }
-
-  async function save() {
-    if (!data || !form) return;
-    const found = validate(form);
-    setErrors(found);
-    if (Object.keys(found).length > 0) {
-      setNotice({ tone: "error", text: "Fix the highlighted fields before saving. Your edits are still here." });
-      window.requestAnimationFrame(() => {
-        const first = Object.keys(found)[0];
-        document.getElementById(first)?.focus();
-      });
-      return;
-    }
+  const save = useCallback(async () => {
+    if (!pending || !hasChanges || busy || conflict || saving.current) return;
+    saving.current = true;
     setBusy("save");
-    setNotice(null);
+    setSaveError("");
     try {
-      const result = await updateActivity(data.activity_id, diffPayload(form));
+      const result = await updateActivity(activityId, pending.payload);
       setData(result.activity);
-      setNotice({ tone: "success", text: result.message });
-      await refreshCourses();
+      setEdits((current) => editsAfterSave(current, pending.sent));
+      setSavedAt(Date.now());
     } catch (caught) {
-      if (caught instanceof ApiError && caught.code === "version_conflict") {
-        setConflict(true);
-        return;
-      }
-      const parsed = fieldErrorFrom(caught);
-      if (parsed.field) setErrors({ [parsed.field]: parsed.message });
-      setNotice({ tone: "error", text: `${parsed.message} Your edits were kept — save again to retry.` });
+      setReturnPending(false);
+      if (caught instanceof ApiError && caught.code === "version_conflict") setConflict(true);
+      else setSaveError(getErrorMessage(caught));
     } finally {
+      saving.current = false;
       setBusy("");
     }
-  }
+  }, [activityId, busy, conflict, hasChanges, pending, setData]);
 
-  async function saveSchedule() {
-    if (!data || !form) return;
-    const found = validate(form);
-    if (found.opensAt || found.closesAt) {
-      setErrors({ ...(found.opensAt ? { opensAt: found.opensAt } : {}), ...(found.closesAt ? { closesAt: found.closesAt } : {}) });
-      return;
-    }
-    setErrors({});
-    setBusy("schedule");
-    setNotice(null);
-    try {
-      const result = await scheduleActivity(data.activity_id, fromManilaDateTimeInput(form.opensAt), fromManilaDateTimeInput(form.closesAt), form.contentVersion);
-      setData(result.activity);
-      setNotice({ tone: "success", text: result.message });
-    } catch (caught) {
-      if (caught instanceof ApiError && caught.code === "version_conflict") {
-        setConflict(true);
-        return;
-      }
-      setNotice({ tone: "error", text: `${getErrorMessage(caught)} Your entered times are still here.` });
-    } finally {
-      setBusy("");
-    }
+  useEffect(() => {
+    if (!hasChanges || busy || conflict || saveError || publishVersion !== null || rejectOpen) return;
+    const timer = window.setTimeout(() => void save(), 350);
+    return () => window.clearTimeout(timer);
+  }, [busy, conflict, hasChanges, publishVersion, rejectOpen, save, saveError]);
+
+  function update(patch: Partial<ActivityForm>) {
+    setEdits((current) => ({ ...current, ...patch }));
+    setSaveError("");
   }
 
   async function runVerification() {
-    if (!data) return;
-    if (dirty) {
-      setNotice({ tone: "warning", text: "Save your changes before verifying with Judge0." });
-      return;
-    }
+    if (busy || dirty || conflict || !editable) return;
     setBusy("verify");
     setNotice(null);
     try {
-      const result = await verifyActivity(data.activity_id);
+      const result = await verifyActivity(activityId);
       setData(result.activity);
-      setNotice({ tone: result.activity.judge0_verified ? "success" : "error", text: result.message });
+      setNotice({ text: result.message, tone: result.activity.judge0_verified ? "success" : "error" });
     } catch (caught) {
-      setNotice({ tone: "error", text: getErrorMessage(caught) });
+      if (caught instanceof ApiError && caught.code === "version_conflict") setConflict(true);
+      else setNotice({ text: getErrorMessage(caught), tone: "error" });
     } finally {
       setBusy("");
     }
   }
 
-  async function createVersion() {
-    if (!data) return;
+  async function newVersion() {
+    if (busy || dirty || conflict) return;
     setBusy("version");
-    setNotice(null);
     try {
-      const result = await createActivityVersion(data.activity_id);
-      await refreshCourses();
-      router.push(
-        `/instructor/activities/${result.activity.activity_id}?${new URLSearchParams({
-          ...(courseId ? { course: courseId } : {}),
-          returnTo,
-        }).toString()}`,
-      );
+      const result = await createActivityVersion(activityId);
+      router.push(activityListHref(scope, result.activity.activity_id));
+      void refreshCourses();
     } catch (caught) {
-      setNotice({ tone: "error", text: getErrorMessage(caught) });
+      setNotice({ text: getErrorMessage(caught), tone: "error" });
     } finally {
       setBusy("");
     }
   }
 
   async function confirmPublish() {
-    if (!data || !publishChecked) return;
+    if (!data || publishVersion === null || busy || dirty || conflict) return;
     setBusy("publish");
     setPublishError("");
     try {
-      const result = await publishActivity(data.activity_id);
-      setPublishOpen(false);
-      setPublishChecked(false);
-      setData(result.activity);
-      setNotice({ tone: "success", text: result.message });
-      await refreshCourses();
+      if (generated) await approveDraft(activityId, publishVersion);
+      else await publishActivity(activityId, publishVersion);
+      setUnsaved(false);
+      router.replace(activityListHref(scope, activityId, true));
+      void refreshCourses();
     } catch (caught) {
-      setPublishError(getErrorMessage(caught));
+      if (caught instanceof ApiError && (caught.code === "version_conflict" || caught.code === "already_published")) {
+        setPublishVersion(null);
+        setConflict(true);
+      } else setPublishError(getErrorMessage(caught));
     } finally {
       setBusy("");
     }
   }
 
-  if (loading && !data) return <LoadingPanel label="Loading the activity editor…" />;
-  if (error && !data) {
-    return (
-      <section className="ws-panel" role="alert">
-        <PageHeader title="Activity unavailable" subtitle={friendlyLoadError(error)} />
-        <div className="ws-inline-actions">
-          <Button variant="primary" onClick={reload}>Retry</Button>
-          <Link className="button button-outline" href={returnTo}>Back to activities</Link>
-        </div>
-      </section>
-    );
-  }
-  if (!data || !form) {
-    return <EmptyState title="Activity not found" action={<Link className="button button-outline" href={returnTo}>Back to activities</Link>} />;
+  async function requestChanges() {
+    if (busy || dirty || conflict) return;
+    if (rejectReason.trim().length < 5) {
+      setRejectError("Enter at least five characters.");
+      return;
+    }
+    setRejectError("");
+    setBusy("reject");
+    try {
+      await rejectDraft(activityId, rejectReason.trim());
+      setData(await getActivity(activityId));
+      setRejectOpen(false);
+      setRejectReason("");
+    } catch (caught) {
+      setRejectError(getErrorMessage(caught));
+    } finally {
+      setBusy("");
+    }
   }
 
-  const preview = localPreview(data, form);
+  if (loading && !data) return <LoadingPanel label="Loading activity…" />;
+  if (!data || !form) {
+    return <EmptyState title="Activity unavailable" action={<Link className="ic-button" href={returnTo}>← Activities</Link>}>
+      {error ? friendlyLoadError(error) : "This activity may have moved."}
+      {error ? <Button onClick={reload}>Try again</Button> : null}
+    </EmptyState>;
+  }
+
   const quiz = data.activity_type === "quiz";
   const needsSample = !quiz && !data.exam_only && !form.tests.some((test) => !test.is_hidden);
+  const audience = `students in ${data.course?.title ?? "this course"}${data.language ? ` on the ${workshopLanguages[data.language]} track` : ""}`;
+  const savedIssues = data.publication_issues ?? [
+    ...(quiz && form.questions.length < 3 ? ["invalid_quiz"] : []),
+    ...(!quiz && !form.tests.length ? ["missing_tests"] : []),
+    ...(needsSample ? ["missing_sample"] : []),
+    ...(!quiz && !data.judge0_verified ? ["not_verified"] : []),
+  ];
+  const currentVersionPreviewed = previewedVersion === data.content_version && !dirty;
+  const detailsIssue = form.title.trim().length < 3 || form.topic.trim().length < 2 || form.problem.trim().length < 20
+    || Boolean(errors.xp || errors.passMark);
+  const scheduleIssue = Boolean(errors.opensAt || errors.closesAt || savedIssues.includes("invalid_schedule"));
+  const contentIssue = Object.keys(errors).some((key) => key.startsWith("question-") || key.startsWith("test-")) || Boolean(errors.reference);
+  const checkKeys = quiz
+    ? ["invalid_quiz", "invalid_schedule"]
+    : ["missing_tests", ...(!data.exam_only ? ["missing_sample"] : []), "not_verified", "invalid_schedule"];
+  const checks = [
+    { label: "Activity details", action: "Complete details", section: "activity-details", complete: !detailsIssue },
+    ...checkKeys.map((key) => ({
+      ...publicationChecks[key],
+      complete: key === "invalid_schedule" ? !scheduleIssue
+        : !savedIssues.includes(key) && !(contentIssue && (key === "invalid_quiz" || key === "missing_tests")),
+    })),
+  ];
+  const firstIncomplete = checks.find((item) => !item.complete);
+  const ready = !firstIncomplete && !dirty && !busy && !conflict;
+  if (!data.exam_only) checks.push({
+    label: generated ? "Review draft and student preview" : "Review student preview",
+    action: "Review student preview", section: "activity-preview", complete: currentVersionPreviewed,
+  });
+  const preview = localPreview(data, form);
+  const scheduleSummary = {
+    opens_at: fromManilaDateTimeInput(form.opensAt),
+    closes_at: fromManilaDateTimeInput(form.closesAt),
+    state: data.state,
+    timezone: "Asia/Manila",
+  };
+  const feedback = conflict ? "Changes need attention" : saveError ? "Could not save"
+    : busy === "save" || hasChanges ? "Saving…" : unfinished ? "Unfinished changes"
+      : savedAt !== null ? now.getTime() - savedAt < 60_000 ? "Saved · just now" : `Saved · ${formatManilaDateTime(new Date(savedAt).toISOString())}`
+        : "Saved";
+
+  function reviewPreview() {
+    if (!data || !ready) return;
+    setPreviewedVersion(data.content_version);
+    focusSection("activity-preview");
+  }
+
+  function focusSection(section: string) {
+    setChecklistOpen(false);
+    const target = document.getElementById(section);
+    target?.scrollIntoView?.({ block: "start" });
+    target?.focus({ preventScroll: true });
+  }
 
   return (
-    <>
-      <PageHeader
-        title={data.title || form.title || "Untitled activity"}
-        subtitle={
-          <>
-            {data.course?.title} · {quiz ? "Quiz / review lesson" : "Coding challenge"} · version {data.version_number} ·{" "}
-            {activityStateLabel[data.state] || data.state}
-            {data.attempt_count ? ` · ${data.attempt_count} attempt${data.attempt_count === 1 ? "" : "s"}` : ""}
-          </>
+    <div className="ic-activity-editor">
+      <Link className="ic-activity-back" href={returnTo} onNavigate={(event) => {
+        if (unfinished || conflict || saveError || (busy && busy !== "save")) {
+          if (!window.confirm("Some changes are still in progress. Leave this activity?")) event.preventDefault();
+        } else if (dirty || busy === "save") {
+          event.preventDefault();
+          setReturnPending(true);
         }
-        status={
-          <div className="ws-chip-row">
-            <StatusChip state={data.state} label={activityStateLabel[data.state]} />
-            {!quiz ? (
-              <StatusChip
-                state={data.judge0_verified ? "ready" : "pending"}
-                label={data.judge0_verified ? "Judge0 passed" : "Needs verification"}
-                tone={data.judge0_verified ? "good" : "wait"}
-              />
+      }}>{returnPending ? "Saving before leaving…" : "← Activities"}</Link>
+      <header className="ic-activity-editor-header">
+        <ActivityIdentity page activity={data} feedback={<span role="status" className="ic-activity-saved">{feedback}</span>} />
+        <details className="ic-row-menu">
+          <summary className="ic-button" aria-label="More activity actions">⋯</summary>
+          <div className="ic-menu-options">
+            <button type="button" className="ic-button" onClick={() => void newVersion()} disabled={Boolean(busy) || dirty || conflict}>
+              {busy === "version" ? "Creating version…" : "New version"}
+            </button>
+            {data.review_status === "published" && data.state !== "archived" ? (
+              <Link className="ic-button" href={`${activityEditorHref(activityId, null)}/analysis${scope ? `?course=${encodeURIComponent(scope)}` : ""}`}>Analysis</Link>
             ) : null}
-            {locked ? <StatusChip state="pending" label="Grading content locked" tone="wait" /> : null}
-            {dirty ? <StatusChip state="pending" label="Unsaved changes" tone="wait" /> : null}
+            {generated && editable ? <button type="button" className="ic-button" disabled={Boolean(busy) || dirty || conflict}
+              onClick={() => { setRejectError(""); setRejectOpen(true); }}>Request changes</button> : null}
+            {(data.versions ?? []).filter((version) => version.activity_id !== activityId).map((version) => (
+              <Link className="ic-button" key={version.activity_id} href={activityEditorHref(version.activity_id, scope)}>Version {version.version_number}</Link>
+            ))}
           </div>
-        }
-        actions={<Link className="button button-outline" href={returnTo}>← Back to activities</Link>}
-      />
+        </details>
+      </header>
 
-      {conflict ? <SaveConflict changes={form} onReload={async () => {
+      {conflict ? <SaveConflict changes={edits} onReload={async () => {
         setData(await getActivity(activityId));
-        setErrors({});
+        setEdits({});
+        setPreviewedVersion(null);
         setConflict(false);
       }} /> : null}
-      {notice ? (
-        <Notice tone={notice.tone === "success" ? "success" : notice.tone === "error" ? "error" : notice.tone === "warning" ? "warning" : "info"} onDismiss={() => setNotice(null)}>
-          {notice.text}
-        </Notice>
-      ) : null}
+      {saveError ? <Notice tone="error">
+        <p>{saveError} Your changes are still here.</p>
+        <Button onClick={() => void save()}>Retry save</Button>
+      </Notice> : null}
+      {notice ? <Notice tone={notice.tone} onDismiss={() => setNotice(null)}>{notice.text}</Notice> : null}
+      {data.rejection_reason ? <Notice tone="warning">Changes requested. {data.rejection_reason}</Notice> : null}
 
-      {locked ? (
-        <Notice tone="warning">
-          {(data.attempt_count || 0) > 0
-            ? "Students have attempted this activity, so its grading content is read-only. Create a new version to change instructions, tests or answer keys; the published version stays live until you publish the new one."
-            : "Published content is read-only. Create a new version to change grading content."}{" "}
-          <Button variant="outline" onClick={() => void createVersion()} disabled={busy !== ""}>
-            {busy === "version" ? "Creating version…" : "Create new version"}
-          </Button>
-        </Notice>
-      ) : null}
-
-      <nav className="ws-steps" aria-label="Editor steps">
-        {STEPS.map((label, index) => (
-          <button
-            key={label}
-            type="button"
-            className={`ws-step${step === index ? " is-current" : ""}${completion[index] ? " is-complete" : ""}`}
-            aria-current={step === index ? "step" : undefined}
-            onClick={() => setStep(index)}
-          >
-            <span className="ws-step-index" aria-hidden="true">
-              {completion[index] ? "✓" : index + 1}
-            </span>
-            <span>{label}</span>
-            <span className="sr-only">{completion[index] ? "complete" : "incomplete"}</span>
-          </button>
-        ))}
-      </nav>
-
-      <section className="ws-panel" aria-labelledby="step-title">
-        <div className="ws-panel-head">
-          <div>
-            <p className="eyebrow-label">STEP {step + 1} OF {STEPS.length}</p>
-            <h2 id="step-title">{STEPS[step]}</h2>
-          </div>
-          {step === 2 ? <span className="ws-muted">Times are shown in Asia/Manila.</span> : null}
-        </div>
-
-        {step === 0 ? (
+      <div className="ic-activity-editor-grid">
+        <div className="ic-activity-sections">
+          <section className="ic-activity-section" aria-labelledby="activity-details">
+            <h2 id="activity-details" tabIndex={-1}>Details</h2>
           <div className="ws-form-grid">
             <div className="ws-field">
               <label htmlFor="title">Title</label>
-              <input id="title" value={form.title} disabled={!editable || busy !== ""} onChange={(event) => update({ title: event.target.value })} aria-invalid={Boolean(errors.title)} />
+              <input id="title" maxLength={255} value={form.title} disabled={!editable || editingLocked} onChange={(event) => update({ title: event.target.value })} aria-invalid={Boolean(errors.title)} />
               <FieldError>{errors.title}</FieldError>
             </div>
             <div className="ws-field">
               <label htmlFor="topic">Topic or concept</label>
-              <input id="topic" value={form.topic} disabled={!editable || busy !== ""} onChange={(event) => update({ topic: event.target.value })} aria-invalid={Boolean(errors.topic)} />
+              <input id="topic" maxLength={100} value={form.topic} disabled={!editable || editingLocked} onChange={(event) => update({ topic: event.target.value })} aria-invalid={Boolean(errors.topic)} />
               <FieldError>{errors.topic}</FieldError>
             </div>
             <div className="ws-field">
               <label htmlFor="difficulty">Difficulty</label>
-              <select id="difficulty" value={form.difficulty} disabled={!editable || busy !== ""} onChange={(event) => update({ difficulty: Number(event.target.value) })}>
+              <select id="difficulty" value={form.difficulty} disabled={!editable || editingLocked} onChange={(event) => update({ difficulty: Number(event.target.value) })}>
                 {[1, 2, 3, 4, 5].map((value) => (
                   <option key={value} value={value}>Level {value}</option>
                 ))}
@@ -468,25 +330,30 @@ function ActivityEditor() {
             </div>
             <div className="ws-field">
               <label htmlFor="xp">XP reward</label>
-              <input id="xp" type="number" min={10} max={10000} value={form.xp} disabled={!editable || busy !== ""} onChange={(event) => update({ xp: Number(event.target.value) })} />
+              <input id="xp" type="number" min={10} max={10000} aria-invalid={Boolean(errors.xp)} value={form.xp} disabled={!editable || editingLocked} onChange={(event) => update({ xp: Number(event.target.value) })} />
+              <FieldError>{errors.xp}</FieldError>
             </div>
             {data.activity_type === "challenge" && (
               <div className="ws-field">
                 <label htmlFor="pass-mark">Pass mark (%)</label>
-                <input id="pass-mark" type="number" inputMode="numeric" min={1} max={100} placeholder="Default" value={form.passMark} disabled={!editable || busy !== ""} onChange={(event) => update({ passMark: event.target.value })} aria-describedby="pass-mark-help" />
+                <input id="pass-mark" type="number" inputMode="numeric" min={1} max={100} placeholder="Default" value={form.passMark} disabled={!editable || editingLocked} onChange={(event) => update({ passMark: event.target.value })} aria-describedby="pass-mark-help" />
+                <FieldError>{errors.passMark}</FieldError>
                 <p id="pass-mark-help" className="ws-muted">Weighted score a submission needs to pass. Leave blank for the default: every test in practice, 80% in exams.</p>
               </div>
             )}
             <div className="ws-field full">
               <label htmlFor="problem">Student instructions</label>
-              <textarea id="problem" rows={7} value={form.problem} disabled={!editable || busy !== ""} onChange={(event) => update({ problem: event.target.value })} aria-invalid={Boolean(errors.problem)} />
+              <textarea id="problem" rows={5} maxLength={20000} value={form.problem} disabled={!editable || editingLocked} onChange={(event) => update({ problem: event.target.value })} aria-invalid={Boolean(errors.problem)} />
               <FieldError>{errors.problem}</FieldError>
             </div>
           </div>
-        ) : null}
+          </section>
 
-        {step === 1 ? (
-          quiz ? (
+          <section className="ic-activity-section" aria-labelledby="activity-content">
+            <h2 id="activity-content" tabIndex={-1}>{quiz ? "Quiz content" : "Coding content"}</h2>
+            <div className={generated ? "ic-activity-content with-source" : undefined}>
+              <div>
+                {quiz ? (
             <>
               <div className="ws-panel-head ws-subhead">
                 <div>
@@ -496,6 +363,7 @@ function ActivityEditor() {
                 {editable ? (
                   <Button
                     variant="quiet"
+                    disabled={form.questions.length >= 10 || editingLocked}
                     onClick={() =>
                       update({
                         questions: [
@@ -514,15 +382,14 @@ function ActivityEditor() {
                   </Button>
                 ) : null}
               </div>
-              <FieldError>{errors.questions}</FieldError>
               {form.questions.length === 0 ? <p className="ws-muted">No questions yet. A quiz needs at least 3 questions to publish.</p> : null}
               <div className="ws-test-list">
                 {form.questions.map((question, index) => (
-                  <fieldset className="ws-test-case" key={question.id} disabled={!editable || busy !== ""}>
+                  <fieldset className="ws-test-case" key={question.id} disabled={!editable || editingLocked}>
                     <legend>Question {index + 1}</legend>
                     <div className="ws-field">
                       <label htmlFor={`question-${index}-prompt`}>Question text</label>
-                      <textarea id={`question-${index}-prompt`} rows={2} value={question.prompt} onChange={(event) => update({ questions: form.questions.map((item, itemIndex) => (itemIndex === index ? { ...item, prompt: event.target.value } : item)) })} aria-invalid={Boolean(errors[`question-${index}-prompt`])} />
+                      <textarea id={`question-${index}-prompt`} rows={2} maxLength={2000} value={question.prompt} onChange={(event) => update({ questions: form.questions.map((item, itemIndex) => (itemIndex === index ? { ...item, prompt: event.target.value } : item)) })} aria-invalid={Boolean(errors[`question-${index}-prompt`])} />
                       <FieldError>{errors[`question-${index}-prompt`]}</FieldError>
                     </div>
                     <div className="ws-option-grid">
@@ -530,6 +397,7 @@ function ActivityEditor() {
                         <label className="ws-field" key={option.key}>
                           <span>Option {option.key}</span>
                           <input
+                            maxLength={500}
                             value={option.text}
                             onChange={(event) =>
                               update({
@@ -544,6 +412,7 @@ function ActivityEditor() {
                         </label>
                       ))}
                     </div>
+                    <FieldError>{errors[`question-${index}-options`]}</FieldError>
                     <div className="ws-field">
                       <label htmlFor={`question-${index}-correct`}>Correct answer</label>
                       <select
@@ -570,11 +439,11 @@ function ActivityEditor() {
               <div className="ws-form-grid">
                 <div className="ws-field">
                   <label htmlFor="starter">Starter code</label>
-                  <textarea id="starter" className="ws-code-input" rows={8} value={form.starter} disabled={!editable || busy !== ""} onChange={(event) => update({ starter: event.target.value })} />
+                  <textarea id="starter" className="ws-code-input" rows={6} maxLength={50000} value={form.starter} disabled={!editable || editingLocked} onChange={(event) => update({ starter: event.target.value })} />
                 </div>
                 <div className="ws-field">
                   <label htmlFor="reference">Reference solution (instructors only)</label>
-                  <textarea id="reference" className="ws-code-input" rows={8} value={form.reference} disabled={!editable || busy !== ""} onChange={(event) => update({ reference: event.target.value })} aria-invalid={Boolean(errors.reference)} />
+                  <textarea id="reference" className="ws-code-input" rows={6} maxLength={50000} value={form.reference} disabled={!editable || editingLocked} onChange={(event) => update({ reference: event.target.value })} aria-invalid={Boolean(errors.reference)} />
                   <FieldError>{errors.reference}</FieldError>
                 </div>
               </div>
@@ -590,6 +459,7 @@ function ActivityEditor() {
                   {editable ? (
                     <Button
                       variant="quiet"
+                      disabled={form.tests.length >= 20 || editingLocked}
                       onClick={() =>
                         update({
                           tests: [...form.tests, { order_index: form.tests.length, stdin: "", expected_stdout: "", time_limit_ms: 2000, memory_limit_kb: 256000, is_hidden: true, weight: 1 }],
@@ -599,29 +469,21 @@ function ActivityEditor() {
                       Add case
                     </Button>
                   ) : null}
-                  {!quiz ? (
-                    <Button variant="outline" onClick={() => void runVerification()} disabled={busy !== "" || dirty}
-                      data-tooltip="Runs the reference solution against the grading cases in this saved version.">
-                      {busy === "verify" ? "Checking Judge0…" : data.judge0_verified ? "Re-verify with Judge0" : "Verify with Judge0"}
-                    </Button>
-                  ) : null}
                 </div>
               </div>
-              {!quiz && dirty ? <p className="ws-muted">Save your edits first. Judge0 checks the saved version, not unsaved changes.</p> : null}
-              <FieldError>{errors.tests}</FieldError>
               {form.tests.length === 0 ? <p className="ws-muted">No grading cases yet. A coding challenge needs at least one case to publish.</p> : null}
               <div className="ws-test-list">
                 {form.tests.map((test, index) => (
-                  <fieldset className="ws-test-case" key={index} disabled={!editable || busy !== ""}>
+                  <fieldset className="ws-test-case" key={index} disabled={!editable || editingLocked}>
                     <legend>Case {index + 1}</legend>
                     <div className="ws-form-grid">
                       <div className="ws-field">
                         <label htmlFor={`test-${index}-stdin`}>Input</label>
-                        <textarea id={`test-${index}-stdin`} rows={2} value={test.stdin} onChange={(event) => update({ tests: form.tests.map((item, itemIndex) => (itemIndex === index ? { ...item, stdin: event.target.value } : item)) })} />
+                        <textarea id={`test-${index}-stdin`} rows={2} maxLength={20000} value={test.stdin} onChange={(event) => update({ tests: form.tests.map((item, itemIndex) => (itemIndex === index ? { ...item, stdin: event.target.value } : item)) })} />
                       </div>
                       <div className="ws-field">
                         <label htmlFor={`test-${index}-expected`}>Expected output</label>
-                        <textarea id={`test-${index}-expected`} rows={2} value={test.expected_stdout} onChange={(event) => update({ tests: form.tests.map((item, itemIndex) => (itemIndex === index ? { ...item, expected_stdout: event.target.value } : item)) })} aria-invalid={Boolean(errors[`test-${index}-expected`])} />
+                        <textarea id={`test-${index}-expected`} rows={2} maxLength={20000} value={test.expected_stdout} onChange={(event) => update({ tests: form.tests.map((item, itemIndex) => (itemIndex === index ? { ...item, expected_stdout: event.target.value } : item)) })} aria-invalid={Boolean(errors[`test-${index}-expected`])} />
                         <FieldError>{errors[`test-${index}-expected`]}</FieldError>
                       </div>
                       <div className="ws-field">
@@ -634,6 +496,13 @@ function ActivityEditor() {
                         <input id={`test-${index}-memory`} type="number" min={32000} max={1048576} value={test.memory_limit_kb} onChange={(event) => update({ tests: form.tests.map((item, itemIndex) => (itemIndex === index ? { ...item, memory_limit_kb: Number(event.target.value) } : item)) })} aria-invalid={Boolean(errors[`test-${index}-memory`])} />
                         <FieldError>{errors[`test-${index}-memory`]}</FieldError>
                       </div>
+                      <div className="ws-field">
+                        <label htmlFor={`test-${index}-weight`}>Weight</label>
+                        <input id={`test-${index}-weight`} type="number" min={0.01} max={100} step={0.01}
+                          value={test.weight} aria-invalid={Boolean(errors[`test-${index}-weight`])}
+                          onChange={(event) => update({ tests: form.tests.map((item, itemIndex) => (itemIndex === index ? { ...item, weight: Number(event.target.value) } : item)) })} />
+                        <FieldError>{errors[`test-${index}-weight`]}</FieldError>
+                      </div>
                       <label className="ws-check ws-field">
                         <input type="checkbox" checked={test.is_hidden} onChange={(event) => update({ tests: form.tests.map((item, itemIndex) => (itemIndex === index ? { ...item, is_hidden: event.target.checked } : item)) })} />
                         <span>Hidden from students</span>
@@ -645,151 +514,109 @@ function ActivityEditor() {
                   </fieldset>
                 ))}
               </div>
-              {!data.judge0_verified ? (
-                <p className="ws-muted">Publishing stays locked until the saved reference solution passes Judge0.</p>
-              ) : null}
+              {editable ? <div className="ic-activity-verification" id="activity-verification" tabIndex={-1}>
+                <h3>Reference solution check</h3>
+                <Button variant="outline" onClick={() => void runVerification()}
+                  disabled={Boolean(busy) || dirty || !form.tests.length || !form.reference.trim()}>
+                  {busy === "verify" ? "Checking…" : data.judge0_verified ? "Run verification again" : "Verify with Judge0"}
+                </Button>
+              </div> : null}
               <InstructorHints activityId={activityId} editable={editable} />
             </>
-          )
-        ) : null}
+          )}
+              </div>
+              {generated ? <ActivitySources activity={data} /> : null}
+            </div>
+          </section>
 
-        {step === 2 ? (
+          <section className="ic-activity-section" aria-labelledby="activity-schedule">
+            <h2 id="activity-schedule" tabIndex={-1}>Schedule</h2>
+            <p className="ws-muted">Times are shown in Asia/Manila.</p>
           <div className="ws-form-grid">
             <div className="ws-field">
               <label htmlFor="opens-at">Opens at</label>
-              <input id="opens-at" type="datetime-local" value={form.opensAt} onChange={(event) => update({ opensAt: event.target.value })} disabled={busy !== ""} aria-invalid={Boolean(errors.opensAt)} />
+              <input id="opens-at" type="datetime-local" value={form.opensAt} onChange={(event) => update({ opensAt: event.target.value })} disabled={data.state === "archived" || editingLocked} aria-invalid={Boolean(errors.opensAt)} />
               <FieldError>{errors.opensAt}</FieldError>
               <p className="ws-muted">Leave empty to open immediately when published.</p>
             </div>
             <div className="ws-field">
               <label htmlFor="closes-at">Closes at</label>
-              <input id="closes-at" type="datetime-local" value={form.closesAt} onChange={(event) => update({ closesAt: event.target.value })} disabled={busy !== ""} aria-invalid={Boolean(errors.closesAt)} />
+              <input id="closes-at" type="datetime-local" value={form.closesAt} onChange={(event) => update({ closesAt: event.target.value })} disabled={data.state === "archived" || editingLocked} aria-invalid={Boolean(errors.closesAt)} />
               <FieldError>{errors.closesAt}</FieldError>
             </div>
-            <div className="ws-inline-actions full">
-              <Button variant="outline" onClick={() => void saveSchedule()} disabled={busy !== ""}>
-                {busy === "schedule" ? "Saving schedule…" : "Save schedule"}
-              </Button>
-              <span className="ws-muted">
-                {audience} see it {form.opensAt ? `from ${formatManilaDateTime(fromManilaDateTimeInput(form.opensAt))}` : data.state === "draft" ? "as soon as it is published" : "now"}{form.closesAt ? ` until ${formatManilaDateTime(fromManilaDateTimeInput(form.closesAt))}` : ""}; existing attempts are unaffected by schedule changes.
-              </span>
-            </div>
           </div>
-        ) : null}
+          </section>
 
-        {step === 3 ? (
-          <div className="ws-preview-layout">
-            <div>
-              <StudentPreviewCard
-                preview={preview}
-                schedule={{ opens_at: fromManilaDateTimeInput(form.opensAt), closes_at: fromManilaDateTimeInput(form.closesAt), state: data.state, timezone: "Asia/Manila" }}
-              />
-            </div>
-            <aside className="ws-preview-side">
-              <h3>Publication checks</h3>
-              <ul className="ws-check-list">
-                <li className={completion[0] ? "is-done" : ""}>Details complete</li>
-                <li className={completion[1] ? "is-done" : ""}>{quiz ? "Questions and answer keys" : "Grading cases and reference solution"}</li>
-                {!quiz && !data.exam_only ? <li className={!needsSample ? "is-done" : ""}>Visible sample case</li> : null}
-                <li className={completion[2] ? "is-done" : ""}>Schedule {form.opensAt || form.closesAt ? "set" : "optional"}</li>
-                <li className={!dirty ? "is-done" : ""}>All edits saved</li>
-                {!quiz ? <li className={data.judge0_verified ? "is-done" : ""}>Judge0 verification</li> : null}
-                <li className={(data.attempt_count || 0) === 0 ? "is-done" : ""}>No student attempts yet</li>
-              </ul>
-              <p className="ws-muted">
-                Answer keys: {quiz ? form.questions.length : 0} · hidden grading cases: {form.tests.filter((test) => test.is_hidden).length} · never
-                shown to students.
-              </p>
-              {data.exam_only ? (
-                <p className="ws-muted">This activity stays private. Add it to a restricted exam from the Exams page.</p>
-              ) : (data.attempt_count || 0) > 0 ? (
-                <Button variant="outline" onClick={() => void createVersion()} disabled={busy !== ""}>
-                  {busy === "version" ? "Creating version…" : "Create new version"}
-                </Button>
-              ) : (
-                <Button
-                  variant="primary"
-                  onClick={() => { setPublishError(""); setPublishOpen(true); }}
-                  disabled={!editable || dirty || busy !== "" || !completion[0] || !completion[1] || needsSample || (!quiz && !data.judge0_verified)}
-                  aria-describedby={needsSample ? "activity-sample-required" : undefined}
-                >
-                  Publish activity
-                </Button>
-              )}
-              {editable && needsSample ? (
-                <>
-                  <p id="activity-sample-required" className="ws-muted">Make one grading case visible so students can run a sample.</p>
-                  <Button variant="outline" onClick={() => { focusGradingCases.current = true; setStep(1); }}>
-                    Go to grading cases
-                  </Button>
-                </>
-              ) : null}
-              {dirty && !data.exam_only ? <p className="ws-muted">Save your changes before publishing so students receive the reviewed version.</p> : null}
-              {quiz && form.questions.length < 3 ? (
-                <p className="ws-muted">A quiz needs between 3 and 10 complete questions to publish.</p>
-              ) : null}
-              {!quiz && !data.judge0_verified ? (
-                <p className="ws-muted">Verify the reference solution with Judge0 before publishing.</p>
-              ) : null}
-            </aside>
-          </div>
-        ) : null}
-
-        <div className="ws-step-footer">
-          <Button variant="quiet" onClick={() => setStep((current) => Math.max(0, current - 1))} disabled={step === 0}>
-            ← Back
-          </Button>
-          <div className="ws-inline-actions">
-            {step < 3 ? (
-              <Button variant="outline" onClick={() => setStep((current) => Math.min(3, current + 1))}>
-                Next step →
+          <section className="ic-activity-section" aria-labelledby="activity-preview">
+            <h2 id="activity-preview" tabIndex={-1}>Preview</h2>
+            <StudentPreviewCard preview={preview} schedule={scheduleSummary} />
+            {editable && !data.exam_only && currentVersionPreviewed ? (
+              <Button variant="primary" disabled={!ready} onClick={() => { setPublishError(""); setPublishVersion(data.content_version); }}>
+                Publish activity
               </Button>
             ) : null}
-            {editable && (step === 0 || step === 1) ? (
-              <Button variant="primary" onClick={() => void save()} disabled={busy !== "" || !dirty}>
-                {busy === "save" ? "Saving…" : "Save changes"}
-              </Button>
-            ) : null}
-            {step === 2 ? (
-              <Button variant="primary" onClick={() => void saveSchedule()} disabled={busy !== ""}>
-                {busy === "schedule" ? "Saving…" : "Save schedule"}
-              </Button>
-            ) : null}
-          </div>
+          </section>
         </div>
-      </section>
 
-      <p className="ws-footnote">Preview shows exactly what students see; answer keys and hidden tests never appear there.</p>
+        {editable ? <aside className="ic-readiness" aria-labelledby="readiness-heading">
+          <h2 id="readiness-heading">Readiness</h2>
+          <button type="button" className="ic-button ic-readiness-toggle" aria-controls="readiness-checks"
+            aria-expanded={checklistOpen} onClick={() => setChecklistOpen(!checklistOpen)}>
+            Readiness · {checks.filter((check) => check.complete).length} of {checks.length}
+          </button>
+          <ul id="readiness-checks" className={checklistOpen ? "is-expanded" : ""}>
+            {checks.map((check) => (
+              <li key={check.label}>
+                <a href={`#${check.section}`} onClick={(event) => {
+                  event.preventDefault();
+                  if (check.section === "activity-preview" && ready) reviewPreview();
+                  else focusSection(check.section);
+                }}>
+                  <span className="ic-readiness-mark" data-complete={check.complete} aria-hidden="true">{check.complete ? <InstructorIcon name="check" /> : "○"}</span>
+                  <span><span className="sr-only">{check.complete ? "Complete. " : "Incomplete. "}</span>{check.label}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+          {data.exam_only && !firstIncomplete ? (
+            <Link className="ic-button ic-primary" href={`/instructor/exams${scope ? `?course=${encodeURIComponent(scope)}` : ""}`}
+              onNavigate={(event) => { if ((dirty || busy) && !window.confirm("Some changes are still in progress. Leave this activity?")) event.preventDefault(); }}>
+              Open Exams
+            </Link>
+          ) : firstIncomplete ? (
+            <a className="ic-button ic-primary" href={`#${firstIncomplete.section}`}
+              onClick={(event) => { event.preventDefault(); focusSection(firstIncomplete.section); }}>{firstIncomplete.action}</a>
+          ) : currentVersionPreviewed ? (
+            <a className="ic-button" href="#activity-preview" onClick={(event) => { event.preventDefault(); focusSection("activity-preview"); }}>Back to preview</a>
+          ) : <Button variant="primary" disabled={!ready} onClick={reviewPreview}>Review student preview</Button>}
+        </aside> : null}
+      </div>
 
-      <ConfirmDialog
-        open={publishOpen}
-        title="Publish this activity"
-        confirmLabel="Publish activity"
-        busy={busy === "publish"}
-        onCancel={() => { setPublishOpen(false); setPublishChecked(false); setPublishError(""); }}
-        onConfirm={() => void confirmPublish()}
-      >
-        <p>
-          <strong>{form.title}</strong> will become available to {audience.charAt(0).toLowerCase() + audience.slice(1)}
-          {form.opensAt ? ` from ${formatManilaDateTime(fromManilaDateTimeInput(form.opensAt))}` : " immediately"}
-          {form.closesAt ? ` until ${formatManilaDateTime(fromManilaDateTimeInput(form.closesAt))}` : ""}. Existing attempts are not
-          changed.
+      <ConfirmDialog open={publishVersion !== null} title="Publish this activity?" cancelLabel="Keep editing"
+        confirmLabel="Confirm and publish" busy={busy === "publish"}
+        onCancel={() => { if (!busy) { setPublishVersion(null); setPublishError(""); } }}
+        onConfirm={() => void confirmPublish()}>
+        <p><strong>{form.title}</strong> will be available to {audience}
+          {form.opensAt ? ` from ${formatManilaDateTime(scheduleSummary.opens_at)} Manila time` : " immediately"}.
         </p>
-        <StudentPreviewCard preview={preview} schedule={{ opens_at: fromManilaDateTimeInput(form.opensAt), closes_at: fromManilaDateTimeInput(form.closesAt), state: data.state, timezone: "Asia/Manila" }} compact />
-        <label className="ws-check">
-          <input type="checkbox" checked={publishChecked} onChange={(event) => setPublishChecked(event.target.checked)} />
-          <span>I reviewed this student-visible preview and confirm publication.</span>
-        </label>
         <FieldError>{publishError}</FieldError>
       </ConfirmDialog>
-    </>
+      <ConfirmDialog open={rejectOpen} title="Request changes" confirmLabel="Save review note" busy={busy === "reject"}
+        onCancel={() => { if (!busy) setRejectOpen(false); }} onConfirm={() => void requestChanges()}>
+        <label className="ws-field">Review note
+          <textarea rows={3} maxLength={4000} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} />
+        </label>
+        <FieldError>{rejectError}</FieldError>
+      </ConfirmDialog>
+    </div>
   );
 }
 
+function ScopedEditor() {
+  const { id } = useParams<{ id: string }>();
+  return <ActivityEditor key={id} activityId={id} />;
+}
+
 export default function Page() {
-  return (
-    <WorkspaceSuspense label="activity editor">
-      <ActivityEditor />
-    </WorkspaceSuspense>
-  );
+  return <WorkspaceSuspense label="activity editor"><ScopedEditor /></WorkspaceSuspense>;
 }

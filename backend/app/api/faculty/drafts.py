@@ -141,6 +141,7 @@ class ApproveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirm: bool = False
     student_preview_confirmed: bool = False
+    content_version: int | None = Field(None, ge=1)
 
 
 def _validate_quiz_payload(payload: dict[str, Any]) -> None:
@@ -308,7 +309,7 @@ def approve_draft(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "already_published", "message": "This draft is already published."},
         )
-    apply_publish_rules(db, activity, user)
+    apply_publish_rules(db, activity, user, content_version=payload.content_version)
     record_audit(
         db,
         actor=user,

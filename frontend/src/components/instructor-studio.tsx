@@ -1,172 +1,259 @@
 "use client";
 
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { apiRequest, getErrorMessage } from "@/lib/api";
-import { useWorkspace } from "@/components/workspace/workspace-provider";
-import { Notice } from "@/components/workspace/ui";
-import { DataRow, InlineEmpty, PageHeader, RowSkeleton, Section, StatusBadge } from "@/components/instructor/course-ui";
+import { activityListHref } from "@/lib/instructor-activity";
 import type { ProgrammingLanguage } from "@/lib/types";
+import { retryMaterial, uploadMaterial, type MaterialList, type MaterialSummary } from "@/lib/workspace";
+import { useWorkspace } from "@/components/workspace/workspace-provider";
+import { Button, Notice, StatusChip, useApi } from "@/components/workspace/ui";
 
-type WorkspaceDocument = {
-  document_id: string;
-  version_number: number;
-  is_current: boolean;
-  archived_at: string | null;
-  title: string;
-  language: ProgrammingLanguage;
-  topic_concept: string | null;
-  processing_status: string;
-};
+const languages: Record<ProgrammingLanguage, string> = { python: "Python", cpp: "C++", java: "Java" };
 
-type WorkspaceActivity = {
-  activity_id: string;
-  source_document_id: string | null;
-  source_document_title: string | null;
-  activity_type: "challenge" | "quiz";
-  title: string | null;
-  language: ProgrammingLanguage;
-  topic_concept: string;
-  judge0_verified: boolean;
-  review_status: string;
-};
+function ready(material: MaterialSummary) {
+  return material.state === "ready" && material.is_current && !material.archived_at;
+}
 
-type Workspace = { documents: WorkspaceDocument[]; activities: WorkspaceActivity[] };
-type GeneratedDraft = { activity_id: string; activity_type: "challenge" | "quiz"; judge0_verified?: boolean };
-
-const languageName: Record<ProgrammingLanguage, string> = { cpp: "C++", python: "Python", java: "Java" };
-const ready = (document: WorkspaceDocument) =>
-  document.processing_status === "completed" && document.is_current && !document.archived_at;
-
-/** Generates private drafts from course PDFs. Review, verification and publication happen in Review drafts. */
-export default function InstructorStudio() {
-  const { courseHref } = useWorkspace();
-  const documentParam = useSearchParams().get("document");
-  const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [documentId, setDocumentId] = useState("");
-  const [language, setLanguage] = useState<ProgrammingLanguage>("python");
-  const [topic, setTopic] = useState("");
+export function GeminiActivityForm({ courseId, preselectedId }: { courseId: string; preselectedId: string | null }) {
+  const router = useRouter();
+  const { profile, setUnsaved, refreshCourses } = useWorkspace();
+  const { data, setData, error: loadError, loading, reload } = useApi<MaterialList>(
+    `/faculty/materials?course_id=${encodeURIComponent(courseId)}`, true,
+  );
+  const [pickedId, setPickedId] = useState<string | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [title, setTitle] = useState("");
+  const [kind, setKind] = useState<"quiz" | "challenge">("quiz");
+  const [language, setLanguage] = useState<ProgrammingLanguage | null>(null);
+  const [topic, setTopic] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState(2);
-  const [busy, setBusy] = useState<"" | "challenge" | "quiz">("");
-  const [generated, setGenerated] = useState<GeneratedDraft | null>(null);
+  const [instructions, setInstructions] = useState("");
+  const [busy, setBusy] = useState<"" | "upload" | "retry" | "generate">("");
   const [error, setError] = useState("");
+  const active = useRef(true);
+  const uploadButton = useRef<HTMLButtonElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const items = data?.items ?? [];
+  const sourceId = pickedId ?? preselectedId ?? "";
+  const source = items.find((item) => item.document_id === sourceId);
+  const sourceReady = Boolean(source && ready(source));
+  const effectiveLanguage = language ?? source?.language ?? profile.enrolled_language ?? "python";
+  const effectiveTopic = topic ?? source?.topic_concept ?? "";
+  const dirty = Boolean(file || title || topic !== null || language || instructions || kind !== "quiz" || difficulty !== 2);
 
-  const choose = useCallback((document: WorkspaceDocument | undefined) => {
-    setDocumentId(document?.document_id ?? "");
-    if (document) {
-      setLanguage(document.language);
-      setTopic(document.topic_concept || "");
-    }
-  }, []);
-
-  const load = useCallback(async () => {
-    const result = await apiRequest<Workspace>("/instructor/workspace");
-    setWorkspace(result);
-    return result;
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
   }, []);
 
   useEffect(() => {
-    let active = true;
-    // The state updates follow the asynchronous workspace request.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    load()
-      .then((result) => {
-        if (!active) return;
-        const usable = result.documents.filter(ready);
-        choose(usable.find((item) => item.document_id === documentParam) || usable[0]);
-      })
-      .catch((caught) => { if (active) setError(getErrorMessage(caught)); });
-    return () => { active = false; };
-  }, [choose, documentParam, load]);
+    setUnsaved(dirty || Boolean(busy), "You have an activity form in progress. Leave this form?");
+    return () => setUnsaved(false);
+  }, [busy, dirty, setUnsaved]);
 
-  async function generate(kind: "challenge" | "quiz", event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
-    if (!documentId) { setError("Choose a processed course PDF first."); return; }
-    setBusy(kind); setError(""); setGenerated(null);
-    try {
-      const data = new FormData();
-      data.append("topic_query", topic.trim());
-      data.append("language", language);
-      data.append("difficulty", String(difficulty));
-      setGenerated(await apiRequest<GeneratedDraft>(`/instructor/documents/${documentId}/generate-${kind}`, { method: "POST", body: data }));
-      await load();
-    } catch (caught) { setError(getErrorMessage(caught)); }
-    finally { setBusy(""); }
+  useEffect(() => {
+    if (source?.state !== "processing" || loading || loadError) return;
+    const timer = window.setTimeout(reload, 2000);
+    return () => window.clearTimeout(timer);
+  }, [loadError, loading, reload, source?.state]);
+
+  function acceptMaterial(material: MaterialSummary) {
+    setData((current) => current
+      ? { ...current, items: [material, ...current.items.filter((item) => item.document_id !== material.document_id)] }
+      : current);
+    setPickedId(material.document_id);
   }
 
-  const documents = workspace?.documents.filter(ready) ?? [];
-  const drafts = workspace?.activities.filter((activity) => activity.source_document_id) ?? [];
-  const reviewHref = (activity: { activity_id: string; review_status?: string }) =>
-    courseHref(activity.review_status && activity.review_status !== "draft"
-      ? `/instructor/activities/${activity.activity_id}`
-      : `/instructor/review/${activity.activity_id}`);
+  async function submitUpload(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!file || !data || busy) return;
+    if (title.trim().length < 2) {
+      setError("Enter a PDF title of at least 2 characters.");
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith(".pdf") || file.size > data.max_upload_bytes) {
+      setError(`Choose a PDF up to ${data.max_upload_bytes / 1024 ** 2} MiB.`);
+      return;
+    }
+    const form = new FormData();
+    form.set("course_id", courseId);
+    form.set("title", title.trim());
+    form.set("language_tag", effectiveLanguage);
+    if (effectiveTopic.trim()) form.set("topic_concept", effectiveTopic.trim());
+    form.set("file", file);
+    setBusy("upload");
+    setError("");
+    try {
+      const result = await uploadMaterial("faculty", form);
+      if (!active.current) return;
+      acceptMaterial(result.material);
+      setUploadOpen(false);
+      setFile(null);
+      setTitle("");
+      void refreshCourses();
+    } catch (caught) {
+      setError(getErrorMessage(caught));
+    } finally {
+      setBusy("");
+    }
+  }
 
-  return <>
-    <PageHeader title="Generate from materials"
-      subtitle="Create a private challenge or quiz draft from a course PDF. You review, verify and publish it in Review drafts."
-      actions={<Link className="ic-button" href={courseHref("/instructor/materials")}>Materials library</Link>} />
+  async function retryIndexing() {
+    if (!source?.can_retry || busy) return;
+    setBusy("retry");
+    setError("");
+    try {
+      const result = await retryMaterial("faculty", source.document_id);
+      if (active.current) acceptMaterial(result.material);
+    } catch (caught) {
+      setError(getErrorMessage(caught));
+    } finally {
+      setBusy("");
+    }
+  }
 
-    {error ? <Notice tone="error" onDismiss={() => setError("")}>{error}</Notice> : null}
-    {generated ? <Notice tone="success">
-      {generated.activity_type === "quiz"
-        ? "Your quiz draft is ready. Check every question and answer before publishing."
-        : generated.judge0_verified
-          ? "Your challenge draft is ready and its reference solution passed Judge0."
-          : "Your challenge draft is ready. Judge0 has not verified it yet; retry verification while reviewing."}{" "}
-      <Link href={reviewHref(generated)}>Review this draft</Link>
-    </Notice> : null}
+  async function generate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!sourceReady || uploadOpen || busy) return;
+    if (effectiveTopic.trim().length < 2) {
+      setError("Enter a topic of at least 2 characters.");
+      return;
+    }
+    const form = new FormData();
+    form.set("topic_query", effectiveTopic.trim());
+    form.set("language", effectiveLanguage);
+    form.set("difficulty", String(difficulty));
+    if (instructions.trim()) form.set("instructor_instructions", instructions);
+    setBusy("generate");
+    setError("");
+    try {
+      const result = await apiRequest<{ activity_id: string }>(
+        `/instructor/documents/${sourceId}/generate-${kind}`,
+        { method: "POST", body: form },
+      );
+      if (!active.current) return;
+      setUnsaved(false);
+      router.replace(activityListHref(courseId, result.activity_id));
+      void refreshCourses();
+      return;
+    } catch (caught) {
+      setError(getErrorMessage(caught));
+      setBusy("");
+    }
+  }
 
-    <Section title="New draft">
-      {workspace === null ? <RowSkeleton /> : documents.length === 0 ? <InlineEmpty>
-        No processed PDFs yet. <Link href={courseHref("/instructor/materials")}>Upload one in Materials</Link>.
-      </InlineEmpty> : <form className="ws-form-grid" onSubmit={(event) => void generate("challenge", event)}>
-        <div className="ws-field full">
-          <label htmlFor="studio-document">Course PDF</label>
-          <select id="studio-document" required value={documentId}
-            onChange={(event) => choose(documents.find((item) => item.document_id === event.target.value))}>
-            {documents.map((document) => <option key={document.document_id} value={document.document_id}>
-              {document.title} · v{document.version_number}
-            </option>)}
-          </select>
-        </div>
-        <div className="ws-field full">
-          <label htmlFor="studio-topic">Topic or concept</label>
-          <input id="studio-topic" required minLength={2} maxLength={100} value={topic}
-            onChange={(event) => setTopic(event.target.value)} placeholder="For example, loops" />
-        </div>
+  return (
+    <>
+      {error ? <Notice tone="error" onDismiss={() => setError("")}>{error}</Notice> : null}
+      <section className="ws-panel ic-authoring-source" aria-labelledby="gemini-source-heading">
+        <div className="ws-panel-head"><h2 id="gemini-source-heading">Source PDF</h2></div>
         <div className="ws-field">
-          <label htmlFor="studio-language">Language</label>
-          <select id="studio-language" value={language} onChange={(event) => setLanguage(event.target.value as ProgrammingLanguage)}>
-            {Object.entries(languageName).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          <label htmlFor="gemini-document">Course PDF</label>
+          <select id="gemini-document" value={sourceReady ? sourceId : ""} disabled={Boolean(busy) || !data}
+            onChange={(event) => {
+              setPickedId(event.target.value);
+              setError("");
+            }}>
+            <option value="">Choose a ready PDF</option>
+            {items.filter(ready).map((item) => <option key={item.document_id} value={item.document_id}>{item.title}</option>)}
           </select>
+          {!data && loading ? <p role="status" className="ws-muted">Loading course PDFs…</p> : null}
+          {source ? (
+            <div className="ws-stack" role="status">
+              <p><strong>{source.title}</strong> <StatusChip state={source.state} /></p>
+              {source.state === "processing" ? <p className="ws-muted">Indexing the PDF. You can fill in the activity while you wait.</p> : null}
+              {!sourceReady && source.processing_error ? <p>{source.processing_error}</p> : null}
+            </div>
+          ) : sourceId && data && !loading ? <p role="status">This PDF is unavailable. Choose or upload a ready PDF for this course.</p> : null}
         </div>
-        <div className="ws-field">
-          <label htmlFor="studio-difficulty">Difficulty</label>
-          <select id="studio-difficulty" value={difficulty} onChange={(event) => setDifficulty(Number(event.target.value))}>
-            {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>Level {value}</option>)}
-          </select>
+        {loadError ? <Notice tone="warning">{loadError} <Button onClick={reload}>Retry loading PDFs</Button></Notice> : null}
+        <div className="ws-inline-actions">
+          {!uploadOpen ? <button type="button" className="button button-outline" ref={uploadButton} onClick={() => {
+            setUploadOpen(true);
+            setError("");
+            window.requestAnimationFrame(() => fileInput.current?.focus());
+          }} disabled={!data || Boolean(busy)}>Upload PDF</button> : null}
+          {source?.can_retry ? <Button onClick={() => void retryIndexing()} disabled={Boolean(busy)}>
+            {busy === "retry" ? "Retrying…" : "Retry indexing"}
+          </Button> : null}
         </div>
-        <div className="ws-inline-actions full">
-          <button className="ic-button ic-primary" type="submit" disabled={busy !== ""}>
-            {busy === "challenge" ? "Generating and checking…" : "Generate challenge draft"}
-          </button>
-          <button className="ic-button" type="button" disabled={busy !== ""} onClick={() => void generate("quiz")}>
-            {busy === "quiz" ? "Generating…" : "Generate quiz draft"}
-          </button>
-        </div>
-      </form>}
-    </Section>
-
-    <Section title="Generated from your materials" action={<Link href={courseHref("/instructor/review")}>Review drafts</Link>}>
-      {workspace === null ? <RowSkeleton /> : drafts.length === 0
-        ? <InlineEmpty>Drafts you generate appear here until you publish them.</InlineEmpty>
-        : <ul className="ic-list">{drafts.map((activity) => <DataRow key={activity.activity_id}
-            title={activity.title || "Untitled draft"} href={reviewHref(activity)}
-            description={`${activity.activity_type === "quiz" ? "Quiz" : "Coding challenge"} · ${languageName[activity.language]} · ${activity.topic_concept}${activity.source_document_title ? ` · from ${activity.source_document_title}` : ""}`}
-            action={<StatusBadge tone={activity.review_status === "draft" ? "warning" : "dot"}>
-              {activity.review_status === "draft" ? "Draft" : "Published"}
-            </StatusBadge>} />)}</ul>}
-    </Section>
-  </>;
+        {uploadOpen ? (
+          <form className="ws-form-grid" onSubmit={(event) => void submitUpload(event)}>
+            <div className="ws-field">
+              <label htmlFor="gemini-file">PDF file</label>
+              <input ref={fileInput} id="gemini-file" type="file" accept=".pdf,application/pdf" required disabled={Boolean(busy)}
+                onChange={(event) => {
+                  const next = event.target.files?.[0] ?? null;
+                  setFile(next);
+                  if (next && !title) setTitle(next.name.replace(/\.pdf$/i, "").slice(0, 255));
+                }} />
+              <p className="ws-muted">Use a PDF with selectable text. Uploaded PDFs are saved in Materials.</p>
+            </div>
+            <div className="ws-field">
+              <label htmlFor="gemini-file-title">PDF title</label>
+              <input id="gemini-file-title" value={title} minLength={2} maxLength={255} required
+                onChange={(event) => setTitle(event.target.value)} disabled={Boolean(busy)} />
+            </div>
+            <div className="ws-inline-actions full">
+              <Button type="submit" variant="primary" disabled={Boolean(busy) || !file}>
+                {busy === "upload" ? "Uploading and indexing…" : "Upload and index"}
+              </Button>
+              <Button onClick={() => {
+                setUploadOpen(false);
+                setFile(null);
+                setTitle("");
+                setError("");
+                window.requestAnimationFrame(() => uploadButton.current?.focus());
+              }} disabled={Boolean(busy)}>Cancel upload</Button>
+            </div>
+          </form>
+        ) : null}
+      </section>
+      <section className="ws-panel" aria-labelledby="gemini-details-heading">
+        <div className="ws-panel-head"><h2 id="gemini-details-heading">Activity details</h2></div>
+        <form className="ws-form-grid" onSubmit={(event) => void generate(event)}>
+          <div className="ws-field">
+            <label htmlFor="gemini-type">Type</label>
+            <select id="gemini-type" value={kind} onChange={(event) => setKind(event.target.value as typeof kind)} disabled={busy === "generate"}>
+              <option value="quiz">Quiz</option>
+              <option value="challenge">Coding challenge</option>
+            </select>
+          </div>
+          <div className="ws-field">
+            <label htmlFor="gemini-topic">Topic or concept</label>
+            <input id="gemini-topic" value={effectiveTopic} onChange={(event) => setTopic(event.target.value)}
+              required minLength={2} maxLength={100} disabled={busy === "generate"} />
+          </div>
+          <div className="ws-field">
+            <label htmlFor="gemini-language">Language</label>
+            <select id="gemini-language" value={effectiveLanguage} onChange={(event) => setLanguage(event.target.value as ProgrammingLanguage)} disabled={busy === "generate"}>
+              {Object.entries(languages).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div className="ws-field">
+            <label htmlFor="gemini-difficulty">Difficulty</label>
+            <select id="gemini-difficulty" value={difficulty} onChange={(event) => setDifficulty(Number(event.target.value))} disabled={busy === "generate"}>
+              {[1, 2, 3, 4, 5].map((level) => <option key={level} value={level}>Level {level}</option>)}
+            </select>
+          </div>
+          <div className="ws-field full">
+            <label htmlFor="gemini-instructions">Instructions for Gemini (optional)</label>
+            <textarea id="gemini-instructions" rows={5} maxLength={4000} value={instructions}
+              placeholder={kind === "quiz" ? "For example, write six questions on tracing a loop." : "For example, ask students to solve the task with one loop."}
+              onChange={(event) => setInstructions(event.target.value)} disabled={busy === "generate"} />
+          </div>
+          <div className="ws-inline-actions full">
+            <Button type="submit" variant="primary" disabled={!sourceReady || uploadOpen || Boolean(busy)}>
+              {busy === "generate" ? "Generating draft…" : "Generate draft"}
+            </Button>
+            <span className="ws-muted" role="status">
+              {busy === "generate" ? "Gemini is creating your private draft." : "You can edit the draft before publishing."}
+            </span>
+          </div>
+        </form>
+      </section>
+    </>
+  );
 }

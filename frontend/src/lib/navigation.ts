@@ -16,7 +16,7 @@ export const roleLabels = { student: "Student", instructor: "Instructor", admin:
 export const instructorNavigation = [
   { title: "Teach", links: [
     ["Dashboard", "/instructor", "home"], ["Activities", "/instructor/activities", "code"],
-    ["Workshops", "/workshops", "users"], ["Review drafts", "/instructor/review", "check"],
+    ["Workshops", "/workshops", "users"],
     ["Materials", "/instructor/materials", "file"],
     ["Exams", "/instructor/exams", "clipboard"], ["Announcements", "/instructor/announcements", "bell"],
   ] },

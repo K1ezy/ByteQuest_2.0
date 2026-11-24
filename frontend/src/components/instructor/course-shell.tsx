@@ -48,8 +48,8 @@ export function CourseSwitcher({ courses, selected, onSelect }: {
 }
 
 /** Phone-only: the full instructor menu in a bottom sheet, so no page is unreachable on a phone. */
-function MoreNavigation({ pathname, courseHref, hiddenLinks }: {
-  pathname: string; courseHref: (href: string) => string; hiddenLinks?: readonly string[];
+function MoreNavigation({ pathname, courseHref, hiddenLinks, canNavigate }: {
+  pathname: string; courseHref: (href: string) => string; hiddenLinks?: readonly string[]; canNavigate?: () => boolean;
 }) {
   const [open, setOpen] = useState(false);
   const sheet = useRef<HTMLDialogElement>(null);
@@ -73,7 +73,8 @@ function MoreNavigation({ pathname, courseHref, hiddenLinks }: {
       onClick={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
       <span className="bq-sheet-handle" aria-hidden="true" />
       <nav className="ic-sidebar" aria-label="All instructor pages">
-        <CourseNavigationLinks pathname={pathname} courseHref={courseHref} hiddenLinks={hiddenLinks} onNavigate={() => setOpen(false)} />
+        <CourseNavigationLinks pathname={pathname} courseHref={courseHref} hiddenLinks={hiddenLinks}
+          canNavigate={canNavigate} onNavigate={() => setOpen(false)} />
       </nav>
       <button type="button" className="ic-button" onClick={() => setOpen(false)}>Close</button>
     </dialog> : null}
@@ -82,22 +83,24 @@ function MoreNavigation({ pathname, courseHref, hiddenLinks }: {
 
 const workspaceHref = (href: string) => href;
 
-export function InstructorShell({ children, profile, scope, courseHref = workspaceHref, hiddenLinks }: {
+export function InstructorShell({ children, profile, scope, courseHref = workspaceHref, hiddenLinks, canNavigate }: {
   children: ReactNode;
   profile: Profile;
   scope: ReactNode;
   courseHref?: (href: string) => string;
   hiddenLinks?: readonly string[];
+  canNavigate?: () => boolean;
 }) {
   const pathname = usePathname();
-  const links = <CourseNavigationLinks pathname={pathname} courseHref={courseHref} hiddenLinks={hiddenLinks} />;
+  const links = <CourseNavigationLinks pathname={pathname} courseHref={courseHref} hiddenLinks={hiddenLinks} canNavigate={canNavigate} />;
   return <div className="ic-shell">
     <header className="ic-topbar bq-app-topbar">
-      <Link className="ic-brand" href={courseHref("/instructor")}>ByteQuest</Link>
+      <Link className="ic-brand" href={courseHref("/instructor")} onNavigate={(event) => { if (canNavigate?.() === false) event.preventDefault(); }}>ByteQuest</Link>
       {scope}
       <span className="ic-spacer" />
       <ChatShell />
       <Link className="ic-button ic-icon-button" href={courseHref("/instructor#instructor-recent")}
+        onNavigate={(event) => { if (canNavigate?.() === false) event.preventDefault(); }}
         aria-label="Recent course activity"><InstructorIcon name="bell" /></Link>
       <AccountMenu key={pathname} profile={profile} />
     </header>
@@ -106,10 +109,11 @@ export function InstructorShell({ children, profile, scope, courseHref = workspa
         <nav className="ic-sidebar" aria-label="Instructor">{links}</nav>
         <nav className="ic-mobile-nav" id="app-navigation" aria-label="Instructor navigation">
           {primaryNavigation.instructor.map(([href, , label]) => <Link key={href} href={courseHref(href)}
+            onNavigate={(event) => { if (canNavigate?.() === false) event.preventDefault(); }}
             aria-current={isCurrentInstructorPage(pathname, href) ? "page" : undefined}>
             <AppNavIcon href={href} />{label}
           </Link>)}
-          <MoreNavigation pathname={pathname} courseHref={courseHref} hiddenLinks={hiddenLinks} />
+          <MoreNavigation pathname={pathname} courseHref={courseHref} hiddenLinks={hiddenLinks} canNavigate={canNavigate} />
         </nav>
       </DockableNavigation>
       <main id="main-content" className="ic-body" tabIndex={-1}>{children}</main>
@@ -118,10 +122,11 @@ export function InstructorShell({ children, profile, scope, courseHref = workspa
 }
 
 export function InstructorCourseShell({ children }: { children: ReactNode }) {
-  const { courseHref, courseId, courses, setCourse, profile, modelEvaluationAvailable } = useWorkspace();
+  const { courseHref, courseId, courses, setCourse, profile, modelEvaluationAvailable, hasUnsaved } = useWorkspace();
   // The page itself stays reachable from Student Progress and by its address (ML plan D9).
   const hiddenLinks = modelEvaluationAvailable === false ? ["/instructor/ml"] : undefined;
   return <InstructorShell profile={profile} courseHref={courseHref} hiddenLinks={hiddenLinks}
+    canNavigate={() => !hasUnsaved || window.confirm("Some changes are still unsaved. Leave this page?")}
     scope={<CourseSwitcher courses={courses} selected={courseId} onSelect={setCourse} />}>
     {children}
   </InstructorShell>;
