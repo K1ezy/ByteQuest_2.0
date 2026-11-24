@@ -10,6 +10,8 @@ type Registration = {
   yearLevel: number;
   blockSection: string;
   role?: "student" | "instructor";
+  /** The optional research answer from the sign-up Terms step; students only. */
+  research?: boolean;
 };
 
 function validatedSignup(email: string, password: string, username: string, registration: Registration) {
@@ -45,7 +47,8 @@ export async function signUpStudent(email: string, password: string, username: s
   const result = await getSupabase().auth.signUp({
     email: fields.email, password, options: { data: {
       username: fields.username, school_id: fields.schoolId,
-      ...(fields.isStudent ? { year_level: registration.yearLevel, block_section: registration.blockSection }
+      ...(fields.isStudent ? { year_level: registration.yearLevel, block_section: registration.blockSection,
+        research_consent: registration.research ? "accepted" : "declined" }
         : { registration_role: registration.role }),
     } },
   });

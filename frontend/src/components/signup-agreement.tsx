@@ -42,15 +42,18 @@ function PolicyPanel({ kind, label, helpId, reachedEnd, onReachEnd }: {
   );
 }
 
-export function SignupAgreement({ busy, error, onAgree, onDisagree, recoveryActions }: {
+export function SignupAgreement({ busy, error, onAgree, onDisagree, recoveryActions, askResearch = false }: {
   busy: boolean;
   error: string | null;
-  onAgree: () => void;
+  /** research is the optional study answer; always false when askResearch is off. */
+  onAgree: (research: boolean) => void;
   onDisagree: () => void;
   recoveryActions?: ReactNode;
+  askResearch?: boolean;
 }) {
   const [termsChecked, setTermsChecked] = useState(false);
   const [privacyChecked, setPrivacyChecked] = useState(false);
+  const [researchChecked, setResearchChecked] = useState(false);
   const [termsRead, setTermsRead] = useState(false);
   const [privacyRead, setPrivacyRead] = useState(false);
   const termsHelpId = useId();
@@ -59,7 +62,7 @@ export function SignupAgreement({ busy, error, onAgree, onDisagree, recoveryActi
   return (
     <form className="auth-agreement" onSubmit={(event) => {
       event.preventDefault();
-      if (termsChecked && privacyChecked && !busy) onAgree();
+      if (termsChecked && privacyChecked && !busy) onAgree(askResearch && researchChecked);
     }}>
       <p className="text-sm text-slate-700">Read each document to the end and check both boxes to create your account.</p>
       <div className="auth-agreement-documents">
@@ -78,6 +81,16 @@ export function SignupAgreement({ busy, error, onAgree, onDisagree, recoveryActi
           I acknowledge the Privacy Policy
         </label>
       </fieldset>
+      {askResearch && (
+        <fieldset className="auth-agreement-checks" aria-label="Optional research study">
+          <label>
+            <input type="checkbox" checked={researchChecked} disabled={!privacyRead || busy} aria-describedby={privacyHelpId}
+              onChange={(event) => setResearchChecked(event.target.checked)} />
+            Optional: use my practice results, under a research code, for the classroom study described in section VI of the Privacy Policy
+          </label>
+          <p className="text-xs text-slate-600">Leaving this unchecked changes nothing about your grades, XP or access. You can change it anytime in Research participation.</p>
+        </fieldset>
+      )}
       {error && (
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
           <p role="alert">{error}</p>

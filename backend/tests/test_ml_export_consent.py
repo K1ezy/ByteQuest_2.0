@@ -180,19 +180,21 @@ def test_documented_exports_require_latest_current_consent(tmp_path: Path) -> No
                 # The script writes the same rows as CSVs the trainer reads.
                 assert export_ml_dataset.export(
                     tmp_path, version=current_version, session_factory=session_factory
-                ) == (2, 2)
-                with (tmp_path / "attempts.csv").open(encoding="utf-8") as handle:
+                ) == (2, 2, 0)  # quiz-only fixture: history rows, no challenge to predict
+                with (tmp_path / "data" / "attempts.csv").open(encoding="utf-8") as handle:
                     exported_rows = list(csv.DictReader(handle))
                 assert {row["student_id"] for row in exported_rows} == {
                     codes[students["accepted"][0]], codes[students["renewed"][0]]
                 }
                 # The trainer's own validation accepts the files as written.
-                assert len(_validate_training_frame(pd.read_csv(tmp_path / "attempts.csv"))) == 2
-                assert len(_validate_hint_frame(pd.read_csv(tmp_path / "hints.csv"))) == 2
+                assert len(_validate_training_frame(pd.read_csv(tmp_path / "data" / "attempts.csv"))) == 2
+                assert len(_validate_hint_frame(pd.read_csv(tmp_path / "data" / "hints.csv"))) == 2
                 assert export_ml_dataset.export(
                     tmp_path, version="no-approved-version", session_factory=session_factory
-                ) == (0, 0)
-                assert (tmp_path / "hints.csv").read_text(encoding="utf-8").startswith("id,student_id")
+                ) == (0, 0, 0)
+                assert (tmp_path / "data" / "hints.csv").read_text(encoding="utf-8").startswith("id,student_id")
+                assert (tmp_path / "ten_model_inputs" / "ten_model_inputs.csv").read_text(
+                    encoding="utf-8").startswith("student_id,course_id,language,activity_id,first_submission_passed,")
 
                 assert destroy_research_link.destroy(confirm=False, session_factory=session_factory) >= len(codes)
                 assert connection.execute(text("SELECT count(*) FROM bytequest_private.research_codes")).scalar_one() >= len(codes)

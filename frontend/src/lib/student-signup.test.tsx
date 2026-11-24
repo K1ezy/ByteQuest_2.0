@@ -23,9 +23,20 @@ it("saves the normalized public username with signup for immediate and email-con
     expect(mocks.check).toHaveBeenCalledWith("adahandle");
     expect(mocks.signUp).toHaveBeenLastCalledWith({
       email: "learner@example.test", password: "password",
-      options: { data: { username: "adahandle", school_id: "26-00123", year_level: 3, block_section: "F" } },
+      options: { data: { username: "adahandle", school_id: "26-00123", year_level: 3, block_section: "F",
+        research_consent: "declined" } },
     });
   }
+});
+
+it("carries the optional sign-up research answer for students only", async () => {
+  mocks.check.mockResolvedValue(true);
+  mocks.signUp.mockResolvedValue({ data: { session: null }, error: null });
+  await signUpStudent("learner@example.test", "password", "adahandle", { ...registration, research: true });
+  expect(mocks.signUp.mock.lastCall?.[0].options.data.research_consent).toBe("accepted");
+  await signUpStudent("staff@example.test", "password", "staffhandle",
+    { schoolId: "T-1", yearLevel: 0, blockSection: "", role: "instructor", research: true });
+  expect(mocks.signUp.mock.lastCall?.[0].options.data).not.toHaveProperty("research_consent");
 });
 
 it("rejects invalid or unavailable names before creating an Auth user", async () => {

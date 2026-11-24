@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiRequest, getErrorMessage } from "@/lib/api";
+import { getSupabase } from "@/lib/supabase";
 
 export interface ConsentStatus {
   available: boolean;
@@ -38,7 +39,22 @@ export function ResearchConsentCard() {
 
   useEffect(() => {
     let active = true;
-    getConsent().then((result) => { if (active) setStatus(result); }).catch(() => undefined);
+    (async () => {
+      const result = await getConsent();
+      // A first-ever answer given at sign-up is recorded here, the first time the student is signed in
+      // (email confirmation can mean there was no session at sign-up). It never overrides a recorded answer.
+      // shortcut: if the consent version changes between sign-up and first sign-in, the answer applies to the new
+      // version; send the version with sign-up if that window ever matters.
+      if (result.available && result.version && result.choice === null && !result.previous_version) {
+        const signup = await getSupabase().auth.getSession()
+          .then(({ data }) => data.session?.user.user_metadata?.research_consent, () => undefined);
+        if (signup === "accepted" || signup === "declined") {
+          await saveConsent(signup, result.version);
+          return;
+        }
+      }
+      if (active) setStatus(result);
+    })().catch(() => undefined);
     return () => { active = false; };
   }, []);
 

@@ -54,13 +54,27 @@ or withdrawal. Run it from `backend/` with the database owner's `DATABASE_URL`:
 .venv\Scripts\python -m scripts.export_ml_dataset --research-approved
 ```
 
-It writes `ml_pipeline/data/attempts.csv` (one row per graded, non-exam
-attempt) and `ml_pipeline/data/hints.csv` (one row per hint reveal), which git
-ignores. The ten features are not columns in these files: the trainer derives
-them from this history at each target's t0 with the same code the live
-predictor uses, so precomputing them elsewhere could drift from what is served.
+It writes three files, all ignored by git:
+
+| File | Contents |
+| --- | --- |
+| `ml_pipeline/data/attempts.csv` | One row per graded, non-exam attempt. Training input. |
+| `ml_pipeline/data/hints.csv` | One row per hint reveal. Training input. |
+| `ml_pipeline/ten_model_inputs/ten_model_inputs.csv` | One row per learner and programming challenge: `student_id` (research code), `course_id`, `language`, `activity_id`, `first_submission_passed` (the outcome), the ten inputs in `FEATURE_NAMES` order, and `live_eligible`. |
+
+`ten_model_inputs.csv` is the readable copy of exactly what the two models see.
+`train_compare.ten_model_input_table` builds it with the live predictor's
+feature code, and `prepare_ml_dataset` trains from the same table, so the file
+can't drift from training or serving. A blank input means the learner had no
+history for it yet; training fills it with the training-partition median.
 The SQL is `ATTEMPTS_SQL` and `HINTS_SQL` in
 [`backend/scripts/export_ml_dataset.py`](../backend/scripts/export_ml_dataset.py).
+
+Students give or refuse research consent with an optional checkbox in the
+sign-up Terms step, described in section VI of the Privacy Policy. Their answer
+is recorded the first time they are signed in, as their first answer to the
+current form. Students with accounts from before sign-up asked are asked once
+on the Dashboard. Either way they can change it in Research participation.
 
 Released exam results are not model features. Student Progress still shows
 them to instructors.

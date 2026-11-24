@@ -146,3 +146,17 @@ def test_training_rejects_ids_that_encode_an_account():
         _validate_training_frame(pd.DataFrame([row]))
     row["student_id"] = "rs_3f2a9c0d1e4b5a6c7d8e"
     assert len(_validate_training_frame(pd.DataFrame([row]))) == 1
+
+
+def test_ten_model_input_table_is_what_training_uses() -> None:
+    from ml_pipeline.train_compare import generate_synthetic_thesis_dataset, ten_model_input_table
+
+    attempts, hints = generate_synthetic_thesis_dataset(num_students=6, tasks_per_student=5)
+    table = ten_model_input_table(attempts, hints)
+    X, y, groups, eligible = prepare_ml_dataset(attempts, hints)
+    assert list(table.columns[5:15]) == list(FEATURE_NAMES)
+    pd.testing.assert_frame_equal(table[list(FEATURE_NAMES)].astype(float).reset_index(drop=True), X)
+    assert table["first_submission_passed"].tolist() == y.tolist()
+    assert table["student_id"].tolist() == groups.tolist()
+    assert table["live_eligible"].tolist() == eligible.tolist()
+    assert ten_model_input_table(attempts.iloc[0:0]).empty

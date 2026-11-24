@@ -124,11 +124,15 @@ it("requires both policy panels and acknowledgments on each visit and submits on
     expect(check.disabled).toBe(false);
     fireEvent.click(check);
   }
+  const research = screen.getByRole<HTMLInputElement>("checkbox", { name: /^Optional: use my practice results/ });
+  expect(research.disabled).toBe(false);
+  expect(research.checked).toBe(false);
   const submit = screen.getByRole<HTMLButtonElement>("button", { name: "I agree" });
-  expect(submit.disabled).toBe(false);
+  expect(submit.disabled).toBe(false); // research stays optional
+  fireEvent.click(research);
   fireEvent.click(submit);
   fireEvent.click(submit);
-  expect(auth.signUp).toHaveBeenCalledExactlyOnceWith("learner@example.test", "password", "AdaHandle", { schoolId: "26-00123", yearLevel: 3, blockSection: "F" });
+  expect(auth.signUp).toHaveBeenCalledExactlyOnceWith("learner@example.test", "password", "AdaHandle", { schoolId: "26-00123", yearLevel: 3, blockSection: "F", research: true });
 });
 
 it("unlocks acknowledgment when the document already fits", async () => {

@@ -1,13 +1,21 @@
 """Export the de-identified training dataset for the two forecast models.
 
-Writes attempts.csv and hints.csv, the raw history the trainer turns into the
-ten manuscript features (feature_engineering.FEATURE_NAMES). Features are not
-exported precomputed: train_compare.py derives them per row at each target's
-t0, the same code the live predictor runs, so training and serving can't drift.
+Writes, under ml_pipeline/:
+
+    data/attempts.csv                        raw graded attempts (training input)
+    data/hints.csv                           raw hint reveals (training input)
+    ten_model_inputs/ten_model_inputs.csv    one row per learner and challenge: the
+                                             outcome and the ten manuscript inputs
+
+The ten inputs are calculated by the trainer's own ten_model_input_table, which
+calls the live predictor's feature code, so the table always matches what the
+models are trained and served on. It is the readable copy; training reads the
+raw files.
 
 Only learners whose latest consent event accepts the current
-RESEARCH_CONSENT_VERSION appear, keyed by their research code. Needs the
-database owner's DATABASE_URL and institutional approval. Run from backend/:
+RESEARCH_CONSENT_VERSION appear, keyed by their research code. Students answer
+at sign-up (an optional checkbox in the Terms step) or once on the Dashboard.
+Needs the database owner's DATABASE_URL and institutional approval. Run from backend/:
 
     .venv\\Scripts\\python -m scripts.export_ml_dataset --research-approved
 
@@ -20,14 +28,19 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from pathlib import Path
+
+import pandas as pd
 
 from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import SessionLocal
 
-DEFAULT_OUT = Path(__file__).resolve().parents[2] / "ml_pipeline" / "data"
+ML_PIPELINE = Path(__file__).resolve().parents[2] / "ml_pipeline"
+sys.path.insert(0, str(ML_PIPELINE.parent))
+from ml_pipeline.train_compare import ten_model_input_table  # noqa: E402
 
 _LATEST_CONSENT = """
 WITH latest_consent AS (
@@ -92,29 +105,34 @@ def _write(db, sql: str, version: str, path: Path) -> int:
     return len(rows)
 
 
-def export(out_dir: Path, *, version: str, session_factory=SessionLocal) -> tuple[int, int]:
-    """Write attempts.csv and hints.csv into out_dir; returns their row counts."""
+def export(root: Path, *, version: str, session_factory=SessionLocal) -> tuple[int, int, int]:
+    """Write the three CSVs under root (normally ml_pipeline/); returns attempt, hint and table row counts."""
     if not version.strip():
         raise ValueError("RESEARCH_CONSENT_VERSION is empty, so no learner can have consented.")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    data, inputs = root / "data", root / "ten_model_inputs"
+    data.mkdir(parents=True, exist_ok=True)
+    inputs.mkdir(parents=True, exist_ok=True)
     with session_factory() as db:
-        attempts = _write(db, ATTEMPTS_SQL, version, out_dir / "attempts.csv")
-        hints = _write(db, HINTS_SQL, version, out_dir / "hints.csv")
-    return attempts, hints
+        attempts = _write(db, ATTEMPTS_SQL, version, data / "attempts.csv")
+        hints = _write(db, HINTS_SQL, version, data / "hints.csv")
+    table = ten_model_input_table(pd.read_csv(data / "attempts.csv"), pd.read_csv(data / "hints.csv"))
+    table.to_csv(inputs / "ten_model_inputs.csv", index=False)
+    return attempts, hints, len(table)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--research-approved", action="store_true",
                         help="attest that institutional approval and consent are in place")
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help=f"output folder (default {DEFAULT_OUT})")
+    parser.add_argument("--out", type=Path, default=ML_PIPELINE, help=f"root folder (default {ML_PIPELINE})")
     args = parser.parse_args()
     if not args.research_approved:
         parser.error("Real student data needs --research-approved after institutional approval.")
     if not settings.RESEARCH_CONSENT_ACTIVE:
         parser.error("RESEARCH_CONSENT_ACTIVE is off, so the study is closed.")
-    attempts, hints = export(args.out, version=settings.RESEARCH_CONSENT_VERSION)
-    print(f"Wrote {attempts} attempt rows and {hints} hint rows to {args.out} "
+    attempts, hints, rows = export(args.out, version=settings.RESEARCH_CONSENT_VERSION)
+    print(f"Wrote {attempts} attempt rows and {hints} hint rows to {args.out / 'data'}, and "
+          f"{rows} ten-input rows to {args.out / 'ten_model_inputs' / 'ten_model_inputs.csv'} "
           f"(consent version {settings.RESEARCH_CONSENT_VERSION}).")
 
 

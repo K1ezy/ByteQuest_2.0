@@ -3,6 +3,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 
 const api = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("@/lib/api", async (orig) => ({ ...await orig<typeof import("@/lib/api")>(), apiRequest: api.request }));
+const auth = vi.hoisted(() => ({ metadata: {} as Record<string, unknown> }));
+vi.mock("@/lib/supabase", () => ({ getSupabase: () => ({ auth: { getSession: () =>
+  Promise.resolve({ data: { session: { user: { user_metadata: auth.metadata } } } }) } }) }));
 
 import { ResearchConsentCard } from "./research-consent";
 import ResearchPage from "@/app/(workspace)/account/research/page";
@@ -15,7 +18,23 @@ function serving(state: ReturnType<typeof status> & { previous_version?: string 
     Promise.resolve(init?.method === "POST" ? { ok: true } : state));
 }
 
-beforeEach(() => api.request.mockReset());
+beforeEach(() => { api.request.mockReset(); auth.metadata = {}; });
+
+it("records the sign-up answer once, without asking again", async () => {
+  auth.metadata = { research_consent: "accepted" };
+  serving(status(null));
+  const card = render(<ResearchConsentCard />);
+  await waitFor(() => expect(api.request).toHaveBeenCalledWith("/pilot/research/consent",
+    { method: "POST", body: JSON.stringify({ choice: "accepted", document_version: "dev-placeholder" }) }));
+  expect(card.container.innerHTML).toBe("");
+  cleanup();
+  // A changed form is asked again: the sign-up answer never carries over to it.
+  api.request.mockReset();
+  serving({ ...status(null), previous_version: "form-v1" });
+  render(<ResearchConsentCard />);
+  expect(await screen.findByText(/your earlier answer no longer applies/)).toBeTruthy();
+  expect(api.request).not.toHaveBeenCalledWith("/pilot/research/consent", expect.objectContaining({ method: "POST" }));
+});
 afterEach(cleanup);
 
 it("asks once with equally weighted answers and no reward", async () => {

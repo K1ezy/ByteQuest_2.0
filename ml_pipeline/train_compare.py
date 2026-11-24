@@ -327,32 +327,34 @@ def _validate_hint_frame(df: pd.DataFrame) -> pd.DataFrame:
     return hints
 
 
-def prepare_ml_dataset(
+TABLE_KEY_COLUMNS = ("student_id", "course_id", "language", "activity_id", "first_submission_passed")
+
+
+def ten_model_input_table(
     df: pd.DataFrame,
     hints_df: pd.DataFrame | None = None,
     *,
     min_history: int = DEFAULT_MIN_HISTORY,
-) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
-    """Build one row per learner and programming challenge, at that challenge's t0.
+) -> pd.DataFrame:
+    """One row per learner and programming challenge at t0: keys, label, then the ten features.
 
     t0 is the learner's first graded submission on the challenge, and the label
     is whether that submission passed. Features use only the learner's attempts
     and hint reveals in the same course and language strictly before t0, so
     retries never become rows and never inform their own task. Quizzes are
-    history, never targets. Cold-start rows (no prior history) stay in.
-
-    Returns features, labels, student groups, and whether each row had at least
-    ``min_history`` distinct prior tasks, which is the live forecast gate.
+    history, never targets. Cold-start rows (no prior history) stay in, with
+    blank features. ``live_eligible`` marks rows with at least ``min_history``
+    distinct prior tasks, which is the live forecast gate.
     """
+    columns = [*TABLE_KEY_COLUMNS, *FEATURE_NAMES, "live_eligible"]
+    if df.empty:
+        return pd.DataFrame(columns=columns)
     valid_rows = _validate_training_frame(df)
     if "exam_attempt_id" in valid_rows.columns and valid_rows["exam_attempt_id"].notna().any():
         raise ValueError("Training rows must exclude exam item attempts.")
     hints = _validate_hint_frame(hints_df) if hints_df is not None else pd.DataFrame(columns=sorted(HINT_COLUMNS))
 
-    feature_rows: list[dict[str, float]] = []
-    labels: list[int] = []
-    groups: list[Any] = []
-    eligible: list[bool] = []
+    rows: list[dict[str, Any]] = []
     for student_id, student_rows in valid_rows.groupby("student_id", sort=False):
         ordered = _sort_attempts(student_rows)
         student_hints = hints[hints["student_id"] == student_id]
@@ -371,20 +373,37 @@ def prepare_ml_dataset(
                 ],
                 target_activity_id=target["activity_id"],
             )
-            feature_rows.append(features)
-            labels.append(int(target["is_successful"]))
-            groups.append(student_id)
-            eligible.append(prior["activity_id"].nunique() >= min_history)
+            rows.append({
+                "student_id": student_id,
+                "course_id": target["course_id"],
+                "language": target["language"],
+                "activity_id": target["activity_id"],
+                "first_submission_passed": int(target["is_successful"]),
+                **features,
+                "live_eligible": prior["activity_id"].nunique() >= min_history,
+            })
+    return pd.DataFrame(rows, columns=columns)
 
-    if not feature_rows:
+
+def prepare_ml_dataset(
+    df: pd.DataFrame,
+    hints_df: pd.DataFrame | None = None,
+    *,
+    min_history: int = DEFAULT_MIN_HISTORY,
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
+    """Features, labels, student groups and live eligibility from ``ten_model_input_table``."""
+    if df.empty:
+        _validate_training_frame(df)  # raises the usual "no rows" error
+    table = ten_model_input_table(df, hints_df, min_history=min_history)
+    if table.empty:
         raise ValueError("The dataset holds no programming-challenge submissions to predict.")
-    X = pd.DataFrame(feature_rows, columns=FEATURE_NAMES, dtype=float)
-    y = np.asarray(labels, dtype=np.int8)
+    X = table[list(FEATURE_NAMES)].astype(float).reset_index(drop=True)
+    y = table["first_submission_passed"].to_numpy(dtype=np.int8)
     if np.isinf(X.to_numpy()).any():
         raise ValueError("Feature extraction produced infinite values.")
     if set(np.unique(y)) != {0, 1}:
         raise ValueError("Training requires at least one successful and one unsuccessful outcome.")
-    return X, y, np.asarray(groups), np.asarray(eligible, dtype=bool)
+    return X, y, table["student_id"].to_numpy(), table["live_eligible"].to_numpy(dtype=bool)
 
 
 def generate_synthetic_thesis_dataset(

@@ -297,7 +297,7 @@ function OnboardingContent() {
     }
   }
 
-  async function authenticate(createAccount: boolean) {
+  async function authenticate(createAccount: boolean, research = false) {
     if (authPending.current) return;
     authPending.current = true;
     setStatusMessage(null);
@@ -310,7 +310,7 @@ function OnboardingContent() {
       const trimmedEmail = email.trim();
       const result =
         createAccount
-          ? await signUpStudent(trimmedEmail, password, username, registration)
+          ? await signUpStudent(trimmedEmail, password, username, { ...registration, research })
           : await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
 
       if (result.error) throw result.error;
@@ -569,7 +569,8 @@ function OnboardingContent() {
               )}
 
               {authMode === "agreement" && (
-                <SignupAgreement busy={busy} error={displayError} onAgree={() => void authenticate(true)}
+                <SignupAgreement busy={busy} error={displayError} onAgree={(research) => void authenticate(true, research)}
+                  askResearch={registrationRole === "student"}
                   onDisagree={() => changeAuthMode("signup")}
                   recoveryActions={signupEmailExists && displayError ? <>
                     <button type="button" className="auth-text-action auth-purple-action" onClick={() => changeAuthMode("signin")}>Sign in</button>
