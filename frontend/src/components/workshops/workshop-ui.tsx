@@ -18,15 +18,24 @@ export function workshopDateTime(value: string) {
   return manilaDateTime.format(new Date(value));
 }
 
-export function WorkshopBanner({ language, children, eager = false }: {
+export function WorkshopBanner({ language, coverImage, children, eager = false }: {
   language: ProgrammingLanguage;
+  coverImage?: string | null;
   children: ReactNode;
   eager?: boolean;
 }) {
-  return <div className="workshop-banner" data-language={language}>
+  const [failedCover, setFailedCover] = useState<string>();
+  const cover = coverImage && coverImage !== failedCover ? coverImage : null;
+  const loading = eager ? "eager" : "lazy";
+  return <div className="workshop-banner" data-language={language} data-cover={cover ? "photo" : undefined}>
     <div className="workshop-banner-content">{children}</div>
-    <span className="workshop-banner-mark" aria-hidden="true">{languageMarks[language]}</span>
-    <Image src="/illustrations/quest-scroll-purple.png" alt="" width={148} height={148} loading={eager ? "eager" : "lazy"} />
+    {cover ? <span className="workshop-banner-art" aria-hidden="true">
+      <Image className="workshop-banner-photo" src={cover} alt="" fill unoptimized loading={loading}
+        onError={() => setFailedCover(cover)} />
+    </span> : <>
+      <span className="workshop-banner-mark" aria-hidden="true">{languageMarks[language]}</span>
+      <Image className="workshop-banner-illustration" src="/illustrations/quest-scroll-purple.png" alt="" width={148} height={148} loading={loading} />
+    </>}
   </div>;
 }
 

@@ -699,8 +699,85 @@ def test_workshop_publication_captures_assignment_prediction_and_limits_access(w
     assert client.get(report, headers=instructor, params={**params, "through_date": "2020-01-01"}).json()["rows"] == []
     assert client.get(report, headers=_token(ids["other_faculty"]), params=params).status_code in (403, 404)
     assert client.get(report, headers=student, params=params).status_code == 403
+    workshop_params = {"workshop_id": workshop["id"]}
+    from app.models.entities import WorkshopMember
+    with sessions() as db:
+        db.add(MLPrediction(student_id=ids["student"], target_activity_id=ids["published"],
+            assigned_at=datetime.fromisoformat(row["assigned_at"]), features_snapshot_json={},
+            logreg_prob=0.9, logreg_pred=True, rf_prob=0.8, rf_pred=True,
+            model_version="reviewed-test-model", selected_model="random_forest", active_sequencer_mode="rule_based"))
+        db.delete(db.query(CourseMember).filter_by(course_id=ids["course_a"], profile_id=ids["other_student"]).one())
+        db.add(WorkshopMember(workshop_id=uuid.UUID(workshop["id"]), profile_id=ids["other_student"]))
+        db.commit()
+    report_response = client.get(report, headers=instructor, params=workshop_params)
+    assert report_response.status_code == 200, report_response.text
+    workshop_report = report_response.json()
+    assert workshop_report["workshop_id"] == workshop["id"]
+    assert {item["id"] for item in workshop_report["students"]} == {str(ids["student"]), str(ids["other_student"])}
+    assert workshop_report["rows"] == [row]
+    assert client.get(report, headers=instructor,
+                      params={**workshop_params, "student_id": str(ids["other_student"])}).json()["rows"] == []
+    assert client.get(report, headers=instructor,
+                      params={**workshop_params, "through_date": "2020-01-01"}).json()["rows"] == []
+    assert client.get(report, headers=instructor, params={**params, **workshop_params}).status_code == 422
+    assert client.get(report, headers=_token(ids["other_faculty"]), params=workshop_params).status_code == 404
+    assert client.get(report, headers=student, params=workshop_params).status_code == 403
+    assert client.delete(f"{workshops}/{workshop['id']}/members/{ids['student']}", headers=instructor).status_code == 204
+    assert client.get(report, headers=instructor, params=workshop_params).json()["rows"] == []
+    assert client.post(f"{workshops}/{workshop['id']}/archive", headers=instructor).status_code == 200
+    assert client.get(report, headers=instructor, params=workshop_params).status_code == 404
     assert client.get("/api/v1/exams", headers=student).status_code == 404
     assert client.post("/api/v1/exams/instructor", headers=instructor, json={}).status_code == 404
+
+
+def test_local_demo_predictions_are_scoped_and_separate_from_saved_predictions(workspace, monkeypatch, tmp_path):
+    client, sessions, ids = workspace
+    instructor = _token(ids["faculty"])
+    workshop = client.post("/api/v1/workshops", headers=instructor, json={
+        "name": "Synthetic demonstration", "language": "python", "activity_ids": [str(ids["published"])],
+    })
+    assert workshop.status_code == 201, workshop.text
+    workshop_id = workshop.json()["id"]
+    assert client.post("/api/v1/workshops/join", headers=_token(ids["student"]),
+                       json={"code": workshop.json()["join_code"]}).status_code == 200
+
+    fixture = tmp_path / "demo.json"
+    fixture.write_text(json.dumps({
+        "model_version": "synthetic-v1", "selected_model": "random_forest",
+        "workshops": {workshop_id: [{
+            "snapshot_id": "DEMO-001", "student_id": str(ids["student"]), "activity_id": str(ids["published"]),
+            "assigned_at": "2026-11-24T17:00:00Z", "prior_completed": 2,
+            "prob_lr": 0.49, "prob_rf": 0.61, "features": dict.fromkeys(FEATURE_NAMES, 3.0),
+        }]},
+    }), encoding="utf-8")
+    monkeypatch.setattr(settings, "ML_DEMO_SNAPSHOTS_FILE", fixture)
+    monkeypatch.setattr(settings, "SUPABASE_URL", "http://127.0.0.1:15431")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    report = "/api/v1/faculty/ml/predictions"
+    params = {"workshop_id": workshop_id}
+
+    assert "demo_model_version" not in client.get(report, headers=instructor, params=params).json()
+    with sessions() as db:
+        learner = db.get(Profile, ids["student"])
+        # Encode the unique test identity as letters to follow the account handle constraint.
+        learner.username = "thesisdemo" + ids["student"].hex.translate(str.maketrans("0123456789", "ghijklmnop"))
+        learner.email = f"thesis-{ids['student'].hex}@bytequest.test"
+        db.commit()
+
+    result = client.get(report, headers=instructor, params=params).json()
+    assert result["demo_model_version"] == "synthetic-v1"
+    row, = result["rows"]
+    assert (row["label_lr"], row["label_rf"], row["advisory_band"]) == (False, True, "advance_next_level")
+    assert row["assigned_at"] == "2026-11-24T17:00:00Z" and len(row["features"]) == 10
+    assert client.get(report, headers=instructor, params={**params, "through_date": "2026-11-24"}).json()["rows"] == []
+    assert client.get(report, headers=instructor, params={**params, "from_date": "2026-11-25"}).json()["rows"] == [row]
+    assert client.get(report, headers=_token(ids["other_faculty"]), params=params).status_code == 404
+    assert client.get(report, headers=_token(ids["student"]), params=params).status_code == 403
+    with sessions() as db:
+        assert db.query(MLPrediction).filter_by(student_id=ids["student"]).count() == 0
+
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    assert "demo_model_version" not in client.get(report, headers=instructor, params=params).json()
 
 
 def test_reject_requires_a_reason_and_returns_to_queue(workspace):

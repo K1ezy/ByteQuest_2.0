@@ -142,7 +142,7 @@
 }
 .workshop-page > .workshop-banner { min-height: clamp(9rem, 16vw, 13rem); }
 .workshop-page > .workshop-banner .workshop-banner-content { max-width: min(74%, 50rem); padding-inline-end: 0; }
-.workshop-page > .workshop-banner img {
+.workshop-page > .workshop-banner .workshop-banner-illustration {
   inset: 50% clamp(.7rem, 3vw, 2.25rem) auto auto;
   width: min(25%, 11rem);
   transform: translateY(-50%);
@@ -152,7 +152,35 @@
 .workshop-card .workshop-banner { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; min-height: 6rem; }
 .workshop-banner-content { z-index: 1; display: grid; justify-items: start; gap: .45rem; max-width: min(100%, 50rem); padding-inline-end: min(20vw, 7rem); }
 .workshop-banner-content p { font-size: var(--text-sm); font-weight: 600; }
-.workshop-banner img { position: absolute; right: -1.25rem; bottom: -2.7rem; width: min(45%, 10rem); height: auto; pointer-events: none; }
+.workshop-banner-illustration { position: absolute; right: -1.25rem; bottom: -2.7rem; width: min(45%, 10rem); height: auto; pointer-events: none; }
+.workshop-banner-art { position: absolute; inset: 0; pointer-events: none; }
+.workshop-banner-photo { object-fit: cover; }
+.workshop-card .workshop-banner[data-cover="photo"] {
+  min-height: clamp(8.5rem, 10.5vw, 10rem);
+  align-items: start;
+  padding: .75rem;
+}
+.workshop-page > .workshop-banner[data-cover="photo"] {
+  background: #141c32;
+  color: #fff;
+}
+.workshop-page > .workshop-banner[data-cover="photo"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, #141c32 35%, rgb(20 28 50 / .92) 47%, rgb(20 28 50 / .34) 72%, rgb(20 28 50 / .12));
+}
+.workshop-page > .workshop-banner[data-cover="photo"] .workshop-banner-art { inset-inline-start: 38%; }
+.workshop-page > .workshop-banner[data-cover="photo"] .workshop-banner-content {
+  max-width: min(62%, 50rem);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .workshop-page > .workshop-banner[data-cover="photo"]::after { background: rgb(20 28 50 / .78); }
+  .workshop-page > .workshop-banner[data-cover="photo"] .workshop-banner-art { inset-inline-start: 0; }
+  .workshop-page > .workshop-banner[data-cover="photo"] .workshop-banner-content { max-width: 100%; }
+}
 .workshop-banner-mark { position: absolute; inset: auto 5.1rem .1rem auto; color: var(--workshop-accent); font: 800 clamp(2rem, 5vw, 4.5rem)/1 var(--font-mono); opacity: .12; }
 .workshop-language { border: 1px solid var(--workshop-accent); padding: .15rem .48rem; border-radius: .45rem; color: var(--workshop-accent); background: var(--surface); font-size: var(--text-xs); font-weight: 750; }
 .workshop-description { white-space: pre-wrap; }

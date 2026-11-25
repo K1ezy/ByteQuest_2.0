@@ -43,7 +43,7 @@ function WorkshopGrid({ archived }: { archived: boolean }) {
         const classroom = classroomSummary(item);
         return <Link href={`/workshops/${item.id}`} className="workshop-card" key={item.id}>
           <div className="workshop-card-cover">
-            <WorkshopBanner language={item.language} eager={index === 0}>
+            <WorkshopBanner language={item.language} coverImage={item.cover_image} eager={index === 0}>
               <span className="workshop-language">{workshopLanguages[item.language]}</span>
             </WorkshopBanner>
             <span className="workshop-card-avatar" aria-hidden="true">

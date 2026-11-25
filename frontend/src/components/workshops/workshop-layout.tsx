@@ -38,7 +38,7 @@ export function WorkshopLayout({ id, children }: { id: string; children: ReactNo
     {loading ? <p className="workshop-panel" role="status">Loading workshop…</p>
       : error ? <WorkshopError message={error} retry={reload} />
       : workshop && <>
-        {onBoard ? <WorkshopBanner language={workshop.language} eager>
+        {onBoard ? <WorkshopBanner language={workshop.language} coverImage={workshop.cover_image} eager>
           <span className="workshop-language">{workshopLanguages[workshop.language]}</span>
           <h1 tabIndex={-1} data-workshop-focus>{workshop.name}</h1>
           <p>{workshop.owner_name}</p>

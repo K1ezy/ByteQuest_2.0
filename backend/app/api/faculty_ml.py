@@ -17,6 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session, aliased
 
+from app.api.workshops import workshop_report_scope
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.entities import (
@@ -33,6 +35,7 @@ from app.services.course_access import (
     resolve_workspace_course,
 )
 from app.services.ml_predictor.consent import consented_student_ids
+from app.services.ml_predictor.demo_predictions import local_demo_predictions
 from app.services.ml_predictor.thresholds import (
     ADVANCE_PROBABILITY,
     DECISION_THRESHOLD,
@@ -425,26 +428,48 @@ def assignment_predictions(
     student_id: uuid.UUID | None = None,
     from_date: date | None = None,
     through_date: date | None = None,
+    workshop_id: uuid.UUID | None = None,
 ):
-    course = resolve_workspace_course(db, user, course_id, allow_admin=False)
-    students = enrolled_students(db, course.id)
+    if workshop_id is not None:
+        if course_id is not None:
+            raise HTTPException(422, "Choose either a course or a Workshop.")
+        students, activity_ids = workshop_report_scope(db, workshop_id, user)
+        target_scope = LearningActivity.id.in_(activity_ids)
+    else:
+        course = resolve_workspace_course(db, user, course_id, allow_admin=False)
+        students = enrolled_students(db, course.id)
+        target_scope = LearningActivity.course_id == course.id
     if student_id is not None and not any(student.id == student_id for student in students):
-        raise HTTPException(404, "Student is not actively enrolled in this course.")
+        raise HTTPException(404, "Student is not in the selected Workshop." if workshop_id else
+                            "Student is not actively enrolled in this course.")
     if from_date and through_date and through_date < from_date:
         raise HTTPException(422, "The end date must be on or after the start date.")
-    consented = consented_student_ids(db, [student.id for student in students])
+    response = {
+        "workshop_id": workshop_id,
+        "readiness": forecast_readiness(request),
+        "selected_model": getattr(request.app.state, "selected_model", None),
+        "decision_threshold": DECISION_THRESHOLD,
+        "students": [{"id": str(student.id), "school_id": student.school_id or student.pseudonym_id,
+                      "name": student.display_name or student.username} for student in students],
+    }
+    if workshop_id is not None and settings.ML_DEMO_SNAPSHOTS_FILE is not None:
+        demo = local_demo_predictions(workshop_id, students, db.query(LearningActivity).filter(target_scope).all(),
+                                      student_id=student_id, from_date=from_date, through_date=through_date)
+        if demo is not None:
+            return {**response, **demo}
+    consented = consented_student_ids(db, [student.id for student in students if student.account_status == "active"])
     historical_activity = aliased(LearningActivity)
     prior_completed = db.query(func.count(func.distinct(ActivityAttempt.activity_id))).join(
         historical_activity, historical_activity.id == ActivityAttempt.activity_id,
     ).filter(
-        historical_activity.course_id == course.id, historical_activity.language == LearningActivity.language,
+        historical_activity.course_id == LearningActivity.course_id, historical_activity.language == LearningActivity.language,
         ActivityAttempt.student_id == MLPrediction.student_id, ActivityAttempt.is_successful.is_(True),
         ActivityAttempt.exam_attempt_id.is_(None), ActivityAttempt.created_at < MLPrediction.assigned_at,
     ).correlate(MLPrediction, LearningActivity).scalar_subquery()
     query = db.query(MLPrediction, LearningActivity, Profile, prior_completed).join(
         LearningActivity, LearningActivity.id == MLPrediction.target_activity_id,
     ).join(Profile, Profile.id == MLPrediction.student_id).filter(
-        LearningActivity.course_id == course.id, MLPrediction.student_id.in_(consented),
+        target_scope, MLPrediction.student_id.in_(consented),
         MLPrediction.assigned_at.is_not(None), MLPrediction.selected_model.in_(SELECTABLE_MODELS),
     )
     manila = timezone(timedelta(hours=8))
@@ -456,11 +481,7 @@ def assignment_predictions(
         query = query.filter(MLPrediction.assigned_at <= datetime.combine(through_date, time.max, manila))
     rows = query.order_by(MLPrediction.assigned_at.desc(), MLPrediction.id).all() if consented else []
     return {
-        "readiness": forecast_readiness(request),
-        "selected_model": getattr(request.app.state, "selected_model", None),
-        "decision_threshold": DECISION_THRESHOLD,
-        "students": [{"id": str(student.id), "school_id": student.school_id or student.pseudonym_id,
-                      "name": student.display_name or student.username} for student in students],
+        **response,
         "rows": [{
             "snapshot_id": str(prediction.id), "assigned_at": iso(prediction.assigned_at),
             "school_id": student.school_id or student.pseudonym_id,

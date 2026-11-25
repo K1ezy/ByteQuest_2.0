@@ -57,6 +57,7 @@ export const belongsTo = (path: string, root: string) => path === root || path.s
 export function withCourse(href: string, courseId: string | null) {
   if (!courseId) return href;
   const [path, hash] = href.split("#");
+  if (path.split("?")[0] === "/instructor/predictions") return href;
   return path + (path.includes("?") ? "&" : "?") + "course=" + encodeURIComponent(courseId) + (hash ? "#" + hash : "");
 }
 

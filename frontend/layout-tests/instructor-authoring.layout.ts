@@ -7,6 +7,7 @@ const defaultCourse = { id: "f0000000-0000-4000-8000-000000000002", title: "Intr
 const course = { id: "f0000000-0000-4000-8000-000000000003", title: "Python Foundations", code: "PY" };
 const documentId = "f0000000-0000-4000-8000-000000000004";
 const workshopId = "f0000000-0000-4000-8000-000000000020";
+const secondWorkshopId = "f0000000-0000-4000-8000-000000000021";
 const draftId = "f0000000-0000-4000-8000-000000000005";
 const manualId = "f0000000-0000-4000-8000-000000000006";
 const scope = `course=${course.id}`;
@@ -14,6 +15,10 @@ const timestamp = "2026-11-25T08:00:00Z";
 const identifier = "reusable_nested_function_".repeat(7);
 const title = `Defining and calling functions in a program with input and output ${identifier}`;
 const workshopName = `Afternoon programming workshop ${identifier}`;
+const workshopRoster = (block: string) => Array.from({ length: 20 }, (_, position) => ({
+  id: `${block}-${position + 1}`, school_id: `26-${String(position + 1).padStart(5, "0")}`,
+  name: `Block ${block} student ${position + 1}${position === 0 ? ` ${identifier}` : ""}`,
+}));
 const instructions = "Use the examples from the reading to choose the correct answer about defining a function.";
 
 const material: MaterialSummary = {
@@ -94,19 +99,27 @@ test.beforeEach(async ({ page }, info) => {
     } });
     if (path === "/faculty/courses") return route.fulfill({ json: { courses: [defaultCourse, course], default_course_id: defaultCourse.id } });
     if (path === "/workshops") return route.fulfill({ json: [
-      { id: workshopId, name: workshopName, owned_by_me: true, archived: false, language: "python" },
+      { id: workshopId, name: workshopName, block: "A", owned_by_me: true, archived: false, language: "python" },
+      { id: secondWorkshopId, name: "Second classroom", block: "B", owned_by_me: true, archived: false, language: "python" },
       { id: "foreign-workshop", name: "Another instructor's workshop", owned_by_me: false, archived: false, language: "python" },
     ] });
+    if (path === `/workshops/${workshopId}/progress` || path === `/workshops/${secondWorkshopId}/progress`) {
+      const block = path.includes(workshopId) ? "A" : "B";
+      return route.fulfill({ json: { activities: [{ id: "practice" }], students: workshopRoster(block).map((item, i) => ({
+        id: item.id, display_name: item.name, username: item.id,
+        states: { practice: i ? "not_started" : "solved" }, completion_percent: i ? 0 : 100,
+      })) } });
+    }
     if (path === "/faculty/dashboard") return route.fulfill({ json: dashboard });
     if (path === "/faculty/gamification-insights") return route.fulfill({ json: { topics: [] } });
-    if (path === "/faculty/ml/predictions") return route.fulfill({ json: {
-      readiness: { status: "ready", active_model_version: "model-1" }, selected_model: "random_forest", decision_threshold: 0.5,
-      students: [{ id: "learner", school_id: "26-00001", name: "Example Student" }],
-      rows: [{ snapshot_id: identifier, assigned_at: timestamp, school_id: "26-00001", student_name: "Example Student",
-        task: title, prior_completed: 8, prob_lr: 0.51, label_lr: true, prob_rf: 0.48, label_rf: false,
-        advisory_band: "standard_next", model_version: "model-1", selected_model: "random_forest",
-        features: { prior_attempt_count: 24, prior_quiz_score_mean: 85 } }],
-    } });
+    if (path === "/faculty/ml/predictions") {
+      expect(searchParams.has("course_id")).toBe(false);
+      const selectedWorkshop = searchParams.get("workshop_id");
+      expect([workshopId, secondWorkshopId]).toContain(selectedWorkshop);
+      return route.fulfill({ json: { workshop_id: selectedWorkshop, readiness: { status: "disabled", active_model_version: null },
+        selected_model: null, decision_threshold: 0.5, students: workshopRoster(selectedWorkshop === workshopId ? "A" : "B"), rows: [],
+      } });
+    }
     if (path === "/faculty/activities") {
       if (request.method() === "POST") {
         const body = request.postDataJSON();
@@ -308,8 +321,22 @@ for (const kind of ["quiz", "challenge"] as const) {
 }
 
 test("assignment predictions keep table and snapshot readable and make tooltips accessible", async ({ page }, info) => {
-  await page.goto(`/instructor/predictions?${scope}`);
-  const table = page.getByRole("table");
+  await page.route(/\/api\/v1\/faculty\/ml\/predictions\?/, (route) => {
+    const filters = new URL(route.request().url()).searchParams;
+    expect(filters.get("workshop_id")).toBe(workshopId);
+    expect(filters.has("course_id")).toBe(false);
+    return route.fulfill({ json: {
+      workshop_id: workshopId, readiness: { status: "ready", active_model_version: "model-1" },
+      selected_model: "random_forest", decision_threshold: 0.5,
+      students: [{ id: "A-1", school_id: "26-00001", name: "Example Student" }],
+      rows: [{ snapshot_id: identifier, assigned_at: timestamp, school_id: "26-00001", student_name: "Example Student",
+        task: title, prior_completed: 8, prob_lr: 0.51, label_lr: true, prob_rf: 0.48, label_rf: false,
+        advisory_band: "standard_next", model_version: "model-1", selected_model: "random_forest",
+        features: { prior_attempt_count: 24, prior_quiz_score_mean: 85 } }],
+    } });
+  });
+  await page.goto("/instructor/predictions");
+  const table = page.getByRole("region", { name: /Pre-Submission Dual-Model Predictions/ }).getByRole("table");
   await expect(table.getByText("Predicted Not Pass", { exact: true })).toBeVisible();
   await table.getByRole("button", { name: `View snapshot ${identifier}` }).press("Enter");
   const snapshot = page.getByRole("complementary", { name: "Snapshot Context" });
@@ -336,6 +363,41 @@ test("assignment predictions keep table and snapshot readable and make tooltips 
     await table.getByText("26-00001", { exact: true }).hover();
     await expect(page.getByRole("tooltip")).toContainText("Example Student");
   }
+});
+
+test("Workshop predictions show the entire roster and clear the student filter when switching", async ({ page }) => {
+  let courseRequests = 0;
+  await page.route("**/api/v1/faculty/courses", (route) => {
+    courseRequests++;
+    return route.fulfill({ status: 503, json: { detail: "Course service unavailable" } });
+  });
+  await page.goto(`/instructor/predictions?${scope}`);
+  const workshop = page.getByRole("combobox", { name: "Workshop", exact: true });
+  await expect(workshop.locator("option")).toHaveCount(2);
+  await expect(workshop).toHaveValue(workshopId);
+  await expect(page.getByRole("combobox", { name: "Course", exact: true })).toHaveCount(0);
+  const progress = page.getByRole("region", { name: "Workshop progress", exact: true });
+  await expect(progress.getByRole("rowheader")).toHaveCount(20);
+  await expect(progress.getByText("20 students · 1 activity")).toBeVisible();
+  await expect(progress.getByText("100%", { exact: true })).toBeVisible();
+  await expectContentToFit(page, progress, ["h2", "p", ".predictions-class-scroll"]);
+  await expectContentToFit(page, progress.getByRole("table"), ["thead th", "tbody tr:first-child th", "tbody tr:first-child td"]);
+  const scroll = progress.getByRole("region", { name: "Workshop student progress" });
+  await scroll.press("End");
+  await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(page.getByText("No saved assignment-time predictions", { exact: false })).toBeVisible();
+  const student = page.getByRole("combobox", { name: "Student", exact: true });
+  await expect(student.locator("option")).toHaveCount(21);
+  const studentRequest = page.waitForRequest((request) => new URL(request.url()).searchParams.get("student_id") === "A-2");
+  await student.selectOption("A-2");
+  await studentRequest;
+  await expect(progress.getByRole("rowheader")).toHaveCount(20);
+  await workshop.selectOption(secondWorkshopId);
+  await expect(student).toHaveValue("");
+  await expect(progress.getByText("Block B student 20", { exact: true })).toBeAttached();
+  await expect(progress.getByText("Block A student 20", { exact: true })).toHaveCount(0);
+  await expect(student.locator("option")).toHaveCount(21);
+  expect(courseRequests).toBe(0);
 });
 
 test("Gemini PDF upload, recovery, editing and publication use Activities", async ({ page }) => {

@@ -134,6 +134,7 @@ class WorkshopView(WorkshopClassroomDetails):
     archived: bool
     owner_name: str
     owner_avatar_url: str | None = None
+    cover_image: str | None = None
     member_count: int
     activity_ids: list[uuid.UUID]
     activities: list[WorkshopActivityView]
@@ -319,6 +320,7 @@ def _workshop_views(db: Session, rows: list[Workshop], user: Profile) -> list[Wo
             archived=workshop.archived_at is not None,
             owner_name=owners[workshop.created_by].name,
             owner_avatar_url=owners[workshop.created_by].avatar_url,
+            cover_image=workshop.cover_image,
             member_count=counts.get(workshop.id, 0),
             activity_ids=[link.activity_id for link in activities[workshop.id]],
             activities=activities[workshop.id],
@@ -526,6 +528,15 @@ def _workshop_students(db: Session, workshop_id: uuid.UUID):
     return db.query(Profile).join(WorkshopMember, WorkshopMember.profile_id == Profile.id).filter(
         WorkshopMember.workshop_id == workshop_id, Profile.role == UserRole.student,
     ).order_by(Profile.username, Profile.id)
+
+
+def workshop_report_scope(db: Session, workshop_id: uuid.UUID, instructor: Profile) -> tuple[list[Profile], list[uuid.UUID]]:
+    workshop = get_workshop(db, workshop_id, instructor, manage=True)
+    if workshop.archived_at is not None:
+        raise HTTPException(404, "Active Workshop not found.")
+    students = _workshop_students(db, workshop.id).all()
+    activity_ids = [link.activity_id for link in _activity_links(db, [workshop.id])]
+    return students, activity_ids
 
 
 @router.get("/{workshop_id}/progress", response_model=WorkshopProgress)

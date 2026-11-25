@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { expectContentToFit } from "./containment";
 
-test("workshop cards show the owner's photo across the banner seam and fall back safely", async ({ page }, info) => {
+test("workshop covers and owner photos fit the cards and fall back safely", async ({ page }, info) => {
   const id = "f0000000-0000-4000-8000-000000000011";
   await page.addInitScript(({ id, enlarged }) => {
     sessionStorage.setItem("sb-127-auth-token", JSON.stringify({
@@ -25,15 +25,26 @@ test("workshop cards show the owner's photo across the banner seam and fall back
     id, role: "student", username: "layout-student", enrolled_language: "python",
   } }));
   await page.route("**/api/v1/workshops", (route) => route.fulfill({ json: [
-    { ...workshop, id: "with-photo", name: title, owner_avatar_url: "/illustrations/quest-scroll-purple.png" },
+    { ...workshop, id: "with-photo", name: title, owner_avatar_url: "/illustrations/quest-scroll-purple.png",
+      cover_image: "/workshop-covers/cs122-python.webp" },
     { ...workshop, id: "no-photo", name: "No photo workshop", owner_avatar_url: null },
-    { ...workshop, id: "broken-photo", name: "Unavailable photo workshop", owner_avatar_url: "/layout/avatar-unavailable.png" },
+    { ...workshop, id: "broken-photo", name: "Unavailable photo workshop", owner_avatar_url: "/layout/avatar-unavailable.png",
+      cover_image: "/workshop-covers/unavailable.webp" },
   ] }));
+  await page.route("**/api/v1/workshops/with-photo", (route) => route.fulfill({ json: {
+    ...workshop, id: "with-photo", name: title, cover_image: "/workshop-covers/cs122-python.webp",
+  } }));
+  await page.route(/\/api\/v1\/workshops\/with-photo\/(announcements|upcoming)$/, (route) => route.fulfill({ json: [] }));
   await page.route("**/layout/avatar-unavailable.png", (route) => route.fulfill({ status: 404 }));
+  await page.route("**/workshop-covers/unavailable.webp", (route) => route.fulfill({ status: 404 }));
   await page.goto("/workshops");
 
   const card = page.locator('a[href="/workshops/with-photo"]');
   const photo = card.locator(".workshop-card-avatar img");
+  const cover = card.locator(".workshop-banner-photo");
+  const coverPath = /\/workshop-covers\/cs122-python\.webp$/;
+  await expect(cover).toHaveAttribute("src", coverPath);
+  await expect.poll(() => cover.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
   await expect(photo).toHaveAttribute("alt", `${owner}'s profile photo`);
   await expect.poll(() => photo.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
   await expectContentToFit(page, card, [".workshop-card-avatar", ".workshop-card-copy", "h3", "p"]);
@@ -48,5 +59,11 @@ test("workshop cards show the owner's photo across the banner seam and fall back
     const fallbackCard = page.locator(`a[href="/workshops/${id}"]`);
     await fallbackCard.scrollIntoViewIfNeeded();
     await expect(fallbackCard.locator(".user-avatar-identicon")).toBeVisible();
+    await expect(fallbackCard.locator(".workshop-banner-illustration")).toBeVisible();
   }
+  await card.click();
+  const boardCover = page.locator(".workshop-page > .workshop-banner");
+  await expect(boardCover.locator("h1")).toHaveText(title);
+  await expect(boardCover.locator(".workshop-banner-photo")).toHaveAttribute("src", coverPath);
+  await expectContentToFit(page, boardCover, [".workshop-banner-content", "h1", "p"]);
 });

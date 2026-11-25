@@ -167,10 +167,22 @@
 .predictions-page :is(.ws-panel, label, fieldset, dt, dd) { min-inline-size: 0; overflow-wrap: anywhere; }
 .predictions-page h2 { margin: 0 0 8px; font-size: 1rem; }
 .predictions-filters, .predictions-table-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
-.predictions-filters label, .predictions-table-controls label { display: grid; gap: 4px; max-inline-size: 100%; }
-.predictions-filters label :is(select, input), .predictions-table-controls input { inline-size: 100%; min-inline-size: 0; }
+.predictions-filters label, .predictions-table-controls label { display: grid; gap: 4px; min-inline-size: 0; max-inline-size: 100%; }
+.predictions-filters label :is(select, input), .predictions-table-controls input {
+  inline-size: 100%; min-inline-size: 0; min-block-size: 2.5rem; padding: .45rem .6rem;
+  border: 1px solid var(--line-strong); border-radius: .5rem; background: var(--surface); color: var(--ink);
+}
 .predictions-filters fieldset { display: flex; flex-wrap: wrap; gap: 8px; border: 0; padding: 0; margin: 0; }
 .predictions-model { margin: 0; padding: 6px 10px; border: 1px solid var(--ic-border); border-radius: var(--ic-radius); background: var(--ic-tint); }
+.predictions-class { margin-block: 12px; min-inline-size: 0; }
+.predictions-class-scroll { max-block-size: 22rem; overflow: auto; }
+.predictions-class-table { inline-size: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--text-sm); }
+.predictions-class-table :is(th, td) {
+  padding: .55rem .5rem; border-block-end: 1px solid var(--line); vertical-align: top;
+  text-align: start; white-space: normal; overflow-wrap: anywhere;
+}
+.predictions-class-table thead { background: var(--ic-tint); }
+.predictions-class-table thead th:first-child { inline-size: 58%; }
 .predictions-legend { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-block: 12px; }
 .predictions-legend h2 { grid-column: 1 / -1; margin: 0; }
 .predictions-results { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 16rem); gap: 12px; align-items: start; }

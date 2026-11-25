@@ -72,6 +72,7 @@ export function WorkspaceProvider({ role, children, shell: Shell }: {
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const workshopReport = pathname === "/instructor/predictions";
   const searchParams = useSearchParams();
   const profile = useShellProfile();
   const [courses, setCourses] = useState<CourseSummary[]>([]);
@@ -112,9 +113,10 @@ export function WorkspaceProvider({ role, children, shell: Shell }: {
   }, [loadCourses]);
 
   useEffect(() => {
+    if (workshopReport) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
-  }, [load]);
+  }, [load, workshopReport]);
 
   useEffect(() => {
     function warn(event: BeforeUnloadEvent) {
@@ -143,10 +145,11 @@ export function WorkspaceProvider({ role, children, shell: Shell }: {
   );
 
   const courseId = useMemo(() => {
+    if (workshopReport) return null;
     if (role === "admin") return requestedCourse || null;
     if (requestedCourse) return requestedCourse;
     return defaultCourseId || courses[0]?.id || null;
-  }, [courses, defaultCourseId, requestedCourse, role]);
+  }, [courses, defaultCourseId, requestedCourse, role, workshopReport]);
 
   const activeCourse = courses.find((course) => course.id === courseId) || null;
   const courseForbidden = Boolean(requestedCourse && courses.length > 0 && !courses.some((course) => course.id === requestedCourse));
@@ -161,7 +164,7 @@ export function WorkspaceProvider({ role, children, shell: Shell }: {
     setUnsaved, hasUnsaved: unsaved, courseHref, modelEvaluationAvailable,
   };
 
-  const independentRoute = pathname === "/instructor/exams" || pathname === "/instructor/preview";
+  const independentRoute = workshopReport || pathname === "/instructor/exams" || pathname === "/instructor/preview";
   let body = children;
   if (!independentRoute) {
     if (loading) body = <div className="ws-loading-panel" role="status">Loading workspace…</div>;

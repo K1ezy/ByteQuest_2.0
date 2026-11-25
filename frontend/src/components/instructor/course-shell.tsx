@@ -123,11 +123,12 @@ export function InstructorShell({ children, profile, scope, courseHref = workspa
 
 export function InstructorCourseShell({ children }: { children: ReactNode }) {
   const { courseHref, courseId, courses, setCourse, profile, modelEvaluationAvailable, hasUnsaved } = useWorkspace();
+  const pathname = usePathname();
   // The page itself stays reachable from Student Progress and by its address (ML plan D9).
   const hiddenLinks = modelEvaluationAvailable === false ? ["/instructor/ml"] : undefined;
   return <InstructorShell profile={profile} courseHref={courseHref} hiddenLinks={hiddenLinks}
     canNavigate={() => !hasUnsaved || window.confirm("Some changes are still unsaved. Leave this page?")}
-    scope={<CourseSwitcher courses={courses} selected={courseId} onSelect={setCourse} />}>
+    scope={pathname === "/instructor/predictions" ? null : <CourseSwitcher courses={courses} selected={courseId} onSelect={setCourse} />}>
     {children}
   </InstructorShell>;
 }

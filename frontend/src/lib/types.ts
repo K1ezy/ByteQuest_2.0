@@ -77,6 +77,7 @@ export interface Workshop extends WorkshopClassroomDetails {
   archived: boolean;
   owner_name: string;
   owner_avatar_url?: string | null;
+  cover_image?: string | null;
   member_count: number;
   activity_ids: string[];
   activities: { activity_id: string; topic: string | null; position: number; added_at: string }[];

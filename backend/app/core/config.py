@@ -83,6 +83,7 @@ class Settings(BaseSettings):
 
     # Research and ML shadow settings
     ML_SHADOW_ENABLED: bool = False
+    ML_DEMO_SNAPSHOTS_FILE: Path | None = None
     ML_SHADOW_RESEARCH_APPROVED: bool = False
     RESEARCH_CONSENT_ACTIVE: bool = False
     RESEARCH_CONSENT_VERSION: str = ""

@@ -286,6 +286,7 @@ class Workshop(Base):
     year_level = Column(Integer, CheckConstraint("year_level between 1 and 4"), nullable=True)
     subject = Column(String(80), nullable=True)
     room = Column(String(40), nullable=True)
+    cover_image = Column(String(160), nullable=True)
     join_code = Column(String(8), unique=True, nullable=False, index=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
