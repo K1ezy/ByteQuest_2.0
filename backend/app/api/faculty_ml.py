@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, aliased
 
 from app.core.database import get_db
 from app.core.security import get_current_user
@@ -32,10 +33,6 @@ from app.services.course_access import (
     resolve_workspace_course,
 )
 from app.services.ml_predictor.consent import consented_student_ids
-from app.services.ml_predictor.exam_history import (
-    course_exam_ids,
-    released_exam_history,
-)
 from app.services.ml_predictor.thresholds import (
     ADVANCE_PROBABILITY,
     DECISION_THRESHOLD,
@@ -230,23 +227,12 @@ def _snapshot(
     ready = readiness["forecasts_available"]
     active_version = readiness["active_model_version"]
     required_history = get_setting_int(db, "prediction_min_history", 3)
-    eligible_exam_ids = course_exam_ids(db, course.id) if students else set()
 
     rows: list[dict] = []
     details: dict[uuid.UUID, dict] = {}
     all_events: list[dict] = []
     for student in students:
         full_history = list(by_student[student.id])
-        for exam in released_exam_history(db, student.id, course.id, exam_ids=eligible_exam_ids):
-            full_history.append(
-                {
-                    "kind": "exam",
-                    "title": exam["title"],
-                    "score_percentage": exam["score_percentage"],
-                    "at": iso(exam["created_at"]),
-                    "exam_attempt_id": exam["exam_attempt_id"],
-                }
-            )
         full_history.sort(
             key=lambda item: (
                 item["at"] or "",
@@ -428,6 +414,66 @@ def student_detail(
 ):
     result = _snapshot(db, request, user, course_id, period, only_student=student_id)
     return result["details"][student_id]
+
+
+@router.get("/predictions")
+def assignment_predictions(
+    request: Request,
+    user: Annotated[Profile, Depends(_faculty)],
+    db: Annotated[Session, Depends(get_db)],
+    course_id: uuid.UUID | None = None,
+    student_id: uuid.UUID | None = None,
+    from_date: date | None = None,
+    through_date: date | None = None,
+):
+    course = resolve_workspace_course(db, user, course_id, allow_admin=False)
+    students = enrolled_students(db, course.id)
+    if student_id is not None and not any(student.id == student_id for student in students):
+        raise HTTPException(404, "Student is not actively enrolled in this course.")
+    if from_date and through_date and through_date < from_date:
+        raise HTTPException(422, "The end date must be on or after the start date.")
+    consented = consented_student_ids(db, [student.id for student in students])
+    historical_activity = aliased(LearningActivity)
+    prior_completed = db.query(func.count(func.distinct(ActivityAttempt.activity_id))).join(
+        historical_activity, historical_activity.id == ActivityAttempt.activity_id,
+    ).filter(
+        historical_activity.course_id == course.id, historical_activity.language == LearningActivity.language,
+        ActivityAttempt.student_id == MLPrediction.student_id, ActivityAttempt.is_successful.is_(True),
+        ActivityAttempt.exam_attempt_id.is_(None), ActivityAttempt.created_at < MLPrediction.assigned_at,
+    ).correlate(MLPrediction, LearningActivity).scalar_subquery()
+    query = db.query(MLPrediction, LearningActivity, Profile, prior_completed).join(
+        LearningActivity, LearningActivity.id == MLPrediction.target_activity_id,
+    ).join(Profile, Profile.id == MLPrediction.student_id).filter(
+        LearningActivity.course_id == course.id, MLPrediction.student_id.in_(consented),
+        MLPrediction.assigned_at.is_not(None), MLPrediction.selected_model.in_(SELECTABLE_MODELS),
+    )
+    manila = timezone(timedelta(hours=8))
+    if student_id is not None:
+        query = query.filter(MLPrediction.student_id == student_id)
+    if from_date:
+        query = query.filter(MLPrediction.assigned_at >= datetime.combine(from_date, time.min, manila))
+    if through_date:
+        query = query.filter(MLPrediction.assigned_at <= datetime.combine(through_date, time.max, manila))
+    rows = query.order_by(MLPrediction.assigned_at.desc(), MLPrediction.id).all() if consented else []
+    return {
+        "readiness": forecast_readiness(request),
+        "selected_model": getattr(request.app.state, "selected_model", None),
+        "decision_threshold": DECISION_THRESHOLD,
+        "students": [{"id": str(student.id), "school_id": student.school_id or student.pseudonym_id,
+                      "name": student.display_name or student.username} for student in students],
+        "rows": [{
+            "snapshot_id": str(prediction.id), "assigned_at": iso(prediction.assigned_at),
+            "school_id": student.school_id or student.pseudonym_id,
+            "student_name": student.display_name or student.username,
+            "task": activity.title or activity.topic_concept, "prior_completed": completed,
+            "prob_lr": prediction.logreg_prob, "label_lr": prediction.logreg_pred,
+            "prob_rf": prediction.rf_prob, "label_rf": prediction.rf_pred,
+            "advisory_band": prediction.recommended_action or recommended_action(
+                prediction.logreg_prob if prediction.selected_model == "logreg" else prediction.rf_prob),
+            "model_version": prediction.model_version, "selected_model": prediction.selected_model,
+            "features": prediction.features_snapshot_json,
+        } for prediction, activity, student, completed in rows],
+    }
 
 
 def _accuracy(rows: list[MLPrediction], field: str) -> dict:

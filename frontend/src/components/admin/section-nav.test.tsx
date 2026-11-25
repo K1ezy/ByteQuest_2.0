@@ -6,12 +6,10 @@ const path = vi.hoisted(() => ({ current: "/admin" }));
 vi.mock("next/navigation", () => ({ usePathname: () => path.current }));
 afterEach(cleanup);
 
-it("shows the tab row of the group the current page belongs to, with Accounts beside Course access", () => {
+it("leaves Accounts as a standalone page without course management tabs", () => {
   path.current = "/admin/accounts";
   render(<AdminSectionNav />);
-  const nav = screen.getByRole("navigation", { name: "Course and account sections" });
-  expect([...nav.querySelectorAll("a")].map(link => link.textContent)).toEqual(["Courses", "Course access", "Accounts"]);
-  expect(screen.getByRole("link", { name: "Accounts" }).getAttribute("aria-current")).toBe("page");
+  expect(screen.queryByRole("navigation")).toBeNull();
 });
 
 it("groups Activities with Materials and the system pages together", () => {

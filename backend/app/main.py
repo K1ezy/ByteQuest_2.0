@@ -13,7 +13,6 @@ from app.api.workshops import router as workshops_router
 from app.api.profiles import router as profiles_router
 from app.api.pilot import router as pilot_router
 from app.api.submission_jobs import router as submission_jobs_router
-from app.api.exams import router as exams_router
 from app.api.rag_instructor import router as rag_instructor_router
 from app.api.faculty import router as faculty_router
 from app.api.faculty_ml import router as faculty_ml_router
@@ -39,6 +38,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting %s v%s [%s]", settings.PROJECT_NAME, settings.VERSION, settings.ENVIRONMENT)
     app.state.sequencer_mode = "rule_based"
     app.state.model_version = None
+    app.state.selected_model = None
     app.state.ml_model_report = None
     app.state.sandbox_health = SandboxHealth()
 
@@ -67,6 +67,7 @@ async def lifespan(app: FastAPI):
                     model_bundle = load_ml_models()
                     app.state.ml_shadow_status = "ready"
                     app.state.model_version = model_bundle.model_version
+                    app.state.selected_model = model_bundle.selected_model
                     # Retained so faculty evaluation requests never reload artifacts.
                     app.state.ml_model_report = model_bundle.report
                 except ModelArtifactsUnavailable as exc:
@@ -135,7 +136,6 @@ app.include_router(admin_router)
 app.include_router(profiles_router)
 app.include_router(pilot_router)
 app.include_router(submission_jobs_router)
-app.include_router(exams_router)
 app.include_router(chat_router)
 app.include_router(chat_history_router)
 

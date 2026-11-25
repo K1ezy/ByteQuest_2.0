@@ -3,10 +3,6 @@ import type { Profile } from "@/lib/types";
 
 export const studentExamsHref = "/quests?category=exams";
 
-export function isStudentExamView(pathname: string, category: string | null) {
-  return belongsTo(pathname, "/exams") || (pathname === "/quests" && category === "exams");
-}
-
 export const roleLabels = { student: "Student", instructor: "Instructor", admin: "Administrator" };
 
 /**
@@ -18,10 +14,11 @@ export const instructorNavigation = [
     ["Dashboard", "/instructor", "home"], ["Activities", "/instructor/activities", "code"],
     ["Workshops", "/workshops", "users"],
     ["Materials", "/instructor/materials", "file"],
-    ["Exams", "/instructor/exams", "clipboard"], ["Announcements", "/instructor/announcements", "bell"],
+    ["Announcements", "/instructor/announcements", "bell"],
   ] },
   { title: "Students", links: [
-    ["Progress", "/instructor/performance", "users"],
+    ["Performance and Predictions", "/instructor/predictions", "chart"],
+    ["Student Progress", "/instructor/performance", "users"],
     ["Gradebook", "/instructor/performance#instructor-gradebook", "table"],
   ] },
   { title: "Insights", links: [
@@ -46,12 +43,11 @@ export const primaryNavigation: Record<Profile["role"], readonly (readonly [stri
     ["/workshops", "Workshops", "Workshops"],
   ],
   // Four tabs leave room for More, which opens the full instructor menu.
-  instructor: ["/instructor", "/instructor/activities", "/instructor/performance", "/instructor/exams"]
+  instructor: ["/instructor", "/instructor/activities", "/instructor/predictions", "/instructor/performance"]
     .map((href) => [href, instructorLabel(href), instructorLabel(href)] as const),
   admin: [
-    ["/admin", "System Overview", "Overview"], ["/admin/courses", "Course & Instructor Management", "Courses"],
+    ["/admin", "System Overview", "Overview"],
     ["/admin/accounts", "User & Role Management", "Users"], ["/admin/activities", "Content & Track Repository", "Content"],
-    ["/admin/teaching", "Instructor Workspace", "Teaching"],
   ],
 };
 
@@ -108,7 +104,7 @@ export function questRedirect(params: URLSearchParams, role?: Profile["role"]): 
     accessibility: "/account/accessibility",
   };
   const target = view === "faculty" && role
-    ? ({ student: "/quests", instructor: "/instructor", admin: "/admin/teaching" })[role]
+    ? ({ student: "/quests", instructor: "/instructor", admin: "/admin" })[role]
     : view && Object.hasOwn(fixed, view) ? fixed[view] : params.has("group") ? "/workshops" : null;
   if (!target) return null;
   const query = new URLSearchParams(params);

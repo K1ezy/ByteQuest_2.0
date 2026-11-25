@@ -876,175 +876,6 @@ def test_invite_guessing_and_failed_ai_hint_quota(flow, monkeypatch):
         assert db.query(HintUse).filter(HintUse.student_id == users["student"]).count() == 0
 
 
-def test_exam_snapshot_autosave_and_result_embargo(flow, monkeypatch):
-    client, new_session, users = flow
-    with new_session() as db:
-        challenge_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
-        quiz_id = _quiz(db, users["instructor"])
-        for activity_id in (challenge_id, quiz_id):
-            activity = db.get(LearningActivity, activity_id)
-            activity.review_status = ReviewState.published
-            if activity_id == challenge_id:
-                activity.judge0_verified = True
-        db.commit()
-    instructor = _token(users["instructor"])
-    student = _token(users["student"])
-    group_response = client.post("/api/v1/workshops", headers=instructor,
-        json={"name": "Exam pilot group", "language": "python", "activity_ids": [str(quiz_id), str(challenge_id)]})
-    assert group_response.status_code == 201, group_response.text
-    group = group_response.json()
-    other_instructor = _token(users["other_instructor"])
-    admin = _token(users["admin"])
-    assert client.get(f"/api/v1/workshops/{group['id']}/progress",
-        headers=other_instructor).status_code == 404
-    assert client.get(f"/api/v1/workshops/{group['id']}/progress",
-        headers=admin).status_code == 200
-    assert client.post("/api/v1/workshops/join", headers=student,
-        json={"code": group["join_code"]}).status_code == 200
-    now = datetime.now(timezone.utc)
-    created = client.post("/api/v1/exams/instructor", headers=instructor, json={
-        "title": "Regression exam", "opens_at": (now + timedelta(minutes=5)).isoformat(),
-        "closes_at": (now + timedelta(hours=2)).isoformat(), "duration_minutes": 45, "pass_mark_percent": 75,
-        "workshop_ids": [group["id"]],
-        "items": [{"activity_id": str(quiz_id), "points": 40},
-                  {"activity_id": str(challenge_id), "points": 60}],
-    })
-    assert created.status_code == 201, created.text
-    exam_id = created.json()["id"]
-    assert client.get(f"/api/v1/exams/instructor/{exam_id}", headers=other_instructor).status_code == 404
-    assert client.get(f"/api/v1/exams/instructor/{exam_id}", headers=admin).status_code == 200
-    published = client.post(f"/api/v1/exams/instructor/{exam_id}/publish", headers=instructor)
-    assert published.status_code == 200, published.text
-    assigned_exam = next(item for item in client.get("/api/v1/exams", headers=student).json()
-                         if item["id"] == exam_id)
-    exam_detail = client.get(f"/api/v1/exams/{exam_id}", headers=student).json()
-    assert assigned_exam["exam_number"] == exam_detail["exam_number"] == 1
-    assert assigned_exam["added_at"] == exam_detail["added_at"] == published.json()["published_at"]
-    with new_session() as db:
-        exam = db.get(Exam, uuid.UUID(exam_id))
-        exam.opens_at = now - timedelta(minutes=1)
-        db.commit()
-    started = client.post(f"/api/v1/exams/{exam_id}/start", headers=student)
-    assert started.status_code == 200, started.text
-    attempt_id = started.json()["attempt_id"]
-    loaded = client.get(f"/api/v1/exams/attempts/{attempt_id}", headers=student)
-    assert loaded.status_code == 200, loaded.text
-    assert "correct_answer" not in loaded.text
-    assert HIDDEN_INPUT not in loaded.text and HIDDEN_OUTPUT not in loaded.text
-    assert client.get(f"/api/v1/exams/attempts/{attempt_id}", headers=instructor).status_code == 404
-    item_id = loaded.json()["items"][0]["id"]
-    code_item_id = loaded.json()["items"][1]["id"]
-    saved = client.put(f"/api/v1/exams/attempts/{attempt_id}/answers", headers=student,
-        json={"expected_revision": 0, "answers": {item_id: {"q1": "A", "q2": "A", "q3": "A"},
-                                                   code_item_id: "PRINT_INPUT"}})
-    assert saved.status_code == 200, saved.text
-    assert client.put(f"/api/v1/exams/attempts/{attempt_id}/answers", headers=student,
-        json={"expected_revision": 0, "answers": {}}).status_code == 409
-    assert client.post(f"/api/v1/exams/attempts/{attempt_id}/submit", headers=student).status_code == 200
-    assert client.get(f"/api/v1/exams/attempts/{attempt_id}", headers=student).json()["result"] is None
-    monkeypatch.setattr(exam_worker, "SessionLocal", new_session)
-    _grade_queued_exam(attempt_id)
-    with new_session() as db:
-        attempt = db.get(ExamAttempt, uuid.UUID(attempt_id))
-        assert attempt.status == "submitted" and attempt.score == 100
-        assert all("solution" not in item for item in attempt.result_json["items"])
-        # Older rows stored solutions. The release response must strip them too.
-        attempt.result_json = {
-            **attempt.result_json,
-            "items": [{**item, "solution": "legacy answer key"} for item in attempt.result_json["items"]],
-        }
-        assert db.query(func.count(ActivityAttempt.id)).filter(
-            ActivityAttempt.exam_attempt_id == uuid.UUID(attempt_id)).scalar() == 2
-        db.get(Exam, uuid.UUID(exam_id)).closes_at = now - timedelta(seconds=1)
-        db.commit()
-    assert client.get(f"/api/v1/exams/attempts/{attempt_id}", headers=student).json()["result"] is None
-    hidden_profile = client.get("/api/v1/profile/me/analytics", headers=student)
-    assert hidden_profile.status_code == 200, hidden_profile.text
-    hidden_student = hidden_profile.json()["student"]
-    assert hidden_student["total_attempts"] == 0
-    assert hidden_student["xp_points"] == 0
-    assert hidden_student["current_level"] == 1
-    assert hidden_student["active_days_30"] == 0
-    assert hidden_student["score_trend"] == []
-    assert hidden_student["recent_attempts"] == []
-    assert hidden_student["quests_completed"] == 0
-    assert hidden_student["exam_history"][0]["score"] is None
-    assert hidden_student["exam_history"][0]["results_released"] is False
-    hidden_progress = client.get("/api/v1/quests/progress", headers=student).json()
-    assert hidden_progress["total_attempts"] == 0
-    assert client.get("/api/v1/pilot/dashboard", headers=student).json()["completed"] == 0
-    assert not any(quest["is_completed"] for quest in client.get("/api/v1/quests", headers=student).json())
-    assert client.get(f"/api/v1/pilot/activities/{challenge_id}/solution", headers=student).status_code == 403
-    results_path = f"/api/v1/exams/instructor/{exam_id}"
-    assert client.get(results_path, headers=student).status_code == 403
-    assert client.get(results_path, headers=_token(users["other_instructor"])).status_code == 404
-    staff_result = client.get(results_path, headers=instructor).json()["students"][0]["results"][0]
-    assert (staff_result["score"], staff_result["results_released"], staff_result["xp_awarded"]) == (100, False, None)
-    assert client.post(f"/api/v1/exams/instructor/{exam_id}/release", headers=instructor).status_code == 200
-    released_attempt = client.get(f"/api/v1/exams/attempts/{attempt_id}", headers=student).json()
-    assert released_attempt["result"]["score"] == 100
-    assert released_attempt["result"]["passed"] is True
-    assert all(item.keys() == {"item_id", "points_earned", "points_possible"} for item in released_attempt["result"]["items"])
-    staff_result = client.get(results_path, headers=instructor).json()["students"][0]["results"][0]
-    assert staff_result["results_released"] and staff_result["xp_awarded"] > 0
-    released_profile = client.get("/api/v1/profile/me/analytics", headers=student).json()["student"]
-    assert released_profile["total_attempts"] == 2
-    assert released_profile["quests_completed"] == 2
-    assert len(released_profile["recent_attempts"]) == 2
-    assert all(item["is_exam"] and not item["can_open_quest"] for item in released_profile["recent_attempts"])
-    assert released_profile["xp_points"] > 0
-    assert released_profile["active_days_30"] == 1
-    assert sum(day["attempts"] for day in released_profile["activity_days"]) == 2
-    assert released_profile["exam_history"][0]["score"] == 100
-    assert released_profile["exam_history"][0]["results_released"] is True
-    assert client.get("/api/v1/quests/progress", headers=student).json()["total_attempts"] == 2
-    assert client.get("/api/v1/pilot/dashboard", headers=student).json()["completed"] == 2
-    released_quests = {
-        quest["id"]: quest["is_completed"] for quest in client.get("/api/v1/quests", headers=student).json()
-    }
-    assert released_quests[str(quiz_id)] is True
-    assert released_quests[str(challenge_id)] is True
-    retake = client.post(f"/api/v1/exams/instructor/{exam_id}/retakes/{users['student']}",
-        headers=instructor, json={"opens_at": (now + timedelta(minutes=5)).isoformat(),
-                                  "closes_at": (now + timedelta(hours=1)).isoformat(),
-                                  "duration_minutes": 10})
-    assert retake.status_code == 200, retake.text
-    with new_session() as db:
-        grant = db.query(ExamRetakeGrant).filter(ExamRetakeGrant.exam_id == uuid.UUID(exam_id)).one()
-        grant.opens_at = now - timedelta(minutes=1)
-        db.commit()
-    assert client.get(f"/api/v1/exams/{exam_id}", headers=student).json()["can_start"] is True
-    second = client.post(f"/api/v1/exams/{exam_id}/start", headers=student)
-    assert second.status_code == 200 and second.json()["attempt_id"] != attempt_id
-    second_id = second.json()["attempt_id"]
-    assert client.post(f"/api/v1/exams/{exam_id}/start", headers=student).json()["attempt_id"] == second_id
-    with new_session() as db:
-        db.get(ExamAttempt, uuid.UUID(second_id)).due_at = now - timedelta(
-            seconds=settings.EXAM_AUTOSAVE_GRACE_SECONDS + 1)
-        db.commit()
-    _grade_queued_exam(second_id)
-    second_result = client.get(f"/api/v1/exams/attempts/{second_id}", headers=student).json()
-    assert second_result["result"] is None and second_result["results_released"] is False
-    exam_row = next(row for row in client.get("/api/v1/exams/instructor", headers=instructor).json() if row["id"] == exam_id)
-    assert exam_row["results_released"] and exam_row["has_unreleased_results"]
-    retake_profile = client.get("/api/v1/profile/me/analytics", headers=student).json()["student"]
-    assert retake_profile["total_attempts"] == 2
-    assert retake_profile["exam_history"][0]["score"] is None
-    assert retake_profile["exam_history"][0]["results_released"] is False
-    assert retake_profile["exam_history"][1]["score"] == 100
-    with new_session() as db:
-        grant = db.query(ExamRetakeGrant).filter(ExamRetakeGrant.exam_id == uuid.UUID(exam_id)).one()
-        grant.closes_at = now - timedelta(seconds=1)
-        db.commit()
-    assert client.post(f"/api/v1/exams/instructor/{exam_id}/release", headers=instructor).status_code == 200
-    assert client.get(f"/api/v1/exams/attempts/{second_id}", headers=student).json()["result"] is not None
-    exam_row = next(row for row in client.get("/api/v1/exams/instructor", headers=instructor).json() if row["id"] == exam_id)
-    assert exam_row["results_released"] and not exam_row["has_unreleased_results"]
-    rereleased_profile = client.get("/api/v1/profile/me/analytics", headers=student).json()["student"]
-    assert rereleased_profile["total_attempts"] == 4
-    assert all(item["results_released"] for item in rereleased_profile["exam_history"])
-
-
 def test_publish_retires_the_previous_version(flow):
     """Every publish path shares one rule set: a new version replaces the old one."""
     client, new_session, users = flow
@@ -1174,76 +1005,6 @@ def test_workshop_list_query_count_does_not_grow_with_workshops(flow):
     join_new_workshop("Workshop three")
 
     assert queries_to_list_workshops() == with_one, "each extra workshop must not add queries"
-
-
-def test_exam_grading_claim_is_leased_then_recovered(flow, monkeypatch):
-    """One worker owns a claimed attempt; a crashed claim is retried after its lease, not in a loop."""
-    client, new_session, users = flow
-    monkeypatch.setattr(exam_worker, "SessionLocal", new_session)
-    attempt_id, _ = _started_quiz_exam(client, new_session, users)
-    assert client.post(f"/api/v1/exams/attempts/{attempt_id}/submit",
-                       headers=_token(users["student"])).status_code == 200
-
-    owned = exam_worker.claim_exam()
-    assert owned.attempt_id == uuid.UUID(attempt_id)
-    assert exam_worker.claim_exam() is None, "a second claim must not hand out an attempt already being graded"
-
-    # The worker that held the claim crashed; once its lease runs out the attempt is picked up again.
-    with new_session() as db:
-        db.get(ExamAttempt, uuid.UUID(attempt_id)).grading_claimed_at = (
-            datetime.now(timezone.utc) - exam_worker.GRADING_LEASE - timedelta(seconds=1))
-        db.commit()
-    recovered = exam_worker.claim_exam()
-    assert recovered.attempt_id == uuid.UUID(attempt_id) and recovered.token != owned.token
-
-
-def test_exam_answer_sent_at_the_deadline_is_graded(flow, monkeypatch):
-    client, new_session, users = flow
-    monkeypatch.setattr(exam_worker, "SessionLocal", new_session)
-    attempt_id, item_id = _started_quiz_exam(client, new_session, users)
-    # The autosave left the browser at the deadline and reached the server 5 seconds later.
-    _set_due_at(new_session, attempt_id, datetime.now(timezone.utc) - timedelta(seconds=5))
-
-    saved = client.put(f"/api/v1/exams/attempts/{attempt_id}/answers", headers=_token(users["student"]),
-        json={"expected_revision": 0, "answers": {item_id: {"q1": "A", "q2": "A", "q3": "A"}}})
-
-    assert saved.status_code == 200, saved.text
-    assert exam_worker.claim_exam() is None, "the worker must wait for the same cutoff autosave uses"
-    _set_due_at(new_session, attempt_id,
-        datetime.now(timezone.utc) - timedelta(seconds=settings.EXAM_AUTOSAVE_GRACE_SECONDS + 1))
-    _grade_queued_exam(attempt_id)
-    with new_session() as db:
-        attempt = db.get(ExamAttempt, uuid.UUID(attempt_id))
-        assert (attempt.status, attempt.score, attempt.max_score) == ("submitted", 10, 10)
-
-
-def test_exam_answer_after_the_cutoff_is_rejected_as_expired(flow):
-    client, new_session, users = flow
-    attempt_id, item_id = _started_quiz_exam(client, new_session, users)
-    _set_due_at(new_session, attempt_id,
-        datetime.now(timezone.utc) - timedelta(seconds=settings.EXAM_AUTOSAVE_GRACE_SECONDS + 1))
-
-    late = client.put(f"/api/v1/exams/attempts/{attempt_id}/answers", headers=_token(users["student"]),
-        json={"expected_revision": 0, "answers": {item_id: {"q1": "A"}}})
-
-    assert late.status_code == 409
-    assert late.json()["detail"]["code"] == "attempt_expired"
-    # The browser recognises expiry by this wording, so it is part of the contract.
-    assert "Exam time has ended" in late.json()["detail"]["message"]
-    with new_session() as db:
-        attempt = db.get(ExamAttempt, uuid.UUID(attempt_id))
-        assert (attempt.answers_json, attempt.revision) == ({}, 0)
-
-
-def test_exam_attempt_reports_the_server_cutoff(flow):
-    client, new_session, users = flow
-    attempt_id, _ = _started_quiz_exam(client, new_session, users)
-
-    loaded = client.get(f"/api/v1/exams/attempts/{attempt_id}", headers=_token(users["student"])).json()
-
-    due_at = datetime.fromisoformat(loaded["due_at"])
-    accepted_until = datetime.fromisoformat(loaded["answers_accepted_until"])
-    assert accepted_until - due_at == timedelta(seconds=settings.EXAM_AUTOSAVE_GRACE_SECONDS)
 
 
 def _published_activity(db: Session, activity_id: uuid.UUID) -> None:
@@ -2053,16 +1814,6 @@ def test_chat_pdf_attachments_support_workshop_members_without_saving_a_chat(flo
         assert not db.scalar(text("select 1 from bytequest_private.chat_conversations where owner_id = :student"),
                              {"student": users["student"]})
 
-    attempt_id, _ = _started_quiz_exam(client, new_session, users)
-    assert client.get(status_path, headers=student).json()["pdf_upload_max_bytes"] is None
-    for response in (
-        client.post(attachment_path, headers=student, files=file),
-        client.post(reply_path, headers=student, json=pdf_question),
-    ):
-        assert response.status_code == 403 and response.json()["detail"]["code"] == "exam_in_progress"
-    _set_due_at(new_session, attempt_id, datetime.now(timezone.utc) - timedelta(minutes=5))
-    assert client.post(reply_path, headers=student, json=pdf_question).status_code == 200
-
 
 def test_saved_chat_is_private_searchable_and_idempotent(flow, monkeypatch):
     client, new_session, users = flow
@@ -2273,154 +2024,6 @@ def test_saved_chat_recovers_lost_creates_and_reservations(flow, monkeypatch):
         assert db.execute(text(
             "select pending_turn_id, pending_until from bytequest_private.chat_conversations where id = :id"
         ), {"id": conversation_id}).one() == (None, None)
-
-
-def test_exam_and_retake_pause_practice_help_through_the_answer_window(flow, monkeypatch):
-    client, new_session, users = flow
-    student = _token(users["student"])
-    _enroll_chat_students(new_session, users["student"], users["other_track"])
-    with new_session() as db:
-        challenge_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
-        db.get(LearningActivity, challenge_id).review_status = ReviewState.published
-        reviewed = ChallengeHint(activity_id=challenge_id, slot=1, body="Check the input type.")
-        db.add(reviewed)
-        db.flush()
-        hint_id = str(reviewed.id)
-        db.commit()
-    _graded_job(client, student, challenge_id, "FAIL", dry_run=True)
-    graded = _graded_job(client, student, challenge_id, "PRINT_INPUT")
-    with new_session() as db:
-        job_id = db.get(ActivityAttempt, uuid.UUID(graded["attempt_id"])).submission_job_id
-    comparison_path = f"/api/v1/submission-jobs/{job_id}/comparison"
-
-    provider_calls = []
-    quota_calls = []
-    monkeypatch.setattr(settings, "GEMINI_API_KEY", "synthetic-key")
-    monkeypatch.setattr(settings, "EXAM_AUTOSAVE_GRACE_SECONDS", 15)
-    monkeypatch.setattr(chat_api, "reserve", lambda action, account: quota_calls.append(action))
-    monkeypatch.setattr(pilot, "reserve", lambda action, account: quota_calls.append(action))
-    monkeypatch.setattr(chat_api, "_generate_chat_reply",
-                        lambda *args: provider_calls.append("chat") or "Trace the values.")
-    monkeypatch.setattr(pilot, "explain_code_error",
-                        lambda **kwargs: provider_calls.append("hint") or SimpleNamespace(hint="Check the input."))
-    monkeypatch.setattr(exam_worker, "SessionLocal", new_session)
-
-    hint_path = f"/api/v1/pilot/activities/{challenge_id}/hints"
-    chat_path = "/api/v1/chat/messages"
-    reviewed_request = {"source": "reviewed", "hint_id": hint_id, "request_key": "exam-reviewed-1"}
-    ai_request = {"source": "ai", "request_key": "exam-ai-hint-1"}
-
-    def check_paused():
-        before = (provider_calls.copy(), quota_calls.copy())
-        status = client.get("/api/v1/chat/status", headers=student)
-        assert status.status_code == 200 and status.json()["status"] == "exam_in_progress"
-        assert client.get("/api/v1/chat/conversations", headers=student).status_code == 403
-        for response in (
-            client.post(chat_path, headers=student, json=_chat_payload()),
-            client.get(hint_path, headers=student),
-            client.get(comparison_path, headers=student),
-            client.post(f"{hint_path}/reveal", headers=student, json=reviewed_request),
-            client.post(f"{hint_path}/reveal", headers=student, json=ai_request),
-        ):
-            assert response.status_code == 403, response.text
-            assert response.json()["detail"]["code"] == "exam_in_progress"
-        assert (provider_calls, quota_calls) == before
-
-    assert client.post(chat_path, headers=student, json=_chat_payload()).status_code == 200
-    assert client.get(hint_path, headers=student).json()["remaining"] == 5
-    assert client.get(comparison_path, headers=student).status_code == 200
-    attempt_id, _ = _started_quiz_exam(client, new_session, users)
-    check_paused()
-    assert client.post(chat_path, headers=_token(users["other_track"]), json=_chat_payload()).status_code == 200
-
-    submitted = client.post(f"/api/v1/exams/attempts/{attempt_id}/submit", headers=student)
-    assert submitted.json()["status"] == "grading"
-    assert client.post(chat_path, headers=student, json=_chat_payload()).status_code == 200
-    assert client.get(hint_path, headers=student).json()["remaining"] == 5
-    _grade_queued_exam(attempt_id)
-    with new_session() as db:
-        exam_id = db.get(ExamAttempt, uuid.UUID(attempt_id)).exam_id
-
-    now = datetime.now(timezone.utc)
-    retake_opens = now + timedelta(minutes=5)
-    grant = client.post(f"/api/v1/exams/instructor/{exam_id}/retakes/{users['student']}",
-                        headers=_token(users["instructor"]), json={
-                            "opens_at": retake_opens.isoformat(),
-                            "closes_at": (retake_opens + timedelta(hours=1)).isoformat(),
-                            "duration_minutes": 15,
-                        })
-    assert grant.status_code == 200, grant.text
-    assert client.get(hint_path, headers=student).json()["remaining"] == 5
-    clock = retake_opens + timedelta(seconds=1)
-    monkeypatch.setattr(exams_api, "utcnow", lambda: clock)
-    retake = client.post(f"/api/v1/exams/{exam_id}/start", headers=student)
-    assert retake.status_code == 200, retake.text
-    retake_id = retake.json()["attempt_id"]
-    assert retake_id != attempt_id
-    check_paused()
-
-    with new_session() as db:
-        due_at = db.get(ExamAttempt, uuid.UUID(retake_id)).due_at
-    clock = due_at + timedelta(seconds=14)
-    check_paused()
-    clock = due_at + timedelta(seconds=15)
-    assert client.get("/api/v1/chat/status", headers=student).json()["status"] == "ready"
-    assert client.get(comparison_path, headers=student).status_code == 200
-    assert client.get(hint_path, headers=student).json()["remaining"] == 5
-    assert client.post(chat_path, headers=student, json=_chat_payload()).status_code == 200
-    assert client.post(f"{hint_path}/reveal", headers=student, json=reviewed_request).json()["remaining"] == 4
-    assert client.post(f"{hint_path}/reveal", headers=student, json=ai_request).json()["remaining"] == 3
-
-
-@pytest.mark.parametrize("source", ["chat", "saved", "hint"])
-def test_help_in_flight_is_withheld_if_an_exam_begins(flow, monkeypatch, source):
-    client, new_session, users = flow
-    student = _token(users["student"])
-    _enroll_chat_students(new_session, users["student"])
-    with new_session() as db:
-        challenge_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
-        db.get(LearningActivity, challenge_id).review_status = ReviewState.published
-        db.commit()
-    _graded_job(client, student, challenge_id, "FAIL", dry_run=True)
-    attempt_id, _ = _started_quiz_exam(client, new_session, users)
-    with new_session() as db:
-        attempt = db.get(ExamAttempt, uuid.UUID(attempt_id))
-        exam_id, due_at = attempt.exam_id, attempt.due_at
-        db.delete(attempt)
-        db.commit()
-
-    def start_attempt():
-        with new_session() as db:
-            db.add(ExamAttempt(exam_id=exam_id, student_id=users["student"], attempt_number=1,
-                               started_at=datetime.now(timezone.utc), due_at=due_at))
-            db.commit()
-
-    hint_path = f"/api/v1/pilot/activities/{challenge_id}/hints"
-    root = "/api/v1/chat/conversations"
-    turn = {"turn_id": str(uuid.uuid4()), "expected_revision": 0, "question": "Explain a loop"}
-    if source == "chat":
-        monkeypatch.setattr(chat_api, "_generate_chat_reply", lambda *args: start_attempt() or "Explanation.")
-        response = client.post("/api/v1/chat/messages", headers=student, json=_chat_payload())
-    elif source == "saved":
-        monkeypatch.setattr(settings, "CHAT_HISTORY_ENABLED", True)
-        conversation_id = client.post(root, headers=student).json()["id"]
-        monkeypatch.setattr(chat_api, "_generate_chat_reply", lambda *args: start_attempt() or "Explanation.")
-        response = client.post(f"{root}/{conversation_id}/turns", headers=student, json=turn)
-    else:
-        monkeypatch.setattr(pilot, "explain_code_error", lambda **kwargs: start_attempt() or SimpleNamespace(hint="Hint."))
-        response = client.post(f"{hint_path}/reveal", headers=student,
-                               json={"source": "ai", "request_key": "in-flight-hint-1"})
-    assert response.status_code == 403, response.text
-    assert response.json()["detail"]["code"] == "exam_in_progress"
-    with new_session() as db:
-        assert db.query(HintUse).filter(HintUse.student_id == users["student"]).count() == 0
-    if source == "saved":
-        recovery = client.get(f"{root}/{conversation_id}/turns/{turn['turn_id']}", headers=student)
-        assert recovery.status_code == 403 and recovery.json()["detail"]["code"] == "exam_in_progress"
-        with new_session() as db:
-            assert db.execute(text(
-                "select pending_turn_id, revision from bytequest_private.chat_conversations where id = :id"
-            ), {"id": conversation_id}).one() == (None, 0)
 
 
 def test_chat_rejects_unauthenticated_and_invalid_payloads(flow):
@@ -2921,6 +2524,7 @@ def test_generated_challenge_requires_visible_and_distinct_hidden_cases(hidden, 
         rag_instructor.GeneratedChallengeSchema.model_validate({
             "title": "Count items", "problem_statement": "Read the count and print it.", "starter_code": "",
             "reference_solution_code": "print(int(input()))", "difficulty_level": 1, "test_cases": cases,
+            "guiding_hints": ["Trace input", "Use a loop", "Check state", "Check output", "Test a boundary"],
         })
 
 
@@ -3483,12 +3087,6 @@ def test_workshop_lesson_upload_download_practice_and_revocation(flow, monkeypat
     assert page_question.status_code == 200
     assert page_question.json()["sources"] == [{"document_title": "Practice loops", "page_number": 2}]
 
-    attempt_id, _ = _started_quiz_exam(client, new_session, users)
-    paused = practice()
-    assert paused.status_code == 403 and paused.json()["detail"]["code"] == "exam_in_progress"
-    assert len(prompts) == 4
-    _set_due_at(new_session, attempt_id, datetime.now(timezone.utc) - timedelta(minutes=5))
-
     monkeypatch.setattr(material_service, "reserve", lambda *args: None)
     moved = client.post(
         faculty_path, headers=owner,
@@ -3715,32 +3313,6 @@ def test_workshop_activity_updates_are_ordered_and_observe_archive_and_scope(flo
     assert client.delete(endpoint, headers=owner).json()["activity_ids"] == [first, second]
 
 
-def test_workshop_exam_guard_only_blocks_the_assigned_workshop_and_active_attempt(flow):
-    from app.models.entities import ExamAssignment
-
-    client, new_session, users = flow
-    attempt_id, _ = _started_quiz_exam(client, new_session, users)
-    owner, student = (_token(users[role]) for role in ("instructor", "student"))
-    with new_session() as db:
-        attempt = db.get(ExamAttempt, uuid.UUID(attempt_id))
-        assignment = db.query(ExamAssignment).filter_by(exam_id=attempt.exam_id).one()
-        workshop_id = assignment.workshop_id
-    path = f"/api/v1/workshops/{workshop_id}"
-    assert client.delete(f"{path}/membership", headers=student).status_code == 409
-    assert client.delete(f"{path}/members/{users['student']}", headers=owner).status_code == 409
-    other = client.post("/api/v1/workshops", headers=owner, json={"name": "Separate", "language": "python"}).json()
-    assert client.post("/api/v1/workshops/join", headers=student, json={"code": other["join_code"]}).status_code == 200
-    assert client.delete(f"/api/v1/workshops/{other['id']}/membership", headers=student).status_code == 204
-    with new_session() as db:
-        attempt = db.get(ExamAttempt, uuid.UUID(attempt_id))
-        attempt.status = "grading"
-        attempt.submitted_at = datetime.now(timezone.utc)
-        db.commit()
-    assert client.delete(f"{path}/membership", headers=student).status_code == 204
-    with new_session() as db:
-        assert db.get(ExamAttempt, uuid.UUID(attempt_id)).submitted_at is not None
-
-
 def test_workshop_activity_catalog_and_details_use_workshop_scope(flow):
     client, new_session, users = flow
     owner, student, staff = (_token(users[role]) for role in ("instructor", "student", "other_instructor"))
@@ -3812,7 +3384,7 @@ def test_workshop_announcements_permissions_validation_and_pinning(flow):
     assert len(client.get(board, headers=student).json()) == 1
 
 
-def test_workshop_upcoming_uses_activity_schedule_and_visible_exam_windows(flow):
+def test_workshop_upcoming_reports_practice_only_even_with_legacy_exams(flow):
     from app.models.entities import ExamAssignment
 
     client, new_session, users = flow
@@ -3851,11 +3423,8 @@ def test_workshop_upcoming_uses_activity_schedule_and_visible_exam_windows(flow)
     assert client.get(path, headers=student).json()["next_closes_at"]
     upcoming = client.get(f"{path}/upcoming", headers=student)
     assert upcoming.status_code == 200, upcoming.text
-    assert [row["id"] for row in upcoming.json()] == [str(activity_ids[0]), exam_ids["Published exam"]]
-    assert upcoming.json()[1]["opens_at"] and upcoming.json()[1]["kind"] == "exam"
-    assert {row["id"] for row in client.get(f"{path}/upcoming", headers=owner).json()} == {
-        str(activity_ids[0]), exam_ids["Published exam"], exam_ids["Restricted exam"],
-    }
+    assert [row["id"] for row in upcoming.json()] == [str(activity_ids[0])]
+    assert [row["id"] for row in client.get(f"{path}/upcoming", headers=owner).json()] == [str(activity_ids[0])]
 
 
 def test_workshop_progress_is_read_only_practice_and_current_members_only(flow):

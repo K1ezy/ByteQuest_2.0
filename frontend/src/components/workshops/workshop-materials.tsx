@@ -52,12 +52,7 @@ export function WorkshopMaterials() {
               aria-busy={downloading === lesson.document_id}>
               {downloading === lesson.document_id ? "Downloading…" : "Download PDF"}
             </Button>
-            {role === "student" && lesson.practice_status === "ready" && (
-              <Link className="button button-primary" href={`/chat?workshop=${workshop.id}&lesson=${lesson.document_id}`}>Practice with Chat Assistant</Link>
-            )}
           </div>
-          {lesson.practice_status === "indexing" && <p>Preparing the lesson for Chat Assistant.</p>}
-          {lesson.practice_status === "unavailable" && <p>Chat practice is unavailable for this PDF.</p>}
         </li>)}
       </ul>}
     {downloadError && <p role="alert">{downloadError}</p>}

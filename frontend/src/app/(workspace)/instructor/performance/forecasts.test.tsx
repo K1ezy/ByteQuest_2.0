@@ -221,7 +221,7 @@ it("opens a learner drawer with evidence, advisory wording and forecast history"
   expect(mocks.apiRequest).toHaveBeenCalledWith(
     expect.stringContaining("/faculty/ml/students/studentalpha?course_id=coursealpha&period=all"),
   );
-  expect(within(drawer).getByText(/Midterm/)).toBeTruthy();
+  expect(within(drawer).queryByText(/Midterm/)).toBeNull();
   expect(within(drawer).getByText(/Random forest/)).toBeTruthy();
   expect(within(drawer).getByText("Pass")).toBeTruthy();
   expect(within(drawer).getByText(/grades, rewards and access are unchanged/)).toBeTruthy();

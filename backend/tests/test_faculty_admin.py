@@ -602,6 +602,7 @@ def test_gemini_instructions_reach_the_provider_and_create_a_private_draft(works
                 "starter_code": "",
                 "reference_solution_code": "print(int(input()) + 1)",
                 "difficulty_level": 1,
+                "guiding_hints": ["Trace input", "Check initialization", "Track updates", "Check output", "Test a boundary"],
                 "test_cases": [
                     {"order_index": i, "stdin": str(i), "expected_stdout": str(i + 1), "is_hidden": i > 0}
                     for i in range(3)
@@ -628,12 +629,78 @@ def test_gemini_instructions_reach_the_provider_and_create_a_private_draft(works
     assert body["difficulty_level"] == 3
     if kind == "challenge":
         assert body["judge0_verified"]
+        hints_url = f"/api/v1/pilot/instructor/activities/{body['activity_id']}/hints"
+        hints = client.get(hints_url, headers=headers).json()
+        assert [(hint["slot"], hint["body"]) for hint in hints] == list(enumerate(
+            ["Trace input", "Check initialization", "Track updates", "Check output", "Test a boundary"], 1))
+        assert client.put(hints_url, headers=headers, json={"slot": 1, "body": "Read the sample input."}).status_code == 200
+        assert client.get(hints_url, headers=headers).json()[0]["body"] == "Read the sample input."
 
     reviewed = client.get(f"/api/v1/faculty/drafts/{body['activity_id']}", headers=headers).json()
     assert reviewed["course"]["id"] == str(ids["course_a"])
     assert reviewed["citations"][0]["page_number"] == 12
     assert reviewed["published_at"] is None
     assert preferences not in json.dumps(reviewed)
+
+
+def test_workshop_publication_captures_assignment_prediction_and_limits_access(workspace, monkeypatch):
+    client, sessions, ids = workspace
+    instructor, student, nonmember = (_token(ids[key]) for key in ("faculty", "student", "other_student"))
+    course_id = str(ids["course_a"])
+    workshops = "/api/v1/workshops"
+    with sessions() as db:
+        db.add(CourseMember(course_id=ids["course_a"], profile_id=ids["other_student"], member_role="student", status="active"))
+        db.add(ResearchConsent(student_id=ids["student"], document_version="assignment-test", choice="accepted"))
+        db.commit()
+    workshop = client.post(workshops, headers=instructor, json={"name": "Python Workshop", "language": "python"}).json()
+    assert client.post(f"{workshops}/join", headers=student, json={"code": workshop["join_code"]}).status_code == 200
+    monkeypatch.setattr(settings, "ML_SHADOW_ENABLED", True)
+    monkeypatch.setattr(settings, "ML_SHADOW_RESEARCH_APPROVED", True)
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_ACTIVE", True)
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_VERSION", "assignment-test")
+    monkeypatch.setattr(settings, "RESEARCH_CONSENT_TEXT", "Assignment test consent")
+    monkeypatch.setattr(shadow_service, "has_required_prediction_history", lambda *args: True)
+    calls = []
+
+    def predict(db, learner, activity, *, as_of):
+        calls.append(as_of)
+        assert learner.id == ids["student"] and activity.language == ProgrammingLang.python
+        return PredictionResult(dict.fromkeys(FEATURE_NAMES, 3.0), 0.51, True, 0.48, False,
+                                "standard_next", "reviewed-test-model", "random_forest")
+
+    monkeypatch.setattr(shadow_service, "predict_student_success", predict)
+    created = client.post("/api/v1/faculty/activities", headers=instructor, json={
+        "course_id": course_id, "workshop_id": workshop["id"], "activity_type": "challenge", "language": "java",
+        "title": "Sum three values", "topic_concept": "Addition", "problem_statement": "Read three values and print their total.",
+        "reference_solution_code": "print(sum(map(int, input().split())))",
+        "test_cases": [{"order_index": 0, "stdin": "1 2 3", "expected_stdout": "6"}],
+    })
+    assert created.status_code == 201, created.text
+    activity_id = created.json()["activity"]["activity_id"]
+    from app.services.challenge_verification import challenge_validation_fingerprint, record_challenge_verification
+    with sessions() as db:
+        saved = db.get(LearningActivity, uuid.UUID(activity_id))
+        record_challenge_verification(saved, True, {}, challenge_validation_fingerprint(saved))
+        db.commit()
+
+    route = f"/api/v1/faculty/activities/{activity_id}/publish"
+    published = client.post(route, headers=instructor, json={"confirm": True, "preview_confirmed": True})
+    assert published.status_code == 200, published.text
+    assert any(item["id"] == activity_id for item in client.get("/api/v1/quests", headers=student).json())
+    assert all(item["id"] != activity_id for item in client.get("/api/v1/quests", headers=nonmember).json())
+    assert client.get(f"/api/v1/quests/{activity_id}", headers=nonmember).status_code == 404
+    report = "/api/v1/faculty/ml/predictions"
+    params = {"course_id": course_id}
+    response = client.get(report, headers=instructor, params=params)
+    assert response.status_code == 200, response.text
+    row, = response.json()["rows"]
+    assert calls == [datetime.fromisoformat(row["assigned_at"])] and len(row["features"]) == 10
+    assert (row["prob_lr"], row["label_lr"], row["prob_rf"], row["label_rf"], row["advisory_band"]) == (0.51, True, 0.48, False, "standard_next")
+    assert client.get(report, headers=instructor, params={**params, "through_date": "2020-01-01"}).json()["rows"] == []
+    assert client.get(report, headers=_token(ids["other_faculty"]), params=params).status_code in (403, 404)
+    assert client.get(report, headers=student, params=params).status_code == 403
+    assert client.get("/api/v1/exams", headers=student).status_code == 404
+    assert client.post("/api/v1/exams/instructor", headers=instructor, json={}).status_code == 404
 
 
 def test_reject_requires_a_reason_and_returns_to_queue(workspace):
@@ -1314,7 +1381,7 @@ def test_school_id_availability_matches_the_signup_rule(workspace):
     assert client.post(endpoint, json={"school_id": school_id}).json() == {"available": False}
 
 
-def test_ml_exam_history_waits_for_release_and_uses_overall_score_once(workspace):
+def test_practice_analytics_ignore_legacy_exams_even_after_release(workspace):
     client, db_session, ids = workspace
     now = datetime.now(timezone.utc)
     with db_session() as db:
@@ -1347,11 +1414,11 @@ def test_ml_exam_history_waits_for_release_and_uses_overall_score_once(workspace
         assert len(history) == 1 and history[0]["score_percentage"] == 80.0
         assert released_exam_history(db, ids["student"], ids["course_a"], as_of=now - timedelta(hours=1)) == []
         after = client.get(f"/api/v1/faculty/ml?course_id={ids['course_a']}", headers=_token(ids["faculty"])).json()
-        assert after["students"][0]["exam_count"] == 1
+        assert after["students"][0]["exam_count"] == 0
         assert after["students"][0]["challenge_count"] == 1
         detail = client.get(f"/api/v1/faculty/ml/students/{ids['student']}?course_id={ids['course_a']}",
                             headers=_token(ids["faculty"])).json()
-        assert any(point["exam"] == 80.0 and point["exam_count"] == 1 for point in detail["trend"])
+        assert all(point["exam"] is None and point["exam_count"] == 0 for point in detail["trend"])
         summary = released_exam_summary(db, exam.id, learners, [attempt])
         assert summary["average_percent"] == 80
         later = ExamAttempt(exam_id=exam.id, student_id=ids["student"], attempt_number=2,
@@ -1368,62 +1435,6 @@ def test_ml_exam_history_waits_for_release_and_uses_overall_score_once(workspace
         assert summary["submitted"] == 1 and summary["average_percent"] == 90
         assert sum(b["count"] for b in summary["score_bands"]) == 1
         assert summary["items"][0]["attempted"] == summary["items"][0]["passed"] == 1
-
-
-def test_exam_release_timestamp_is_stable_idempotent_and_scoring_failure_is_isolated(workspace, monkeypatch):
-    client, db_session, ids = workspace
-    now = datetime.now(timezone.utc)
-    with db_session() as db:
-        exam = Exam(created_by=ids["faculty"], title="Retake timing", opens_at=now - timedelta(days=2),
-                    closes_at=now - timedelta(days=1), duration_minutes=30, published_at=now - timedelta(days=2))
-        db.add(exam)
-        db.flush()
-        db.add(ExamItem(exam_id=exam.id, activity_id=ids["published"], position=1, points=100, snapshot_json={}))
-        first = ExamAttempt(exam_id=exam.id, student_id=ids["student"], attempt_number=1,
-                            status="submitted", started_at=now - timedelta(days=2), due_at=now - timedelta(days=1),
-                            submitted_at=now - timedelta(days=1), score=80, max_score=100)
-        db.add(first)
-        db.commit()
-        exam_id, first_id = exam.id, first.id
-
-    scoring_calls = []
-    def fail_optional_scoring(*args):
-        scoring_calls.append("failed")
-        raise RuntimeError("model service failed")
-    monkeypatch.setattr(exams_api, "_score_released_exam", fail_optional_scoring)
-    url = f"/api/v1/exams/instructor/{exam_id}/release"
-    released = client.post(url, headers=_token(ids["faculty"]))
-    assert released.status_code == 200, released.text
-    assert scoring_calls == ["failed"]
-    first_release = released.json()["released_at"]
-    with db_session() as db:
-        assert db.get(ExamAttempt, first_id).result_released_at.isoformat() == first_release.replace("Z", "+00:00")
-        assert len(released_exam_history(db, ids["student"], ids["course_a"])) == 1
-
-    again = client.post(url, headers=_token(ids["faculty"]))
-    assert again.status_code == 200
-    assert again.json()["released_at"] == first_release
-    assert scoring_calls == ["failed"]
-
-    with db_session() as db:
-        second = ExamAttempt(exam_id=exam_id, student_id=ids["student"], attempt_number=2,
-                             status="submitted", started_at=datetime.now(timezone.utc),
-                             due_at=datetime.now(timezone.utc), submitted_at=datetime.now(timezone.utc),
-                             score=60, max_score=100)
-        db.add(second)
-        db.commit()
-        second_id = second.id
-    monkeypatch.setattr(exams_api, "_score_released_exam", lambda *args: scoring_calls.append("second"))
-    retake_release = client.post(url, headers=_token(ids["faculty"]))
-    assert retake_release.status_code == 200, retake_release.text
-    assert scoring_calls == ["failed", "second"]
-    with db_session() as db:
-        history = released_exam_history(db, ids["student"], ids["course_a"])
-        assert [row["exam_attempt_id"] for row in history] == [str(first_id), str(second_id)]
-        assert history[0]["created_at"].isoformat() == first_release.replace("Z", "+00:00")
-        assert history[1]["created_at"] > history[0]["created_at"]
-        assert len(released_exam_history(db, ids["student"], ids["course_a"],
-                                         as_of=history[0]["created_at"], include_at_cutoff=True)) == 1
 
 
 def test_duplicate_email_and_assignment_conflicts_are_inline(workspace):
@@ -2157,7 +2168,7 @@ def test_archiving_a_course_closes_its_activities_keeps_history_and_restores(wor
         assert "course.archived" in actions and "course.restored" in actions
 
 
-def test_archive_is_blocked_while_an_exam_using_the_course_is_open_or_scheduled(workspace):
+def test_archiving_course_ignores_retired_exams(workspace):
     client, new_session, ids = workspace
     now = datetime.now(timezone.utc)
     with new_session() as db:
@@ -2170,15 +2181,10 @@ def test_archive_is_blocked_while_an_exam_using_the_course_is_open_or_scheduled(
         exam_id = exam.id
     admin = _token(ids["admin"])
     impact = client.get(f"/api/v1/admin/courses/{ids['course_a']}/impact", headers=admin).json()
-    assert [e["title"] for e in impact["blocking_exams"]] == ["Midterm"] and impact["students"] == 1
-    refused = client.post(f"/api/v1/admin/courses/{ids['course_a']}/archive", headers=admin)
-    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "course_has_exam"
-    with new_session() as db:
-        assert db.get(Course, ids["course_a"]).status == "active"
-        exam = db.get(Exam, exam_id)
-        exam.opens_at, exam.closes_at = now - timedelta(days=2), now - timedelta(days=1)
-        db.commit()
+    assert impact["blocking_exams"] == [] and impact["students"] == 1
     assert client.post(f"/api/v1/admin/courses/{ids['course_a']}/archive", headers=admin).status_code == 200
+    with new_session() as db:
+        assert db.get(Exam, exam_id).title == "Midterm"
 
 
 def test_course_creation_audit_entry_links_to_the_new_course(workspace):

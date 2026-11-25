@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRef, useState } from "react";
 import { useShellProfile } from "@/components/app-shell";
 import { QuestCard } from "@/components/quest-card";
@@ -115,7 +114,6 @@ export function WorkshopActivities() {
     indexes.set(link.activity_id, index);
   });
   const topics = [...groups.keys()].filter((topic) => topic !== null);
-  const examsLink = `${role === "admin" ? "/admin/teaching/exams" : "/instructor/exams"}?workshop=${workshop.id}`;
 
   function closeMenu() {
     if (!addMenu.current) return;
@@ -158,7 +156,6 @@ export function WorkshopActivities() {
         <summary className="button button-primary">Add</summary>
         <div className="workshop-add-options">
           <Button onClick={() => { closeMenu(); setDialog({ kind: "add" }); }}>Published activity</Button>
-          <Link className="button button-outline" href={examsLink}>Exam</Link>
           <Button onClick={() => { closeMenu(); setDialog({ kind: "topic" }); }}>Topic</Button>
         </div>
       </details>}

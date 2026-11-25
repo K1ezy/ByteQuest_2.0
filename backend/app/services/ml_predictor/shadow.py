@@ -20,7 +20,10 @@ from app.models.entities import (
     Profile,
     ResearchConsent,
     UserRole,
+    ActivityKind,
+    WorkshopMember,
 )
+from app.services.ml_predictor.consent import consented_student_ids
 from app.services.ml_predictor.predictor import (
     ModelArtifactError,
     ModelArtifactsUnavailable,
@@ -49,7 +52,8 @@ def prior_graded_task_count(db: Session, student: Profile, target: LearningActiv
         .filter(
             ActivityAttempt.student_id == student.id,
             LearningActivity.language == target.language,
-            ActivityAttempt.created_at <= (source.created_at if isinstance(source, ActivityAttempt) else source),
+            (ActivityAttempt.created_at <= source.created_at if isinstance(source, ActivityAttempt)
+             else ActivityAttempt.created_at < source),
             ActivityAttempt.exam_attempt_id.is_(None),
             LearningActivity.course_id == target.course_id,
         )
@@ -60,6 +64,51 @@ def prior_graded_task_count(db: Session, student: Profile, target: LearningActiv
 
 def has_required_prediction_history(db: Session, student: Profile, target: LearningActivity, source: ActivityAttempt | datetime) -> bool:
     return prior_graded_task_count(db, student, target, source) >= get_setting_int(db, "prediction_min_history", 3)
+
+
+def capture_assignment_predictions(db: Session, target: LearningActivity, assigned_at: datetime, *,
+                                   workshop_id: uuid.UUID | None = None, student_id: uuid.UUID | None = None) -> None:
+    """Save first-submission forecasts inside the same transaction that assigns a challenge."""
+    if (target.activity_type != ActivityKind.challenge or not target.course_id or target.exam_only
+            or not settings.ML_SHADOW_ENABLED or not settings.ML_SHADOW_RESEARCH_APPROVED
+            or not settings.RESEARCH_CONSENT_TEXT):
+        return
+    roster = db.query(Profile).join(CourseMember, CourseMember.profile_id == Profile.id).filter(
+        CourseMember.course_id == target.course_id, CourseMember.member_role == "student",
+        CourseMember.status == "active", Profile.account_status == "active", Profile.role == UserRole.student,
+        Profile.enrolled_language == target.language,
+    )
+    if workshop_id is not None:
+        roster = roster.join(WorkshopMember, WorkshopMember.profile_id == Profile.id).filter(WorkshopMember.workshop_id == workshop_id)
+    if student_id is not None:
+        roster = roster.filter(Profile.id == student_id)
+    try:
+        with db.begin_nested():
+            students = roster.all()
+            consented = consented_student_ids(db, [student.id for student in students])
+            for student in students:
+                if student.id not in consented or not has_required_prediction_history(db, student, target, assigned_at):
+                    continue
+                if db.query(ActivityAttempt.id).filter_by(student_id=student.id, activity_id=target.id, exam_attempt_id=None).first():
+                    continue
+                if db.query(MLPrediction.id).filter(MLPrediction.student_id == student.id,
+                                                   MLPrediction.target_activity_id == target.id,
+                                                   MLPrediction.assigned_at.is_not(None)).first():
+                    continue
+                prediction = predict_student_success(db, student, target, as_of=assigned_at)
+                db.add(MLPrediction(
+                    student_id=student.id, target_activity_id=target.id, assigned_at=assigned_at,
+                    features_snapshot_json={name: None if math.isnan(value) else value
+                                            for name, value in prediction.features.items()},
+                    logreg_prob=prediction.logreg_probability, logreg_pred=prediction.logreg_prediction,
+                    rf_prob=prediction.rf_probability, rf_pred=prediction.rf_prediction,
+                    recommended_action=prediction.recommended_action, model_version=prediction.model_version,
+                    selected_model=prediction.selected_model, active_sequencer_mode="rule_based",
+                ))
+    except ModelArtifactsUnavailable:
+        logger.info("Assignment prediction skipped because no reviewed model is active.")
+    except (ModelArtifactError, SQLAlchemyError):
+        logger.exception("Could not save optional assignment predictions.")
 
 
 def record_shadow_prediction(

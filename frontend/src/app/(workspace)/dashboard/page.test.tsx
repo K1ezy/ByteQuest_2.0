@@ -27,7 +27,7 @@ it("keeps upcoming work on Dashboard and links to metrics in Profile", async () 
 
   expect((await screen.findByRole("link", { name: /Continue quest/ })).getAttribute("href")).toBe("/arena/next");
   expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/^Good (morning|afternoon|evening), Kieser!$/);
-  expect(screen.getByRole("link", { name: /Open exam/ }).getAttribute("href")).toBe("/exams/exam");
+  expect(screen.queryByRole("link", { name: /Open exam/ })).toBeNull();
   expect(screen.getByRole("link", { name: "View submission status" }).getAttribute("href")).toBe("/submissions/job");
   expect(screen.getByRole("link", { name: "View my progress" }).getAttribute("href")).toBe("/profile?tab=activity");
   expect(screen.queryByRole("progressbar")).toBeNull();

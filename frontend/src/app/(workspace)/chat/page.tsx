@@ -1,27 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef } from "react";
 import { ChatConversation } from "@/components/chat/chat-conversation";
-import { ChatLessonPractice } from "@/components/chat/chat-lesson-practice";
 import { ChatWorkspace } from "@/components/chat/chat-workspace";
 import { useChat } from "@/components/chat/chat-provider";
 import { useChatViewport } from "@/components/chat/use-chat-viewport";
 import { canOpenPath, internalPath, primaryNavigation } from "@/lib/navigation";
-
-const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 export default function ChatPage() {
   return <Suspense fallback={<p role="status">Loading chat…</p>}><ChatPageContent /></Suspense>;
 }
 
 function ChatPageContent() {
-  const { ownerId, signedIn, returnPath, role } = useChat();
-  const params = useSearchParams();
-  const workshop = params.get("workshop") ?? "";
-  const lesson = params.get("lesson") ?? "";
-  const lessonPath = uuid.test(workshop) && uuid.test(lesson) ? `/workshops/${workshop}/materials` : null;
+  const { signedIn, returnPath, role } = useChat();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const viewportRef = useChatViewport<HTMLDivElement>();
   const destination = internalPath(returnPath);
@@ -53,23 +45,13 @@ function ChatPageContent() {
             Sign in to ask about programming concepts, review a lesson idea, or
             request a hint for a coding challenge.
           </p>
-          <Link href={`/onboarding?redirect=${encodeURIComponent(lessonPath ? `/chat?workshop=${workshop}&lesson=${lesson}` : "/chat")}`} className="button button-primary">
+          <Link href="/onboarding?redirect=%2Fchat" className="button button-primary">
             Sign in to chat
           </Link>
         </section>
       </div>
     );
   }
-
-  if (lessonPath) return <div className="chat-page" ref={viewportRef}>
-    <section className="chat-page-card chat-practice-card" aria-labelledby="chat-page-title">
-      <header className="chat-page-header">
-        <Link href={lessonPath} className="chat-back-link">← Workshop materials</Link>
-        <h1 id="chat-page-title" ref={headingRef} tabIndex={-1}>Chat Assistant</h1>
-      </header>
-      <ChatLessonPractice key={`${ownerId}:${workshop}:${lesson}`} workshopId={workshop} lessonId={lesson} />
-    </section>
-  </div>;
 
   return (
     <div className="chat-page" ref={viewportRef}>

@@ -21,7 +21,7 @@ from app.services.profile_attention import (
 from app.services.gamification.progression import XP_PER_LEVEL, quest_completion
 from app.services.gamification.sequencer import determine_track_recommendation
 from app.services.gamification.solve_quality import help_pattern
-from app.services.attempt_visibility import learner_visible_attempt_clause, published_track_clause
+from app.services.attempt_visibility import published_track_clause
 from app.services.usernames import normalize_username
 from sqlalchemy.exc import IntegrityError
 from app.models.entities import (
@@ -29,8 +29,6 @@ from app.models.entities import (
     Badge,
     Course,
     CourseMember,
-    Exam,
-    ExamAttempt,
     InstructionalDocument,
     LearningActivity,
     Profile,
@@ -441,13 +439,9 @@ def _enum_value(value: object) -> str:
 def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
     student_filter = ActivityAttempt.student_id == user.id
 
-    # Exam item attempts use the same activity_attempts table as ordinary
-    # practice.  They must remain invisible everywhere in the profile until
-    # the instructor releases the specific exam attempt.  The submitted-at
-    # comparison also keeps a later retake embargoed after an earlier release.
     visible_attempt_filter = and_(
         student_filter,
-        learner_visible_attempt_clause(),
+        ActivityAttempt.exam_attempt_id.is_(None),
     )
 
     total_attempts = db.query(func.count(ActivityAttempt.id)).filter(visible_attempt_filter).scalar() or 0
@@ -541,28 +535,6 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
         for row in reversed(attempt_rows[:15])
     ]
 
-    exam_rows = (
-        db.query(ExamAttempt, Exam.title)
-        .join(Exam, Exam.id == ExamAttempt.exam_id)
-        .filter(ExamAttempt.student_id == user.id)
-        .order_by(ExamAttempt.started_at.desc())
-        .limit(25)
-        .all()
-    )
-    exam_history = [
-        ExamHistoryEntry(
-            exam_id=attempt.exam_id,
-            title=title,
-            status=attempt.status,
-            score=attempt.score if released else None,
-            max_score=attempt.max_score if released else None,
-            submitted_at=attempt.submitted_at,
-            results_released=released,
-        )
-        for attempt, title in exam_rows
-        for released in [bool(attempt.result_released_at)]
-    ]
-
     badge_rows = (
         db.query(Badge, StudentBadge.awarded_at)
         .join(StudentBadge, StudentBadge.badge_id == Badge.id)
@@ -644,7 +616,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
         by_topic=by_topic,
         score_trend=score_trend,
         recent_attempts=recent_attempts,
-        exam_history=exam_history,
+        exam_history=[],
         badges=badges,
     )
 

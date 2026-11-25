@@ -26,8 +26,6 @@ from app.models.entities import (
     AuditEvent,
     Course,
     CourseMember,
-    Exam,
-    ExamItem,
     InstructionalDocument,
     LearningActivity,
     ProcessingJob,
@@ -684,20 +682,6 @@ def update_course(course_id: uuid.UUID, payload: CourseUpdate, user: Profile = D
     return {"course": {"id": str(course.id), "code": course.code, "title": course.title}, "message": "Course saved."}
 
 
-def _exams_blocking_archive(db: Session, course_id: uuid.UUID) -> list[Exam]:
-    """Published exams that are open or still to come and use this course's activities."""
-    uses_course = Exam.id.in_(
-        db.query(ExamItem.exam_id).join(LearningActivity, LearningActivity.id == ExamItem.activity_id)
-        .filter(LearningActivity.course_id == course_id)
-    )
-    return (
-        db.query(Exam)
-        .filter(Exam.published_at.is_not(None), Exam.closes_at > datetime.now(timezone.utc),
-                (Exam.restricted_course_id == course_id) | uses_course)
-        .order_by(Exam.opens_at)
-        .all()
-    )
-
 
 @router.get("/courses/{course_id}/impact")
 def course_archive_impact(course_id: uuid.UUID, user: Profile = Depends(admin_user), db: Session = Depends(get_db)):
@@ -714,8 +698,7 @@ def course_archive_impact(course_id: uuid.UUID, user: Profile = Depends(admin_us
         "students": counts.get((course.id, "student"), 0),
         "instructors": counts.get((course.id, "instructor"), 0),
         "published_activities": published,
-        "blocking_exams": [{"id": str(exam.id), "title": exam.title, "opens_at": iso(exam.opens_at), "closes_at": iso(exam.closes_at)}
-                           for exam in _exams_blocking_archive(db, course.id)],
+        "blocking_exams": [],
     }
 
 
@@ -724,12 +707,6 @@ def archive_course(course_id: uuid.UUID, user: Profile = Depends(admin_user), db
     course = _course_or_404(db, course_id)
     if course.status == "archived":
         return {"status": "archived", "message": f"{course.title} is already archived."}
-    blocking = _exams_blocking_archive(db, course.id)
-    if blocking:
-        raise HTTPException(status_code=409, detail={
-            "code": "course_has_exam",
-            "message": f"{blocking[0].title} uses this course's activities and is open or scheduled. Archive after it closes.",
-        })
     course.status = "archived"
     record_audit(db, actor=user, action="course.archived", entity_type="course", entity_id=course.id, course_id=course.id,
                  summary=f"Archived course {course.code} · {course.title}")

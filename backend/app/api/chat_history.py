@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 from app.api.chat import (
     ChatMessageRequest, ChatMessageResponse, ChatSource, ChatTurn, _require_student_chat, generate_chat_reply,
 )
-from app.api.exams import require_practice_help_available
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.quotas import reserve
@@ -98,8 +97,6 @@ def _history_user(response: Response, user: Profile = Depends(get_current_user),
     response.headers["Cache-Control"] = "no-store"
     if not settings.chat_history_enabled:
         raise HTTPException(503, "Saved chat history is unavailable.")
-    if user.role == UserRole.student:
-        require_practice_help_available(db, user.id)
     return user
 
 
@@ -295,8 +292,6 @@ def _save_turn(db: Session, user: Profile, conversation_id: UUID, payload: SendT
     if replay:
         db.rollback()
         return replay
-    if user.role == UserRole.student:
-        require_practice_help_available(db, user.id)
     position = conversation.revision + 1
     # Commit only while this turn still holds the reservation.
     row = db.execute(text(f"""

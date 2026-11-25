@@ -208,7 +208,8 @@ function ActivityEditor({ activityId }: { activityId: string }) {
 
   const quiz = data.activity_type === "quiz";
   const needsSample = !quiz && !data.exam_only && !form.tests.some((test) => !test.is_hidden);
-  const audience = `students in ${data.course?.title ?? "this course"}${data.language ? ` on the ${workshopLanguages[data.language]} track` : ""}`;
+  const audience = data.destination_workshop ? `members of ${data.destination_workshop.name}`
+    : `students in ${data.course?.title ?? "this course"}${data.language ? ` on the ${workshopLanguages[data.language]} track` : ""}`;
   const savedIssues = data.publication_issues ?? [
     ...(quiz && form.questions.length < 3 ? ["invalid_quiz"] : []),
     ...(!quiz && !form.tests.length ? ["missing_tests"] : []),
@@ -338,7 +339,7 @@ function ActivityEditor({ activityId }: { activityId: string }) {
                 <label htmlFor="pass-mark">Pass mark (%)</label>
                 <input id="pass-mark" type="number" inputMode="numeric" min={1} max={100} placeholder="Default" value={form.passMark} disabled={!editable || editingLocked} onChange={(event) => update({ passMark: event.target.value })} aria-describedby="pass-mark-help" />
                 <FieldError>{errors.passMark}</FieldError>
-                <p id="pass-mark-help" className="ws-muted">Weighted score a submission needs to pass. Leave blank for the default: every test in practice, 80% in exams.</p>
+                <p id="pass-mark-help" className="ws-muted">Weighted score a submission needs to pass. Leave blank to require every test to pass.</p>
               </div>
             )}
             <div className="ws-field full">
@@ -578,12 +579,7 @@ function ActivityEditor({ activityId }: { activityId: string }) {
               </li>
             ))}
           </ul>
-          {data.exam_only && !firstIncomplete ? (
-            <Link className="ic-button ic-primary" href={`/instructor/exams${scope ? `?course=${encodeURIComponent(scope)}` : ""}`}
-              onNavigate={(event) => { if ((dirty || busy) && !window.confirm("Some changes are still in progress. Leave this activity?")) event.preventDefault(); }}>
-              Open Exams
-            </Link>
-          ) : firstIncomplete ? (
+          {firstIncomplete ? (
             <a className="ic-button ic-primary" href={`#${firstIncomplete.section}`}
               onClick={(event) => { event.preventDefault(); focusSection(firstIncomplete.section); }}>{firstIncomplete.action}</a>
           ) : currentVersionPreviewed ? (

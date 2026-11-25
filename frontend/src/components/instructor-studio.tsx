@@ -4,12 +4,11 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { apiRequest, getErrorMessage } from "@/lib/api";
 import { activityListHref } from "@/lib/instructor-activity";
-import type { ProgrammingLanguage } from "@/lib/types";
 import { retryMaterial, uploadMaterial, type MaterialList, type MaterialSummary } from "@/lib/workspace";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
 import { Button, Notice, StatusChip, useApi } from "@/components/workspace/ui";
 
-const languages: Record<ProgrammingLanguage, string> = { python: "Python", cpp: "C++", java: "Java" };
+import { ActivityDestination, useActivityWorkshops } from "@/components/instructor/activity-destination";
 
 function ready(material: MaterialSummary) {
   return material.state === "ready" && material.is_current && !material.archived_at;
@@ -26,7 +25,8 @@ export function GeminiActivityForm({ courseId, preselectedId }: { courseId: stri
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [kind, setKind] = useState<"quiz" | "challenge">("quiz");
-  const [language, setLanguage] = useState<ProgrammingLanguage | null>(null);
+  const destinations = useActivityWorkshops();
+  const [workshopId, setWorkshopId] = useState("");
   const [topic, setTopic] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState(2);
   const [instructions, setInstructions] = useState("");
@@ -39,9 +39,10 @@ export function GeminiActivityForm({ courseId, preselectedId }: { courseId: stri
   const sourceId = pickedId ?? preselectedId ?? "";
   const source = items.find((item) => item.document_id === sourceId);
   const sourceReady = Boolean(source && ready(source));
-  const effectiveLanguage = language ?? source?.language ?? profile.enrolled_language ?? "python";
+  const workshop = destinations.workshops.find((item) => item.id === (source?.workshop_id ?? workshopId));
+  const effectiveLanguage = workshop?.language ?? source?.language ?? profile.enrolled_language ?? "python";
   const effectiveTopic = topic ?? source?.topic_concept ?? "";
-  const dirty = Boolean(file || title || topic !== null || language || instructions || kind !== "quiz" || difficulty !== 2);
+  const dirty = Boolean(file || title || topic !== null || workshopId || instructions || kind !== "quiz" || difficulty !== 2);
 
   useEffect(() => {
     active.current = true;
@@ -116,14 +117,14 @@ export function GeminiActivityForm({ courseId, preselectedId }: { courseId: stri
 
   async function generate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!sourceReady || uploadOpen || busy) return;
+    if (!sourceReady || uploadOpen || busy || !workshop) return;
     if (effectiveTopic.trim().length < 2) {
       setError("Enter a topic of at least 2 characters.");
       return;
     }
     const form = new FormData();
     form.set("topic_query", effectiveTopic.trim());
-    form.set("language", effectiveLanguage);
+    form.set("workshop_id", workshop.id);
     form.set("difficulty", String(difficulty));
     if (instructions.trim()) form.set("instructor_instructions", instructions);
     setBusy("generate");
@@ -226,12 +227,8 @@ export function GeminiActivityForm({ courseId, preselectedId }: { courseId: stri
             <input id="gemini-topic" value={effectiveTopic} onChange={(event) => setTopic(event.target.value)}
               required minLength={2} maxLength={100} disabled={busy === "generate"} />
           </div>
-          <div className="ws-field">
-            <label htmlFor="gemini-language">Language</label>
-            <select id="gemini-language" value={effectiveLanguage} onChange={(event) => setLanguage(event.target.value as ProgrammingLanguage)} disabled={busy === "generate"}>
-              {Object.entries(languages).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-          </div>
+          <ActivityDestination id="gemini-workshop" value={workshop?.id ?? ""} onChange={setWorkshopId}
+            request={destinations} disabled={busy === "generate" || Boolean(source?.workshop_id)} />
           <div className="ws-field">
             <label htmlFor="gemini-difficulty">Difficulty</label>
             <select id="gemini-difficulty" value={difficulty} onChange={(event) => setDifficulty(Number(event.target.value))} disabled={busy === "generate"}>
@@ -245,7 +242,7 @@ export function GeminiActivityForm({ courseId, preselectedId }: { courseId: stri
               onChange={(event) => setInstructions(event.target.value)} disabled={busy === "generate"} />
           </div>
           <div className="ws-inline-actions full">
-            <Button type="submit" variant="primary" disabled={!sourceReady || uploadOpen || Boolean(busy)}>
+            <Button type="submit" variant="primary" disabled={!sourceReady || !workshop || uploadOpen || Boolean(busy)}>
               {busy === "generate" ? "Generating draft…" : "Generate draft"}
             </Button>
             <span className="ws-muted" role="status">

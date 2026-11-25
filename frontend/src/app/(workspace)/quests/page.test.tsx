@@ -87,37 +87,14 @@ it("shows each quest's deadline date and time, and says Closed once it has passe
   expect(screen.getAllByText((_, node) => node?.tagName === "P" && /^(Due|Closed) /.test(node.textContent ?? ""))).toHaveLength(2);
 });
 
-it("keeps all four categories visible and opens Exams when there are no practice quests", async () => {
-  const list = [{
-    id: "exam-one", title: "Midterm", exam_number: 1, added_at: "2026-11-24T03:00:00Z",
-    opens_at: "2026-11-24T03:00:00Z", closes_at: "2026-11-25T03:00:00Z",
-    duration_minutes: 30, results_released: false, can_start: false, can_resume: true,
-  }];
-  mocks.api.mockImplementation(async (path: string) => path === "/exams" ? list : []);
-  const { rerender } = render(<QuestsPage />);
+it("treats an old Exams filter as practice and only shows the practice categories", async () => {
+  mocks.params = new URLSearchParams("category=exams");
+  mocks.api.mockResolvedValue([]);
+  render(<QuestsPage />);
   expect(await screen.findByRole("heading", { name: "No published activities yet" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Concept check quiz" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Exams" }));
-  expect(mocks.push).toHaveBeenCalledWith("/quests?category=exams", { scroll: false });
-
-  mocks.params = new URLSearchParams("category=exams");
-  rerender(<QuestsPage />);
-  expect(screen.getByRole("button", { name: "Exams", pressed: true })).toBeTruthy();
-  expect((await screen.findByRole("link", { name: "Resume exam" })).getAttribute("href")).toBe("/exams/exam-one");
-  expect(screen.queryByRole("searchbox", { name: "Search quests" })).toBeNull();
-});
-
-it("keeps assigned exams reachable before a student chooses a language", async () => {
-  mocks.language = null;
-  mocks.api.mockResolvedValue([]);
-  const { rerender } = render(<QuestsPage />);
-  expect(screen.getByRole("link", { name: "Go to Workshops" }).getAttribute("href")).toBe("/workshops");
-  expect(mocks.api).not.toHaveBeenCalled();
-
-  mocks.params = new URLSearchParams("category=exams");
-  rerender(<QuestsPage />);
-  expect(await screen.findByRole("heading", { name: "No assigned exams yet" })).toBeTruthy();
-  expect(mocks.api.mock.calls.map(([path]) => path)).toEqual(["/exams"]);
+  expect(screen.queryByRole("button", { name: "Exams" })).toBeNull();
+  expect(mocks.api.mock.calls.map(([path]) => path)).toEqual(["/quests"]);
 });
 
 it("shows the selected activity's history, ignores a late response, and closes on Escape or filtering", async () => {
@@ -158,35 +135,6 @@ it("shows the selected activity's history, ignores a late response, and closes o
   expect(screen.queryByRole("region", { name: "Performance preview for Loop quiz" })).toBeNull();
   fireEvent.change(screen.getByRole("searchbox"), { target: { value: "" } });
   expect(screen.queryByRole("region", { name: "Performance preview for Loop quiz" })).toBeNull();
-});
-
-it("retries a failed exam preview and preserves the exam action", async () => {
-  mocks.params = new URLSearchParams("category=exams");
-  let attempts = 0;
-  mocks.api.mockImplementation(async (path: string) => {
-    if (path === "/exams") return [{
-      id: "exam", title: "Midterm", added_at: "2026-11-24T03:00:00Z", opens_at: "2026-11-24T03:00:00Z",
-      closes_at: "2026-11-25T03:00:00Z", duration_minutes: 30, pass_mark_percent: 75, can_resume: true,
-    }];
-    if (attempts++ === 0) throw new Error("Unavailable");
-    if (attempts === 3) return { scope: "workshop", total: 2, pass_marked: 0, passed: 0, average_percent: 81, pass_mark_percent: null };
-    return { scope: "workshop", total: 4, pass_marked: 3, passed: 2, average_percent: 76, pass_mark_percent: 75 };
-  });
-  render(<QuestsPage />);
-  fireEvent.click(await screen.findByRole("button", { name: "Performance preview for Midterm" }));
-  expect(await screen.findByRole("alert")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  expect(await screen.findByText("2 of 3")).toBeTruthy();
-  expect(screen.getByText("Your average across 4 released exams")).toBeTruthy();
-  expect(screen.getByText("76%")).toBeTruthy();
-  expect(screen.getByText("1 released exam has a score only.")).toBeTruthy();
-  expect(screen.getByRole("link", { name: "Resume exam" }).getAttribute("href")).toBe("/exams/exam");
-  fireEvent.click(document.body);
-  expect(screen.queryByRole("region", { name: "Performance preview for Midterm" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Performance preview for Midterm" }));
-  expect(await screen.findByText("81%")).toBeTruthy();
-  expect(screen.queryByText("Did not pass")).toBeNull();
-  expect(screen.getByText("2 released exams have a score only.")).toBeTruthy();
 });
 
 it("keeps the activity tip available and dismisses the preview when focus leaves the card", async () => {

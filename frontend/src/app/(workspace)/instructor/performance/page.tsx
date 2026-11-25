@@ -276,9 +276,7 @@ function FacultyPerformance() {
           </div>
         ) : null}
         {forecastError && <Notice tone="error">{forecastError}</Notice>}
-        {learnerInsight && <><h3>Released exam results</h3>
-          {learnerInsight.history.some(e => e.kind === "exam") ? <ul>{learnerInsight.history.filter(e => e.kind === "exam").map((e,i) => <li key={i}>{e.title} · {e.score_percentage}% · {formatDateTime(e.at)}</li>)}</ul> : <p>No released exams in this period.</p>}
-          <LearnerForecast detail={learnerInsight}/></>}
+        {learnerInsight && <LearnerForecast detail={learnerInsight} />}
       </ConfirmDialog>
     </>
   );

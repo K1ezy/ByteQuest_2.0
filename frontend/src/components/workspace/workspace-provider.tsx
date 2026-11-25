@@ -178,7 +178,7 @@ export function WorkspaceProvider({ role, children, shell: Shell }: {
     </section>;
     else if (courseForbidden) body = <section className="ws-state-card">
       <h1>Course unavailable</h1><p>Choose a course assigned to your account.</p>
-      <Link className="button button-primary" href={role === "admin" ? "/admin/courses" : "/instructor"}>View courses</Link>
+      <Link className="button button-primary" href={role === "admin" ? "/admin" : "/instructor"}>Back to overview</Link>
     </section>;
   }
 

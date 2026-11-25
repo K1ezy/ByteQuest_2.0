@@ -18,9 +18,6 @@ from app.core.security import get_current_user
 from app.models.entities import (
     ActivityKind,
     ActivityAttempt,
-    Exam,
-    ExamAssignment,
-    ExamAttempt,
     InstructionalDocument,
     LearningActivity,
     Profile,
@@ -250,6 +247,7 @@ def _published_activities(
         return []
     available_ids = db.query(LearningActivity.id).filter(
         LearningActivity.id.in_(unique_ids),
+        LearningActivity.destination_workshop_id.is_(None),
         LearningActivity.language == language,
         *_shareable_activity_filters(owner_id),
     ).all()
@@ -278,17 +276,6 @@ def _activity_links(db: Session, workshop_ids: list[uuid.UUID], *, visible_only:
     )
 
 
-def _published_exam_dates(db: Session, workshop_ids: list[uuid.UUID], user: Profile):
-    query = db.query(Exam).select_from(Exam).join(ExamAssignment, ExamAssignment.exam_id == Exam.id).filter(
-        ExamAssignment.workshop_id.in_(workshop_ids),
-        Exam.published_at.is_not(None),
-    )
-    if user.role == UserRole.student:
-        return query.filter(student_exam_course_clause(user.id))
-    if user.role == UserRole.instructor:
-        return query.join(Workshop, Workshop.id == ExamAssignment.workshop_id).filter(Workshop.created_by == user.id)
-    return query
-
 
 def _workshop_views(db: Session, rows: list[Workshop], user: Profile) -> list[WorkshopView]:
     ids = [workshop.id for workshop in rows]
@@ -305,9 +292,7 @@ def _workshop_views(db: Session, rows: list[Workshop], user: Profile) -> list[Wo
                   .group_by(WorkshopMember.workshop_id).all())
     activities: dict[uuid.UUID, list[WorkshopActivityView]] = {workshop_id: [] for workshop_id in ids}
     now = datetime.now(timezone.utc)
-    next_closes = dict(_published_exam_dates(db, ids, user).with_entities(
-        ExamAssignment.workshop_id, func.min(Exam.closes_at),
-    ).filter(Exam.closes_at > now).group_by(ExamAssignment.workshop_id).all())
+    next_closes: dict[uuid.UUID, datetime] = {}
     for link, closes_at, closed_at in _activity_links(db, ids).add_columns(
         LearningActivity.closes_at, LearningActivity.closed_at,
     ):
@@ -438,7 +423,12 @@ def join_workshop(
         elif workshop.language != current_user.enrolled_language:
             raise HTTPException(409, "This workshop uses a different language track. Change your track before joining.")
     if not db.query(WorkshopMember.id).filter_by(workshop_id=workshop.id, profile_id=current_user.id).first():
-        db.add(WorkshopMember(workshop_id=workshop.id, profile_id=current_user.id))
+        from app.services.ml_predictor.shadow import capture_assignment_predictions
+        joined_at = datetime.now(timezone.utc)
+        db.add(WorkshopMember(workshop_id=workshop.id, profile_id=current_user.id, joined_at=joined_at))
+        db.flush()
+        for _, activity in _activity_links(db, [workshop.id]).add_entity(LearningActivity):
+            capture_assignment_predictions(db, activity, joined_at, workshop_id=workshop.id, student_id=current_user.id)
     db.commit()
     return _view(db, workshop, current_user)
 
@@ -572,7 +562,7 @@ def workshop_progress(
 
 def _remove_student(db: Session, workshop: Workshop, profile_id: uuid.UUID) -> Response:
     require_open(workshop)
-    # Exam start also locks this profile before checking assignment.
+    # Lock the learner while changing membership.
     student = db.query(Profile.id).filter(
         Profile.id == profile_id, Profile.role == UserRole.student,
     ).with_for_update().one_or_none()
@@ -581,14 +571,6 @@ def _remove_student(db: Session, workshop: Workshop, profile_id: uuid.UUID) -> R
     ).one_or_none()
     if student is None or membership is None:
         raise HTTPException(404, "Workshop student not found.")
-    active_exam = db.query(ExamAttempt.id).join(ExamAssignment, ExamAssignment.exam_id == ExamAttempt.exam_id).filter(
-        ExamAssignment.workshop_id == workshop.id,
-        ExamAttempt.student_id == profile_id,
-        ExamAttempt.status == "active",
-        ExamAttempt.submitted_at.is_(None),
-    ).first()
-    if active_exam:
-        raise HTTPException(409, "This student has an exam in progress for this workshop.")
     db.delete(membership)
     db.commit()
     return Response(status_code=204)
@@ -705,6 +687,7 @@ def workshop_activity_catalog(
     rows = db.query(LearningActivity.id, LearningActivity.title, LearningActivity.topic_concept,
                     LearningActivity.activity_type).filter(
         LearningActivity.language == workshop.language,
+        LearningActivity.destination_workshop_id.is_(None),
         LearningActivity.id.not_in(shared),
         *_shareable_activity_filters(workshop.created_by),
     ).order_by(LearningActivity.sequence_order, LearningActivity.id).all()
@@ -731,6 +714,11 @@ def add_workshop_activities(
     db.add_all(WorkshopActivity(workshop_id=workshop.id, activity_id=activity_id,
                                topic=payload.topic or None, position=position)
                for position, activity_id in enumerate(new_ids, start))
+    if new_ids:
+        from app.services.ml_predictor.shadow import capture_assignment_predictions
+        assigned_at = datetime.now(timezone.utc)
+        for activity in db.query(LearningActivity).filter(LearningActivity.id.in_(new_ids)):
+            capture_assignment_predictions(db, activity, assigned_at, workshop_id=workshop.id)
     db.commit()
     return _view(db, workshop, current_user)
 
@@ -863,14 +851,8 @@ def workshop_upcoming(
         LearningActivity.closes_at > now,
         LearningActivity.closes_at <= through,
     ).all()
-    exams = _published_exam_dates(db, [workshop.id], current_user).filter(
-        Exam.closes_at > now, Exam.opens_at <= through,
-    ).all()
     items = [UpcomingItem(
         id=activity.id, title=activity.title or activity.topic_concept, kind=activity.activity_type.value,
         opens_at=activity.opens_at, closes_at=activity.closes_at,
     ) for _, activity in activities]
-    items.extend(UpcomingItem(
-        id=exam.id, title=exam.title, kind="exam", opens_at=exam.opens_at, closes_at=exam.closes_at,
-    ) for exam in exams)
     return sorted(items, key=lambda item: (item.closes_at, item.id))

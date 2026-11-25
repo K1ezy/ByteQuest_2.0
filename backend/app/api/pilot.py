@@ -31,7 +31,6 @@ from app.services.attempt_visibility import (
     learner_visible_attempt_clause,
     student_visible_activity_clause,
 )
-from app.api.exams import next_due_exam, require_practice_help_available
 
 router = APIRouter(prefix="/api/v1/pilot", tags=["Classroom Pilot"])
 
@@ -97,7 +96,6 @@ def dashboard(user: Profile = Depends(get_current_user), db: Session = Depends(g
     pending = db.query(SubmissionJob).filter(
         SubmissionJob.student_id == user.id, SubmissionJob.status.in_(["queued", "running"])
     ).order_by(SubmissionJob.created_at.desc()).first()
-    due_exam = next_due_exam(db, user.id, _utcnow())
     notices = db.query(NotificationOutbox).filter(
         NotificationOutbox.recipient_id == user.id,
         NotificationOutbox.next_attempt_at <= datetime.now(timezone.utc),
@@ -108,7 +106,7 @@ def dashboard(user: Profile = Depends(get_current_user), db: Session = Depends(g
                           "kind": target.activity_type.value} if target else None,
         "completed": completed, "total": total, "xp": user.xp_points, "level": user.current_level,
         "pending_job_id": str(pending.id) if pending else None,
-        "due_exam": due_exam,
+        "due_exam": None,
         "notices": [{"id": str(n.id), "subject": n.subject, "body": n.body} for n in notices],
     }
 
@@ -193,7 +191,6 @@ def _expired_hint_reservation(now: datetime):
 @router.get("/activities/{activity_id}/hints")
 def hint_status(activity_id: uuid.UUID, user: Profile = Depends(get_current_user), db: Session = Depends(get_db)):
     student_only(user)
-    require_practice_help_available(db, user.id)
     challenge(db, activity_id, user)
     reviewed = db.query(ChallengeHint).filter(ChallengeHint.activity_id == activity_id).order_by(ChallengeHint.slot).all()
     uses = _hint_uses(db, user.id, activity_id).filter(~_expired_hint_reservation(_utcnow())).order_by(HintUse.created_at).all()
@@ -236,7 +233,6 @@ def reveal_hint(activity_id: uuid.UUID, body: RevealHint, user: Profile = Depend
     activity = challenge(db, activity_id, user)
     student_id = user.id
     db.query(Profile).filter(Profile.id == student_id).with_for_update().one()
-    require_practice_help_available(db, student_id)
     query = _hint_uses(db, student_id, activity_id)
     query.filter(_expired_hint_reservation(_utcnow())).delete()
     uses = query.all()
@@ -297,7 +293,6 @@ def reveal_hint(activity_id: uuid.UUID, body: RevealHint, user: Profile = Depend
         student_only(student)
         if student.account_status != "active":
             raise HTTPException(403, "Student access required.")
-        require_practice_help_available(db, student_id)
         activity = challenge(db, activity_id, student)
         if passages and not set(documents).issubset(tutoring_document_ids(db, student_id, "student", activity)):
             raise HTTPException(409, "Available course material changed. Retry this hint.")

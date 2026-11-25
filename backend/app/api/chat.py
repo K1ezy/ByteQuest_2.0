@@ -14,7 +14,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.api.exams import require_practice_help_available
 from app.core.config import settings
 from app.core.database import SessionLocal, get_db
 from app.core.quotas import reserve
@@ -170,7 +169,6 @@ class ChatStatus(BaseModel):
 
 
 def _require_student_chat(db: Session, student_id: uuid.UUID) -> None:
-    require_practice_help_available(db, student_id)
     if not active_membership_course_ids(db, student_id, "student"):
         raise HTTPException(403, detail=_ENROLLMENT_REQUIRED)
 
@@ -184,7 +182,6 @@ def _belongs_to_open_workshop(db: Session, student_id: uuid.UUID) -> bool:
 def _require_pdf_chat(db: Session, user: Profile) -> None:
     if user.role != UserRole.student:
         raise HTTPException(403, "PDF chat is available to students.")
-    require_practice_help_available(db, user.id)
     if not active_membership_course_ids(db, user.id, "student") and not _belongs_to_open_workshop(db, user.id):
         raise HTTPException(403, detail=_ENROLLMENT_REQUIRED)
 
@@ -466,7 +463,6 @@ async def create_chat_message(
 def _practice_lesson(db: Session, student: Profile, practice: LessonPractice) -> InstructionalDocument:
     if student.role != UserRole.student:
         raise HTTPException(403, "Lesson practice is available to students.")
-    require_practice_help_available(db, student.id)
     lesson = get_workshop_lesson(db, practice.workshop_id, practice.document_id, student)
     if lesson.processing_status != "completed":
         raise HTTPException(409, "The PDF is not ready for practice yet.")

@@ -118,9 +118,7 @@ function isActiveDestination(pathname: string, href: string, index: number) {
     || (href === "/instructor/activities" && ["/instructor/materials", "/instructor/review", "/instructor/preview"].some((section) => belongsTo(pathname, section)))
     || (href === "/instructor/performance" && belongsTo(pathname, "/instructor/ml"))
     || (href === "/admin" && ["/admin/configuration", "/admin/monitoring"].some((section) => belongsTo(pathname, section)))
-    || (href === "/admin/courses" && belongsTo(pathname, "/admin/assignments"))
     || (href === "/admin/activities" && belongsTo(pathname, "/admin/materials"))
-    || (href === "/admin/teaching" && belongsTo(pathname, "/workshops"))
     || (href === "/profile" && belongsTo(pathname, "/reviews"))
     || (href === "/quests" && ["/arena", "/quiz", "/submissions"].some((section) => belongsTo(pathname, section)));
 }

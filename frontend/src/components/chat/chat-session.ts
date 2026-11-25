@@ -1,4 +1,4 @@
-import { belongsTo, internalPath, isStudentExamView } from "@/lib/navigation";
+import { belongsTo, internalPath } from "@/lib/navigation";
 import type { ChatMode } from "./chat-history";
 
 export type ActivityContext = { id: string; kind: "arena" | "quiz" };
@@ -38,7 +38,7 @@ export function activityFromPath(path: string | null): ActivityContext | null {
 
 export function safeChatReturnPath(value: string | null): string | null {
   const url = internalPath(value);
-  if (!url || url.pathname === "/" || isStudentExamView(url.pathname, url.searchParams.get("category")) || ["/chat", "/onboarding", "/reset-password"].some(
+  if (!url || url.pathname === "/" || ["/chat", "/onboarding", "/reset-password"].some(
     (root) => belongsTo(url.pathname, root),
   )) return null;
   return url.pathname + url.search + url.hash;

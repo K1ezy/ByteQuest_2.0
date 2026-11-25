@@ -146,10 +146,13 @@ def student_activity_clause(student_id: uuid.UUID):
             WorkshopMember.workshop_id == WorkshopActivity.workshop_id,
             WorkshopMember.profile_id == student_id,
             Workshop.id == WorkshopActivity.workshop_id,
+            or_(LearningActivity.destination_workshop_id.is_(None), and_(
+                LearningActivity.destination_workshop_id == Workshop.id, Workshop.archived_at.is_(None))),
             workshop_shareable_activity_clause(Workshop.created_by),
         )
     ).correlate(LearningActivity)
-    return and_(course_open_clause(), or_(LearningActivity.course_id.is_(None), in_course, in_workshop))
+    return and_(course_open_clause(), or_(in_workshop, and_(LearningActivity.destination_workshop_id.is_(None),
+                                                           or_(LearningActivity.course_id.is_(None), in_course))))
 
 
 def student_visible_activity_clause(student_id: uuid.UUID, now: datetime | None = None):

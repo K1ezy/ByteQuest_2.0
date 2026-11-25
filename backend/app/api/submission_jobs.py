@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.api.exams import require_practice_help_available
 from app.core.database import get_db
 from app.core.quotas import reserve
 from app.core.security import get_current_user
@@ -170,7 +169,6 @@ def compare_submission(
     ).one_or_none()
     if completed is None:
         raise unavailable
-    require_practice_help_available(db, user.id)
     job, language = completed
 
     attempts = db.query(ActivityAttempt).filter(

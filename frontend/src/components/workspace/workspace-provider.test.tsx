@@ -6,7 +6,7 @@ import { MenuPositionSetting } from "@/components/workspace/dockable-navigation"
 import { authReturnTo, questRedirect } from "@/lib/navigation";
 import type { Profile } from "@/lib/types";
 
-const route = vi.hoisted(() => ({ path: "/admin/courses", search: "" }));
+const route = vi.hoisted(() => ({ path: "/admin/accounts", search: "" }));
 vi.mock("next/navigation", () => ({
   usePathname: () => route.path,
   useSearchParams: () => new URLSearchParams(route.search),
@@ -16,17 +16,17 @@ vi.mock("@/hooks/use-sign-out", () => ({ useSignOut: () => ({ signOut: vi.fn() }
 
 const admin = { id: "admin-a", role: "admin", enrolled_language: "python" } as Profile;
 const student = { ...admin, id: "student-b", role: "student" } as Profile;
-afterEach(() => { cleanup(); route.path = "/admin/courses"; route.search = ""; });
+afterEach(() => { cleanup(); route.path = "/admin/accounts"; route.search = ""; });
 
 it("renders the role's destinations once, with the current page marked", () => {
   const view = render(<AppShell profile={admin}><p>Course screen</p></AppShell>);
   // One navigation landmark serves as the desktop sidebar and the phone tab bar.
   const navigation = screen.getByRole("navigation", { name: "Administrator navigation" });
-  expect(within(navigation).getAllByRole("link")).toHaveLength(5);
-  const target = within(navigation).getByRole("link", { name: /^Course & Instructor Management/ });
+  expect(within(navigation).getAllByRole("link")).toHaveLength(3);
+  const target = within(navigation).getByRole("link", { name: /^User & Role Management/ });
   expect(target.getAttribute("aria-current")).toBe("page");
-  expect(within(target).getByText("Courses")).toBeTruthy();
-  expect(screen.queryByRole("link", { name: /Quest Map/ })).toBeNull();
+  expect(within(target).getByText("Users")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /Quest Map|Course & Instructor Management|Instructor Workspace/ })).toBeNull();
   // The rail is the only navigation: no separate Menu toggle or drawer repeats it.
   expect(screen.queryByRole("button", { name: "Menu" })).toBeNull();
   expect(screen.queryByRole("dialog")).toBeNull();
@@ -99,7 +99,7 @@ it("keeps exam return paths internal and role appropriate", () => {
 });
 
 it("resolves legacy role links and retains workshop filters", () => {
-  for (const [role, target] of [["student", "/quests"], ["instructor", "/instructor"], ["admin", "/admin/teaching"]] as const) {
+  for (const [role, target] of [["student", "/quests"], ["instructor", "/instructor"], ["admin", "/admin"]] as const) {
     expect(questRedirect(new URLSearchParams("view=faculty"), role)).toBe(target);
   }
   expect(questRedirect(new URLSearchParams("group=one&category=code-challenge"))).toBe("/workshops?group=one&category=code-challenge");

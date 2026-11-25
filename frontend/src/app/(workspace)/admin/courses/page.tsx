@@ -5,7 +5,7 @@ import { useState, type FormEvent } from "react";
 import { ApiError, getErrorMessage } from "@/lib/api";
 import { useWorkspace, WorkspaceSuspense } from "@/components/workspace/workspace-provider";
 import { Button, ConfirmDialog, EmptyState, FieldError, LoadingPanel, Notice, PageHeading, StatusChip, useApi } from "@/components/workspace/ui";
-import { createCourse, formatDateTime, getCourseImpact, setCourseArchived, updateCourse, type CourseImpact, type CourseSummary } from "@/lib/workspace";
+import { createCourse, getCourseImpact, setCourseArchived, updateCourse, type CourseImpact, type CourseSummary } from "@/lib/workspace";
 
 const blank = { code: "", title: "", description: "" };
 type Notice = { tone: "success" | "error"; text: string };
@@ -119,7 +119,6 @@ function Courses() {
   const all = data?.courses ?? [];
   const archivedCount = all.filter(course => course.status === "archived").length;
   const shown = all.filter(course => showArchived || course.status !== "archived");
-  const blocked = Boolean(target?.archive && target.impact?.blocking_exams.length);
   return <>
     <PageHeading eyebrow="ADMINISTRATION" title="Course & Instructor Management"
       description="Create, edit and archive courses. Use Course access to enroll students and assign instructors."
@@ -162,15 +161,11 @@ function Courses() {
     </section> : null}
     <ConfirmDialog open={Boolean(target)} title={target?.archive ? `Archive ${target.course.code}?` : `Restore ${target?.course.code ?? ""}?`}
       confirmLabel={target?.archive ? "Archive course" : "Restore course"} tone={target?.archive ? "danger" : "primary"}
-      busy={busy} hideConfirm={blocked || Boolean(target?.archive && !target.impact)} onCancel={() => setTarget(null)} onConfirm={() => void confirmArchive()}>
+      busy={busy} hideConfirm={Boolean(target?.archive && !target.impact)} onCancel={() => setTarget(null)} onConfirm={() => void confirmArchive()}>
       {target?.error ? <p className="ws-field-error" role="alert">{target.error}</p> : null}
       {target && !target.archive ? <p>{target.course.title} becomes active again, with the same instructors and students. Its activities reopen.</p> : null}
       {target?.archive && !target.impact && !target.error ? <p role="status">Checking what this affects…</p> : null}
-      {target?.archive && target.impact ? (blocked
-        ? <><p><strong>This course can&apos;t be archived yet.</strong> These exams use its activities and are open or scheduled:</p>
-          <ul className="ws-plain-list">{target.impact.blocking_exams.map(exam => <li key={exam.id}>{exam.title} · closes {formatDateTime(exam.closes_at)}</li>)}</ul>
-          <p>Archive it after they close.</p></>
-        : <><p>Archiving {target.course.title} affects {target.impact.students} students, {target.impact.instructors} instructors and {target.impact.published_activities} published activities.</p>
+      {target?.archive && target.impact ? (<><p>Archiving {target.course.title} affects {target.impact.students} students, {target.impact.instructors} instructors and {target.impact.published_activities} published activities.</p>
           <ul className="ws-plain-list">
             <li>Its activities close everywhere, including workshops that share them.</li>
             <li>Students keep their past attempts, scores, XP and badges.</li>

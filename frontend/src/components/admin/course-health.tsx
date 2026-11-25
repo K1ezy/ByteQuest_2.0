@@ -17,8 +17,7 @@ export interface CourseHealthRow {
 export function healthAction(row: CourseHealthRow) {
   if (row.course_status === "archived") return null;
   const course = encodeURIComponent(row.id);
-  if (!row.instructor_count) return {label:"Assign instructor",href:"/admin/assignments?course="+course};
-  if (!row.enrolled) return {label:"Enrol students",href:"/admin/assignments?enroll=1&course="+course};
+  if (!row.instructor_count || !row.enrolled) return null;
   if (!row.published_activities) return {label:"Check activity availability",href:"/admin/activities?status=attention&course="+course};
   if (row.not_started !== null && row.not_started >= row.enrolled / 2) return {label:"Review student accounts",href:"/admin/accounts?status=attention"};
   return null;
@@ -43,7 +42,7 @@ export function CourseHealth() {
         <td>{row.research_consent === null ? <NotEnoughData/> : row.research_consent+" of "+row.enrolled}
           {row.research_consent_unanswered ? <span className="ws-muted"> · {row.research_consent_unanswered} not answered</span> : null}</td>
         <td>{action ? <Link className="ws-touch-action" href={action.href}>{action.label}</Link> : <span className="ws-muted">No action needed</span>}</td>
-      </tr>)}</tbody></table></div> : <EmptyState title="No courses yet" action={<Link href="/admin/courses">Create course</Link>}>Create a course to see its health.</EmptyState>}
+      </tr>)}</tbody></table></div> : <EmptyState title="No courses yet">Course health appears when courses are available.</EmptyState>}
       <MeasureDefinitions names={["active_7d","not_started","activities_passed","consent_coverage"]}/><UpdatedAt at={data.generated_at}/>
     </>}
   </section>;

@@ -360,7 +360,7 @@ def predict_student_success(
             )
         )
     elif as_of is not None:
-        history_query = history_query.filter(ActivityAttempt.created_at <= as_of)
+        history_query = history_query.filter(ActivityAttempt.created_at < as_of)
 
     history = [
         {
@@ -386,7 +386,7 @@ def predict_student_success(
     # The snapshot moment is t0. Rows were already limited to the source
     # attempt above; the cutoff sits just after it so that attempt counts.
     cutoff = as_of or datetime.now(timezone.utc)
-    if history:
+    if history and source_attempt is not None:
         cutoff = max(cutoff, max(row["created_at"] for row in history) + timedelta(microseconds=1))
     features = extract_features_from_dataframe(
         history,

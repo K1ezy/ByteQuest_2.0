@@ -99,10 +99,19 @@ test.beforeEach(async ({ page }, info) => {
     ] });
     if (path === "/faculty/dashboard") return route.fulfill({ json: dashboard });
     if (path === "/faculty/gamification-insights") return route.fulfill({ json: { topics: [] } });
+    if (path === "/faculty/ml/predictions") return route.fulfill({ json: {
+      readiness: { status: "ready", active_model_version: "model-1" }, selected_model: "random_forest", decision_threshold: 0.5,
+      students: [{ id: "learner", school_id: "26-00001", name: "Example Student" }],
+      rows: [{ snapshot_id: identifier, assigned_at: timestamp, school_id: "26-00001", student_name: "Example Student",
+        task: title, prior_completed: 8, prob_lr: 0.51, label_lr: true, prob_rf: 0.48, label_rf: false,
+        advisory_band: "standard_next", model_version: "model-1", selected_model: "random_forest",
+        features: { prior_attempt_count: 24, prior_quiz_score_mean: 85 } }],
+    } });
     if (path === "/faculty/activities") {
       if (request.method() === "POST") {
         const body = request.postDataJSON();
         expect(body.course_id).toBe(course.id);
+        expect(body.workshop_id).toBe(workshopId);
         expect(body).not.toHaveProperty("quiz_questions");
         const manual: ActivityDetail = {
           ...draft, ...body, activity_id: manualId, source_document_id: null, material: null, quiz_questions: null,
@@ -227,11 +236,28 @@ for (const kind of ["quiz", "challenge"] as const) {
 
     const form = page.getByRole("region", { name: "Activity details" });
     await form.getByLabel("Type", { exact: true }).selectOption(kind);
+    await form.getByLabel("Workshop destination").selectOption(workshopId);
     await form.getByLabel("Title", { exact: true }).fill(title);
     await form.getByLabel("Topic or concept").fill("Functions");
     await form.getByLabel("Student instructions").fill(instructions);
     if (kind === "challenge") await form.getByLabel("Reference solution (instructors only)").fill("print(int(input()) * 2)");
     await form.getByRole("button", { name: "Create activity", exact: true }).click();
+    if (kind === "challenge") {
+      const item = page.locator(`#activity-${manualId}`);
+      await expect(item).toBeFocused();
+      const menu = item.getByLabel(`More actions for ${title}`, { exact: true });
+      await menu.click();
+      const options = item.locator(".ic-menu-options");
+      await expect(options.getByRole("button", { name: "Duplicate" })).toBeVisible();
+      const triggerBox = await menu.boundingBox();
+      const optionsBox = await options.boundingBox();
+      expect(optionsBox!.y).toBeGreaterThanOrEqual(triggerBox!.y + triggerBox!.height);
+      await expectContentToFit(page, item, [".ic-menu-options", ".ic-menu-options .ic-button"]);
+      await menu.press("Escape");
+      await expect(options).toBeHidden();
+      await expect(menu).toBeFocused();
+      await item.focus();
+    }
     await openHighlighted(page, manualId);
     await expect(page.getByRole("heading", { name: title, exact: true, level: 1 })).toBeVisible();
     await expectContentToFit(page, page.locator(".ic-activity-editor-header"), ["h1", ".ic-activity-meta"]);
@@ -281,6 +307,37 @@ for (const kind of ["quiz", "challenge"] as const) {
   });
 }
 
+test("assignment predictions keep table and snapshot readable and make tooltips accessible", async ({ page }, info) => {
+  await page.goto(`/instructor/predictions?${scope}`);
+  const table = page.getByRole("table");
+  await expect(table.getByText("Predicted Not Pass", { exact: true })).toBeVisible();
+  await table.getByRole("button", { name: `View snapshot ${identifier}` }).press("Enter");
+  const snapshot = page.getByRole("complementary", { name: "Snapshot Context" });
+  await expect(snapshot.getByText("85.0%", { exact: true })).toBeVisible();
+  await expectContentToFit(page, snapshot, ["h2", "dt", "dd"]);
+  const legend = page.getByRole("region", { name: "Advisory Band Legend" });
+  for (const [name, message] of [["Advance", "Consider assigning the next challenge"],
+    ["Standard Practice", "Continue with regular practice"], ["Remedial Practice", "Consider extra practice"]]) {
+    const band = legend.getByText(name, { exact: false });
+    if (info.project.name === "narrow") await band.tap();
+    else await band.hover();
+    await expect(page.getByRole("tooltip")).toContainText(message);
+    await page.keyboard.press("Escape");
+  }
+  const target = snapshot.getByText("Prior Attempt Count", { exact: true });
+  if (info.project.name === "narrow") await target.tap();
+  else {
+    await target.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+  }
+  await expect(page.getByRole("tooltip")).toContainText("Number of graded attempts before this assignment.");
+  await page.keyboard.press("Escape");
+  if (info.project.name !== "narrow") {
+    await table.getByText("26-00001", { exact: true }).hover();
+    await expect(page.getByRole("tooltip")).toContainText("Example Student");
+  }
+});
+
 test("Gemini PDF upload, recovery, editing and publication use Activities", async ({ page }) => {
   await page.goto(`/instructor/review?${scope}&q=missing`);
   await expect(page.getByText("No activities match these filters.", { exact: true })).toBeVisible();
@@ -288,6 +345,7 @@ test("Gemini PDF upload, recovery, editing and publication use Activities", asyn
   await page.getByRole("link", { name: "New Activity", exact: true }).click();
   await page.getByRole("link", { name: "Generate with Gemini", exact: true }).click();
   const generate = page.getByRole("button", { name: "Generate draft", exact: true });
+  await page.getByLabel("Workshop destination").selectOption(workshopId);
   const prompt = page.getByLabel("Instructions for Gemini (optional)");
   const teacherText = `Focus on tracing nested functions. Include the note ${identifier}`;
   await prompt.fill(teacherText);
@@ -328,6 +386,7 @@ test("a PDF from Materials keeps citations and changes trigger verification", as
   await expectContentToFit(page, row, [".ws-row-heading", ".ws-row-actions", ".ws-action-grid .button"]);
   await row.getByRole("link", { name: "Use this PDF" }).click();
   await expect(page.getByLabel("Course PDF")).toHaveValue(documentId);
+  await page.getByLabel("Workshop destination").selectOption(workshopId);
   await page.getByLabel("Type", { exact: true }).selectOption("challenge");
   await page.getByRole("button", { name: "Generate draft", exact: true }).click();
   await openHighlighted(page, draftId);

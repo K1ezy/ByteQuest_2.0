@@ -1,24 +1,23 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { getErrorMessage } from "@/lib/api";
-import type { ProgrammingLanguage } from "@/lib/types";
 import { activityListHref } from "@/lib/instructor-activity";
-import { createActivity, type ActivityList } from "@/lib/workspace";
+import { createActivity } from "@/lib/workspace";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
-import { Button, FieldError, Notice, useApi } from "@/components/workspace/ui";
+import { Button, FieldError, Notice } from "@/components/workspace/ui";
+import { ActivityDestination, useActivityWorkshops } from "@/components/instructor/activity-destination";
 
 export function ManualActivityForm({ courseId }: { courseId: string }) {
   const router = useRouter();
-  const { profile, refreshCourses, setUnsaved } = useWorkspace();
-  const { data } = useApi<ActivityList>(`/faculty/activities?course_id=${encodeURIComponent(courseId)}`, true);
+  const { refreshCourses, setUnsaved } = useWorkspace();
+  const destinations = useActivityWorkshops();
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const active = useRef(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState({
     activity_type: "quiz",
-    // Null until the instructor picks one: then the class's language is shown (see createLanguage).
-    language: null as ProgrammingLanguage | null,
+    workshop: "",
     title: "",
     topic_concept: "",
     problem_statement: "",
@@ -26,13 +25,11 @@ export function ManualActivityForm({ courseId }: { courseId: string }) {
     xp_reward: 30,
     reference_solution_code: "",
     starter_code: "",
-    exam_only: false,
   });
 
-  const createLanguage = draft.language ?? data?.items.find((row) => row.language)?.language
-    ?? profile.enrolled_language ?? "python";
+  const workshop = destinations.workshops.find((item) => item.id === draft.workshop);
   const dirty = Boolean(draft.title || draft.topic_concept || draft.problem_statement
-    || draft.reference_solution_code || draft.starter_code || draft.language || draft.exam_only
+    || draft.reference_solution_code || draft.starter_code || draft.workshop
     || draft.activity_type !== "quiz" || draft.difficulty_level !== 2);
 
   useEffect(() => {
@@ -47,7 +44,7 @@ export function ManualActivityForm({ courseId }: { courseId: string }) {
 
   async function submitCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!courseId || busy) return;
+    if (!courseId || busy || !workshop) return;
     const found: Record<string, string> = {};
     if (draft.title.trim().length < 3) found.title = "Enter a title of at least 3 characters.";
     if (draft.topic_concept.trim().length < 2) found.topic_concept = "Enter the topic or concept.";
@@ -64,8 +61,7 @@ export function ManualActivityForm({ courseId }: { courseId: string }) {
       const body: Record<string, unknown> = {
         course_id: courseId,
         activity_type: draft.activity_type,
-        exam_only: draft.exam_only,
-        language: createLanguage,
+        workshop_id: workshop.id,
         title: draft.title.trim(),
         topic_concept: draft.topic_concept.trim(),
         problem_statement: draft.problem_statement.trim(),
@@ -103,23 +99,13 @@ export function ManualActivityForm({ courseId }: { courseId: string }) {
               <option value="challenge">Coding challenge</option>
             </select>
           </div>
-          <div className="ws-field">
-            <label htmlFor="create-language">Language</label>
-            <select id="create-language" value={createLanguage} onChange={(event) => setDraft({ ...draft, language: event.target.value as ProgrammingLanguage })}>
-              <option value="python">Python</option>
-              <option value="cpp">C++</option>
-              <option value="java">Java</option>
-            </select>
-          </div>
+          <ActivityDestination id="create-workshop" value={draft.workshop} onChange={(value) => setDraft({ ...draft, workshop: value })}
+            request={destinations} disabled={busy} />
           <div className="ws-field">
             <label htmlFor="create-title">Title</label>
             <input id="create-title" value={draft.title} maxLength={255} onChange={(event) => setDraft({ ...draft, title: event.target.value })} aria-invalid={Boolean(errors.title)} />
             <FieldError>{errors.title}</FieldError>
           </div>
-          <label className="ws-checkbox-row">
-            <input type="checkbox" checked={draft.exam_only} onChange={(event) => setDraft({ ...draft, exam_only: event.target.checked })} />
-            Exam-only activity for a restricted assessment
-          </label>
           <div className="ws-field">
             <label htmlFor="create-topic">Topic or concept</label>
             <input id="create-topic" value={draft.topic_concept} maxLength={100} onChange={(event) => setDraft({ ...draft, topic_concept: event.target.value })} aria-invalid={Boolean(errors.topic_concept)} />
@@ -154,7 +140,7 @@ export function ManualActivityForm({ courseId }: { courseId: string }) {
             </>
           ) : null}
           <div className="ws-inline-actions full">
-            <Button variant="primary" type="submit" disabled={busy}>
+            <Button variant="primary" type="submit" disabled={busy || !workshop}>
               {busy ? "Creating activity…" : "Create activity"}
             </Button>
             <span className="ws-muted">The activity stays private until you preview and publish it.</span>

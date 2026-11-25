@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { ApiError, getErrorMessage } from "@/lib/api";
@@ -32,7 +31,7 @@ import {
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 function AdminAccounts() {
-  const { profile, courses } = useWorkspace();
+  const { profile } = useWorkspace();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -44,7 +43,7 @@ function AdminAccounts() {
   const [createOpen, setCreateOpen] = useState(false);
   const [busy, setBusy] = useState<"create" | "deactivate" | "reactivate" | "">("");
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [form, setForm] = useState({ email: "", role: "student", display_name: "", course_ids: [] as string[] });
+  const [form, setForm] = useState({ email: "", role: "student", display_name: "" });
   const [impact, setImpact] = useState<{ account: AccountRecord; effect: string } | null>(null);
   const [impactTarget, setImpactTarget] = useState<AccountRecord | null>(null);
   const [impactLoading, setImpactLoading] = useState(false);
@@ -75,15 +74,6 @@ function AdminAccounts() {
     router.replace(`${pathname}?${next.toString()}`, { scroll: false });
   }
 
-  function toggleCourse(courseId: string) {
-    setForm((current) => ({
-      ...current,
-      course_ids: current.course_ids.includes(courseId)
-        ? current.course_ids.filter((id) => id !== courseId)
-        : [...current.course_ids, courseId],
-    }));
-  }
-
   async function submitCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const found: Record<string, string> = {};
@@ -98,11 +88,10 @@ function AdminAccounts() {
         email,
         role: form.role,
         display_name: form.display_name.trim() || undefined,
-        course_ids: form.course_ids,
       });
       setNotice({ tone: "success", text: result.message });
       setCreateOpen(false);
-      setForm({ email: "", role: "student", display_name: "", course_ids: [] });
+      setForm({ email: "", role: "student", display_name: "" });
       reload();
     } catch (caught) {
       if (caught instanceof ApiError) {
@@ -210,7 +199,7 @@ function AdminAccounts() {
               <label htmlFor="account-role">Role</label>
               <select id="account-role" value={form.role} onChange={(event) => {
                 const role = event.target.value;
-                setForm({ ...form, role, course_ids: role === "admin" ? [] : form.course_ids });
+                setForm({ ...form, role });
               }}>
                 <option value="student">Student</option>
                 <option value="instructor">Instructor</option>
@@ -222,23 +211,6 @@ function AdminAccounts() {
               <label htmlFor="account-name">Display name (optional)</label>
               <input id="account-name" value={form.display_name} maxLength={120} onChange={(event) => setForm({ ...form, display_name: event.target.value })} />
             </div>
-            {form.role !== "admin" && <fieldset className="ws-field full ws-course-picker">
-              <legend>Course access (optional)</legend>
-              {form.role === "instructor" && <p className="ws-muted">Assign a course now or later to give this instructor a course to manage.</p>}
-              {courses.length === 0 ? <p className="ws-muted">No courses exist yet.</p> : null}
-              <div className="ws-check-grid">
-                {courses.map((course) => (
-                  <label className="ws-check" key={course.id}>
-                    <input
-                      type="checkbox"
-                      checked={form.course_ids.includes(course.id)}
-                      onChange={() => toggleCourse(course.id)}
-                    />
-                    <span>{course.title}</span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>}
             <div className="ws-inline-actions full">
               <Button variant="primary" type="submit" disabled={busy !== ""}>
                 {busy === "create" ? "Sending invitation…" : "Send invitation"}
@@ -349,9 +321,6 @@ function AdminAccounts() {
                     </td>
                     <td data-label="Action">
                       <div className="ws-inline-actions">
-                        <Link className="button button-outline small" href={`/admin/assignments?profile=${account.account_id}`}>
-                          Assign course
-                        </Link>
                         {account.account_status === "active" ? (
                           <Button variant="danger" disabled={self} onClick={() => void openImpact(account)}>
                             Deactivate

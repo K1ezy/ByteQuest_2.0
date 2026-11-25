@@ -29,6 +29,9 @@ const nextConfig: NextConfig = {
   },
   async redirects() {
     return [
+      { source: "/exams/:path*", destination: "/quests", permanent: false },
+      { source: "/instructor/exams/:path*", destination: "/instructor/activities", permanent: false },
+      { source: "/admin/:retired(courses|assignments|teaching)/:path*", destination: "/admin", permanent: false },
       { source: "/faculty/accessibility", destination: "/account/accessibility", permanent: true },
       { source: "/admin/accessibility", destination: "/account/accessibility", permanent: true },
       { source: "/faculty/:path*", destination: "/instructor/:path*", permanent: true },

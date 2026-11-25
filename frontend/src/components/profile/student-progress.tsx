@@ -6,7 +6,7 @@ import { InsightLineChart } from "@/components/insights/line-chart";
 import { MeterList, PracticeLink } from "@/components/insights/ui";
 import { ProgressRecap } from "@/components/progress-recap";
 import { questHref } from "@/components/quest-card";
-import { StatCard, StatusChip } from "@/components/workspace/ui";
+import { StatCard } from "@/components/workspace/ui";
 import { metrics } from "@/lib/insight-metrics";
 import type { Profile } from "@/lib/types";
 import { formatDate, formatDateTime, type HelpPattern, type StudentAnalytics } from "@/lib/workspace";
@@ -57,7 +57,7 @@ function RecentAttempts({ attempts, total }: { attempts: NonNullable<StudentAnal
       {visible.length ? (
         <ul className="ws-list" id="profile-recent-attempts">
           {visible.map((attempt) => {
-            const kind = attempt.is_exam ? "Exam item" : attempt.activity_type === "quiz" ? "Quiz" : "Challenge";
+            const kind = attempt.activity_type === "quiz" ? "Quiz" : "Challenge";
             const title = attempt.title || kind;
             return (
               <li className="ws-row" key={attempt.attempt_id}>
@@ -126,7 +126,7 @@ export function StudentProgress({ a, profile }: { a: StudentAnalytics; profile: 
       <div className="ws-stat-grid">
         <StatCard label={metrics.attempts_passed.label} value={a.total_attempts ? Math.round(a.pass_rate) + "%" : "—"} hint={a.successful_attempts + " of " + a.total_attempts + " passed"} />
         <StatCard label={metrics.average_attempt_score.label} value={a.total_attempts ? Math.round(a.average_score) + "%" : "—"} hint={a.total_attempts ? "Best " + Math.round(a.best_score) + "%" : "No attempts yet"} />
-        <StatCard label="Practice and exam time" value={duration(a.total_time_seconds)} hint="Time recorded for visible attempts" />
+        <StatCard label="Practice time" value={duration(a.total_time_seconds)} hint="Time recorded for visible attempts" />
       </div>
       <section className="ws-panel" aria-labelledby="learning-activity-title">
         <div className="ws-panel-head">
@@ -210,45 +210,6 @@ export function StudentProgress({ a, profile }: { a: StudentAnalytics; profile: 
       </div>
 
       {a.recent_attempts ? <RecentAttempts attempts={a.recent_attempts} total={a.total_attempts} /> : null}
-
-      <section className="ws-panel" aria-labelledby="exams-title">
-        <div className="ws-panel-head">
-          <div>
-            <p className="eyebrow-label">EXAMS</p>
-            <h2 id="exams-title">Exam history</h2>
-          </div>
-        </div>
-        {a.exam_history.length === 0 ? (
-          <p className="ws-muted">No exam attempts yet.</p>
-        ) : (
-          <ul className="ws-list">
-            {a.exam_history.map((exam, index) => (
-              <li className="ws-row" key={`${exam.exam_id}-${index}`}>
-                <div className="ws-row-main">
-                  <strong>{exam.title}</strong>
-                  <span className="ws-row-meta">
-                    {exam.submitted_at
-                      ? exam.results_released
-                        ? `Results released · submitted ${formatDateTime(exam.submitted_at)}`
-                        : `Awaiting release · submitted ${formatDateTime(exam.submitted_at)}`
-                      : "In progress"}
-                  </span>
-                </div>
-                <div className="ws-row-actions">
-                  <StatusChip state={exam.status} />
-                  <strong>
-                    {!exam.results_released
-                      ? "Awaiting release"
-                      : exam.score === null
-                        ? "—"
-                        : `${Math.round(exam.score)}${exam.max_score ? ` / ${Math.round(exam.max_score)}` : ""}`}
-                  </strong>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
 
       <section className="ws-panel" id="badges" aria-labelledby="badges-title">
         <div className="ws-panel-head">

@@ -7,7 +7,6 @@ export default function AdministratorTeachingPage() {
     <div className="ws-inline-actions">
       <Link className="button button-outline" href="/admin/teaching/preview">Student Preview</Link>
       <Link className="button button-outline" href="/workshops">Workshops</Link>
-      <Link className="button button-outline" href="/admin/teaching/exams">Exams</Link>
     </div>
   </section>;
 }

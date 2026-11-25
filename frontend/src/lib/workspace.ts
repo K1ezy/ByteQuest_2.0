@@ -323,6 +323,7 @@ export interface StudentPreview {
 
 export interface ActivityDetail {
   activity_id: string;
+  destination_workshop?: { id: string; name: string } | null;
   activity_type: "quiz" | "challenge";
   language?: "python" | "cpp" | "java";
   exam_only?: boolean;

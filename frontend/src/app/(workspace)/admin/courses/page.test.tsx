@@ -48,17 +48,7 @@ it("edits the title and description, never the code", async () => {
   expect(mocks.reload).toHaveBeenCalled();
 });
 
-it("shows the impact before archiving and refuses while an exam is open or scheduled", async () => {
-  mocks.getCourseImpact.mockResolvedValueOnce({ course: active, students: 64, instructors: 2, published_activities: 11,
-    blocking_exams: [{ id: "e", title: "Midterm", opens_at: "2026-11-30T02:00:00Z", closes_at: "2026-11-30T03:00:00Z" }] });
-  const view = render(<Page />);
-  fireEvent.click(screen.getByRole("button", { name: "Archive" }));
-  expect(await screen.findByText(/can't be archived yet/)).toBeTruthy();
-  expect(screen.getByText(/Midterm · closes/)).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Archive course" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  view.unmount();
-
+it("shows the impact before archiving the course", async () => {
   mocks.getCourseImpact.mockResolvedValueOnce({ course: active, students: 64, instructors: 2, published_activities: 11, blocking_exams: [] });
   mocks.setCourseArchived.mockResolvedValue({ status: "archived", message: "Python Track is archived." });
   render(<Page />);

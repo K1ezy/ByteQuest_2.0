@@ -25,59 +25,6 @@ from app.services.judge0.client import Judge0UnavailableError, judge0_client
 pytestmark = pytest.mark.integration
 
 
-@pytest.mark.parametrize("release_first", [False, True])
-def test_completion_xp_is_awarded_once_across_practice_and_exam_release(flow, release_first):
-    client, sessions, users = flow
-    student = _token(users["student"])
-    instructor = _token(users["instructor"])
-    now = datetime.now(timezone.utc)
-    with sessions() as db:
-        challenge_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
-        quiz_id = _quiz(db, users["instructor"])
-        for activity_id in (challenge_id, quiz_id):
-            _published_activity(db, activity_id)
-        exam = Exam(title="Completion reward ordering", created_by=users["instructor"],
-                    opens_at=now-timedelta(hours=2), closes_at=now-timedelta(hours=1),
-                    published_at=now-timedelta(hours=3), duration_minutes=30)
-        db.add(exam)
-        db.flush()
-        attempt = ExamAttempt(exam_id=exam.id, student_id=users["student"], attempt_number=1,
-                              status="submitted", started_at=exam.opens_at, due_at=exam.closes_at,
-                              submitted_at=exam.closes_at, result_json={"pending_xp": 65, "xp_released": False})
-        db.add(attempt)
-        db.flush()
-        exam_id, attempt_id = exam.id, attempt.id
-        for position, (activity_id, xp) in enumerate(((challenge_id, 40), (quiz_id, 25)), 1):
-            item = ExamItem(exam_id=exam.id, activity_id=activity_id, position=position,
-                            points=10, snapshot_json={"xp_reward": xp})
-            db.add(item)
-            db.flush()
-            db.add(ActivityAttempt(student_id=users["student"], activity_id=activity_id, attempt_number=1,
-                                  exam_attempt_id=attempt.id, exam_item_id=item.id, score_percentage=100,
-                                  is_successful=True, xp_awarded=0))
-        db.commit()
-
-    release = f"/api/v1/exams/instructor/{exam_id}/release"
-    if release_first:
-        assert client.post(release, headers=instructor).status_code == 200
-    coding = _graded_job(client, student, challenge_id, "PRINT_INPUT")
-    quiz = client.post("/api/v1/quests/submit-quiz", headers=student,
-                       json={"activity_id": str(quiz_id), "answers": {"q1": "A", "q2": "A", "q3": "A"}})
-    assert quiz.status_code == 200, quiz.text
-    expected_practice = (0, 0) if release_first else (40, 25)
-    assert (coding["xp_awarded"], quiz.json()["xp_awarded"]) == expected_practice
-    published = client.post(release, headers=instructor)
-    assert published.status_code == 200, published.text
-    with sessions() as db:
-        result = db.get(ExamAttempt, attempt_id).result_json
-        assert result["activity_xp_awards"] == ({str(challenge_id): 40, str(quiz_id): 25} if release_first else {})
-        assert sum(expected_practice) + result["pending_xp"] == 65
-        xp_after_release = db.get(Profile, users["student"]).xp_points
-    assert client.post(release, headers=instructor).json() == published.json()
-    with sessions() as db:
-        assert db.get(Profile, users["student"]).xp_points == xp_after_release
-
-
 @pytest.mark.parametrize("dry_run_only", [False, True])
 @pytest.mark.parametrize("late_failure", [False, True])
 def test_expired_submission_cannot_replace_a_new_claim_result(flow, monkeypatch, dry_run_only, late_failure):
@@ -123,50 +70,6 @@ def test_expired_submission_cannot_replace_a_new_claim_result(flow, monkeypatch,
     with sessions() as db:
         recorded = db.query(ActivityAttempt).filter(ActivityAttempt.submission_job_id == old_claim.job_id).all()
         assert [item.xp_awarded for item in recorded] == ([] if dry_run_only else [40])
-
-
-def test_instructor_can_retry_exhausted_exam_grading_without_losing_answers(flow, monkeypatch):
-    client, sessions, users = flow
-    student, instructor = _token(users["student"]), _token(users["instructor"])
-    monkeypatch.setattr(exam_worker, "SessionLocal", sessions)
-    attempt_id, item_id = _started_quiz_exam(client, sessions, users)
-    answer_path = f"/api/v1/exams/attempts/{attempt_id}"
-    answers = {item_id: {"q1": "A", "q2": "A", "q3": "A"}}
-    assert client.put(f"{answer_path}/answers", headers=student, json={"expected_revision": 0, "answers": answers}).status_code == 200
-    assert client.post(f"{answer_path}/submit", headers=student).status_code == 200
-    attempt_id = uuid.UUID(attempt_id)
-    with sessions() as db:
-        attempt = db.get(ExamAttempt, attempt_id)
-        exam_id = attempt.exam_id
-        db.get(Exam, exam_id).closes_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-        attempt.grading_attempts = exam_worker.MAX_GRADING_ATTEMPTS - 1
-        db.commit()
-
-    def unavailable(*args):
-        raise Judge0UnavailableError("synthetic failure")
-
-    original = exam_worker._grade_item
-    monkeypatch.setattr(exam_worker, "_grade_item", unavailable)
-    lease = exam_worker.claim_exam(attempt_id)
-    assert lease is not None
-    exam_worker.grade_exam(lease)
-    held = client.get(answer_path, headers=student).json()
-    assert held["status"] == "failed" and held["result"] is None and held["answers"] == answers
-    assert exam_worker.claim_exam(attempt_id) is None
-    release = f"/api/v1/exams/instructor/{exam_id}/release"
-    assert client.post(release, headers=instructor).status_code == 409
-    retry = client.post(f"/api/v1/exams/instructor/{exam_id}/attempts/{attempt_id}/retry-grading", headers=instructor)
-    assert retry.status_code == 202, retry.text
-
-    monkeypatch.setattr(exam_worker, "_grade_item", original)
-    resumed = exam_worker.claim_exam(attempt_id)
-    assert resumed is not None and resumed.token != lease.token
-    exam_worker.grade_exam(resumed)
-    exam_worker.grade_exam(lease)
-    assert client.post(release, headers=instructor).status_code == 200
-    assert client.get(answer_path, headers=student).json()["result"]["score"] == 10
-    with sessions() as db:
-        assert db.query(ActivityAttempt).filter(ActivityAttempt.exam_attempt_id == attempt_id).count() == 1
 
 
 def test_expired_hint_recovers_allowance_and_same_key_delivers_once(flow, monkeypatch):
@@ -275,55 +178,6 @@ def test_studio_and_faculty_follow_active_course_assignments(workspace):
             assert str(ids["other_document"]) not in {row["document_id"] for row in response.json()["documents"]}
             assert str(ids["other_draft"]) not in {row["activity_id"] for row in response.json()["activities"]}
     assert client.get(studio, params={"course_id": str(ids["course_a"])}, headers=author).status_code == 403
-
-
-def test_restricted_exam_keeps_items_out_of_practice_and_requires_course_enrollment(workspace):
-    client, sessions, ids = workspace
-    instructor, student, outsider = (faculty_token(ids[role]) for role in ("faculty", "student", "other_student"))
-    now = datetime.now(timezone.utc)
-    with sessions() as db:
-        activity = db.get(LearningActivity, ids["draft"])
-        activity.exam_only = True
-        group = Workshop(name="Restricted exam group", language=ProgrammingLang.python,
-                           join_code="".join(secrets.choice(workshops.CODE_ALPHABET) for _ in range(8)),
-                           created_by=ids["faculty"])
-        db.add(group)
-        db.flush()
-        group_id = group.id
-        for student_id in (ids["student"], ids["other_student"]):
-            db.add(WorkshopMember(workshop_id=group_id, profile_id=student_id))
-        db.commit()
-
-    approval = client.post(f"/api/v1/faculty/drafts/{ids['draft']}/approve", headers=instructor,
-                           json={"confirm": True, "student_preview_confirmed": True})
-    assert approval.status_code == 409 and approval.json()["detail"]["code"] == "exam_only"
-    practice = client.get("/api/v1/quests", headers=student).json()
-    assert str(ids["draft"]) not in {item["id"] for item in practice}
-    payload = {"title": "Restricted assessment", "opens_at": (now+timedelta(minutes=1)).isoformat(),
-               "closes_at": (now+timedelta(hours=1)).isoformat(), "duration_minutes": 30, "pass_mark_percent": 75,
-               "workshop_ids": [str(group_id)], "items": [{"activity_id": str(ids["draft"]), "points": 10}]}
-    assert client.post("/api/v1/exams/instructor", headers=instructor, json=payload).status_code == 422
-    created = client.post("/api/v1/exams/instructor", headers=instructor, json=payload | {"content_mode": "restricted"})
-    assert created.status_code == 201, created.text
-    exam_id = created.json()["id"]
-    assert client.post(f"/api/v1/exams/instructor/{exam_id}/publish", headers=instructor).status_code == 200
-    assert client.post(f"/api/v1/exams/{exam_id}/start", headers=student).status_code == 409
-    assert client.get(f"/api/v1/exams/{exam_id}", headers=outsider).status_code == 404
-    with sessions() as db:
-        db.get(Exam, uuid.UUID(exam_id)).opens_at = now-timedelta(seconds=1)
-        db.commit()
-    assert client.post(f"/api/v1/exams/{exam_id}/start", headers=outsider).status_code == 404
-    opened = client.post(f"/api/v1/exams/{exam_id}/start", headers=student)
-    assert opened.status_code == 200, opened.text
-    path = f"/api/v1/exams/attempts/{opened.json()['attempt_id']}"
-    exam = client.get(path, headers=student)
-    assert len(exam.json()["items"]) == 1 and "correct_answer" not in exam.text
-    assert client.post(f"{path}/submit", headers=student).status_code == 200
-    assert client.get(path, headers=student).json()["items"] == []
-    with sessions() as db:
-        db.query(CourseMember).filter_by(course_id=ids["course_a"], profile_id=ids["student"]).one().status = "removed"
-        db.commit()
-    assert client.get(path, headers=student).status_code == 404
 
 
 def test_workshop_sharing_checks_instructor_course_membership(workspace, monkeypatch):
@@ -589,25 +443,3 @@ def test_disabled_gemini_keeps_reviewed_hints_available(flow, monkeypatch):
     response = client.post("/api/v1/chat/messages", headers=_token(users["instructor"]),
                            json={"messages": [{"role": "user", "content": "Explain loops."}]})
     assert response.status_code == 503 and "disabled" in response.json()["detail"]
-
-
-def test_dashboard_skips_finished_exam_before_selecting_next_due_exam(flow):
-    client, sessions, users = flow
-    instructor, student = _token(users["instructor"]), _token(users["student"])
-    group = client.post("/api/v1/workshops", headers=instructor,
-                        json={"name": "Audit due exams", "language": "python", "activity_ids": []}).json()
-    assert client.post("/api/v1/workshops/join", headers=student, json={"code": group["join_code"]}).status_code == 200
-    now = datetime.now(timezone.utc)
-    with sessions() as db:
-        exams = [Exam(title=f"Audit exam {i}", created_by=users["instructor"], published_at=now-timedelta(hours=2),
-                      opens_at=now-timedelta(hours=1), closes_at=now+timedelta(hours=i), duration_minutes=30) for i in [1,2]]
-        db.add_all(exams)
-        db.flush()
-        db.add_all([ExamAssignment(exam_id=e.id, workshop_id=uuid.UUID(group["id"])) for e in exams])
-        db.add(ExamAttempt(exam_id=exams[0].id, student_id=users["student"], attempt_number=1, status="submitted",
-                           started_at=now-timedelta(minutes=40),due_at=now-timedelta(minutes=10),submitted_at=now,
-                           answers_json={}))
-        db.commit()
-        pending_id=str(exams[1].id)
-    assert client.get(f"/api/v1/exams/{pending_id}", headers=student).json()["can_start"] is True
-    assert client.get("/api/v1/pilot/dashboard", headers=student).json()["due_exam"]["id"] == pending_id

@@ -8,7 +8,6 @@ import { useShellProfile } from "@/components/app-shell";
 import { ActivityDateFilter } from "@/components/activity-date-filter";
 import { activityDateMatches } from "@/lib/activity-date";
 import { QuestCard, questHref, questNumber } from "@/components/quest-card";
-import { StudentExamList } from "@/components/student-exam-list";
 import { ActivityPerformancePreview } from "@/components/activity-performance-preview";
 import type { Quest } from "@/lib/types";
 
@@ -18,10 +17,9 @@ const categories = [
   ["", "All quests", undefined],
   ["code-challenge", "Code challenges", "Show activities where you write and test code."],
   ["lessons-review", "Concept check quiz", "Show short quizzes on programming concepts."],
-  ["exams", "Exams", "Show the exams assigned to you."],
 ] as const;
 
-type PracticeCategory = Exclude<(typeof categories)[number][0], "exams">;
+type PracticeCategory = (typeof categories)[number][0];
 
 function QuestsPageContent() {
   const router = useRouter();
@@ -42,7 +40,7 @@ function QuestsPageContent() {
         <div className="qm-panel-heading">
           <div>
             <h1>Quest Map</h1>
-            <p>Find practice quests and assigned exams.</p>
+            <p>Find coding challenges and practice quizzes.</p>
           </div>
         </div>
         <div className="quest-map-toolbar">
@@ -55,7 +53,7 @@ function QuestsPageContent() {
             ))}
           </div>
         </div>
-        {category === "exams" ? <StudentExamList /> : <PracticeQuestList category={category} />}
+        <PracticeQuestList category={category} />
       </div>
     </div>
   );

@@ -10,10 +10,23 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
-from app.models.entities import ActivityKind, LearningActivity, Profile, ReviewState
+from app.models.entities import ActivityKind, LearningActivity, Profile, ReviewState, UserRole, Workshop, WorkshopActivity
 from app.services.challenge_verification import challenge_is_verified
 from app.services.gamification.quiz_content import parse_quiz_questions
+from app.services.ml_predictor.shadow import capture_assignment_predictions
 from app.services.workspace_common import as_aware
+
+
+def activity_destination(db: Session, workshop_id, actor: Profile, *, lock: bool = False) -> Workshop | None:
+    if workshop_id is None:
+        return None
+    query = db.query(Workshop).filter(Workshop.id == workshop_id, Workshop.archived_at.is_(None))
+    if actor.role != UserRole.admin:
+        query = query.filter(Workshop.created_by == actor.id)
+    workshop = (query.with_for_update() if lock else query).first()
+    if workshop is None:
+        raise HTTPException(422, "Choose an active workshop you manage.")
+    return workshop
 
 
 def lock_activity_for_publication(db: Session, activity: LearningActivity) -> None:
@@ -88,6 +101,13 @@ def apply_publish_rules(
     activity.reviewed_by = actor.id
     activity.published_at = datetime.now(timezone.utc)
     activity.rejection_reason = None
+    if activity.destination_workshop_id is not None:
+        workshop = activity_destination(db, activity.destination_workshop_id, actor, lock=True)
+        if workshop.language != activity.language:
+            raise HTTPException(409, "The workshop language changed. Create a draft for its current language.")
+        position = db.query(func.max(WorkshopActivity.position)).filter(WorkshopActivity.workshop_id == workshop.id).scalar()
+        db.add(WorkshopActivity(workshop_id=workshop.id, activity_id=activity.id,
+                                position=0 if position is None else position + 1, added_at=activity.published_at))
     # Archive every other live member of this version family, not only the original.
     # Archiving the root alone left v2 published beside v3, so students saw and could
     # submit two copies of the same challenge.
@@ -104,3 +124,4 @@ def apply_publish_rules(
     )
     for previous in superseded:
         previous.archived_at = datetime.now(timezone.utc)
+    capture_assignment_predictions(db, activity, activity.published_at, workshop_id=activity.destination_workshop_id)

@@ -2,19 +2,17 @@
 
 import Link from "next/link";
 import { useRef, useState } from "react";
-import { useShellProfile } from "@/components/app-shell";
 import { Button, useApi } from "@/components/workspace/ui";
 import { apiRequest, getErrorMessage } from "@/lib/api";
 import { useWorkshop } from "./workshop-layout";
 import { WorkshopDialog, WorkshopError, WorkshopForm, WorkshopInvite, workshopDateTime } from "./workshop-ui";
 
 type Announcement = { id: string; body: string; pinned: boolean; created_at: string; updated_at: string };
-type Upcoming = { id: string; title: string; kind: "quiz" | "challenge" | "exam"; opens_at: string | null; closes_at: string };
+type Upcoming = { id: string; title: string; kind: "quiz" | "challenge"; closes_at: string };
 type AnnouncementDialog = { mode: "post" } | { mode: "edit" | "delete"; item: Announcement };
 
 function UpcomingItems() {
   const { workshop } = useWorkshop();
-  const { role } = useShellProfile();
   const path = `/workshops/${workshop.id}`;
   const { data, loading, error, reload } = useApi<Upcoming[]>(`${path}/upcoming`, true);
   return <section className="workshop-panel workshop-upcoming">
@@ -25,14 +23,9 @@ function UpcomingItems() {
       <Button onClick={reload}>Retry</Button>
     </> : data?.length ? <ul>
       {data.map((item) => {
-        const isExam = item.kind === "exam";
-        const href = isExam
-          ? role === "student" ? `/exams/${item.id}` : role === "admin" ? "/admin/teaching/exams" : "/instructor/exams"
-          : `${path}/activities`;
         return <li key={`${item.kind}-${item.id}`}>
-          <Link className="workshop-text-link" href={href}>{item.title}</Link>
-          <span className="workshop-muted">{isExam ? "Exam" : item.kind === "quiz" ? "Concept check" : "Code challenge"}</span>
-          {isExam && item.opens_at && <span>Opens <time dateTime={item.opens_at}>{workshopDateTime(item.opens_at)}</time></span>}
+          <Link className="workshop-text-link" href={`${path}/activities`}>{item.title}</Link>
+          <span className="workshop-muted">{item.kind === "quiz" ? "Concept check" : "Code challenge"}</span>
           <span>Closes <time dateTime={item.closes_at}>{workshopDateTime(item.closes_at)}</time></span>
         </li>;
       })}

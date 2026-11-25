@@ -9,9 +9,10 @@ export function InstructorHints({ activityId, editable }: { activityId: string; 
   const [hints, setHints] = useState<Record<number, string>>({});
   const [saved, setSaved] = useState<Record<number, string>>({});
   const [busySlot, setBusySlot] = useState<number | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => { let active = true; void apiRequest<Hint[]>(`/pilot/instructor/activities/${activityId}/hints`)
-    .then((items) => { if (active) { const values = Object.fromEntries(items.map((h) => [h.slot, h.body])); setHints(values); setSaved(values); } })
+    .then((items) => { if (active) { const values = Object.fromEntries(items.map((h) => [h.slot, h.body])); setHints(values); setSaved(values); setLoaded(true); } })
     .catch((cause) => { if (active) setError(getErrorMessage(cause)); });
     return () => { active = false; }; }, [activityId]);
   async function save(slot: number) {
@@ -22,8 +23,20 @@ export function InstructorHints({ activityId, editable }: { activityId: string; 
     } catch (cause) { setError(getErrorMessage(cause)); }
     finally { setBusySlot(null); }
   }
+  async function generate() {
+    setBusySlot(0); setError("");
+    try {
+      const items = await apiRequest<Hint[]>(`/instructor/activities/${activityId}/generate-hints`, { method: "POST" });
+      const values = Object.fromEntries(items.map((hint) => [hint.slot, hint.body]));
+      setHints((current) => Object.fromEntries(items.map((hint) => [hint.slot, current[hint.slot] || hint.body])));
+      setSaved(values);
+    } catch (cause) { setError(getErrorMessage(cause)); }
+    finally { setBusySlot(null); }
+  }
   return <section className="test-case-section"><h3 className="library-subheading">Guiding hints</h3>
     <p className="muted-copy">Up to five instructor hints. Students may reveal them in any order; AI guidance uses the same five-use budget.</p>
+    {editable && loaded && Object.keys(saved).length < 5 && <button type="button" className="button button-outline small"
+      onClick={() => void generate()} disabled={busySlot !== null}>{busySlot === 0 ? "Generating hints…" : "Fill empty hints with Gemini"}</button>}
     {error && <p className="notice error" role="alert">{error}</p>}
     {[1,2,3,4,5].map((slot) => <div className="field" key={slot}>
       <label htmlFor={`hint-${activityId}-${slot}`}>Hint {slot}</label>

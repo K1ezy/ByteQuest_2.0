@@ -233,6 +233,7 @@ class LearningActivity(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    destination_workshop_id = Column(UUID(as_uuid=True), ForeignKey("workshops.id", ondelete="RESTRICT"), nullable=True)
     source_document_id = Column(UUID(as_uuid=True), ForeignKey("instructional_documents.id", ondelete="SET NULL"), nullable=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("profiles.id"), nullable=True)
     activity_type = Column(Enum(ActivityKind, name="activitykind"), nullable=False)
@@ -678,6 +679,7 @@ class MLPrediction(Base):
     rf_prob = Column(Float, nullable=False)
     rf_pred = Column(Boolean, nullable=False)
     actual_outcome = Column(Boolean, nullable=True)
+    assigned_at = Column(DateTime(timezone=True), nullable=True)
     active_sequencer_mode = Column(String(50), nullable=True)
     recommended_action = Column(String(50), nullable=True)
     model_version = Column(String(50), default="v1.0.0", nullable=False)

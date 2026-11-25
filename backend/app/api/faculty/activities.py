@@ -12,9 +12,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.entities import ActivityAttempt, ActivityKind, LearningActivity, Profile, ProgrammingLang, ReviewState, TestCase
+from app.models.entities import ActivityAttempt, ActivityKind, LearningActivity, Profile, ProgrammingLang, ReviewState, TestCase, Workshop
 from app.services.audit import record_audit
-from app.services.activity_publishing import apply_publish_rules
+from app.services.activity_publishing import activity_destination, apply_publish_rules
 from app.services.challenge_verification import verify_saved_challenge
 from app.services.attempt_visibility import guard_solution_reopen
 from app.services.course_access import resolve_workspace_course
@@ -75,6 +75,7 @@ def list_activity_workspace(
 class ActivityCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     course_id: uuid.UUID
+    workshop_id: uuid.UUID | None = None
     exam_only: bool = False
     activity_type: str = Field(pattern="^(quiz|challenge)$")
     # Omitted: the instructor's own track, as before.
@@ -128,6 +129,7 @@ def create_activity(
     db: Session = Depends(get_db),
 ):
     course = resolve_workspace_course(db, user, payload.course_id, allow_admin=False)
+    workshop = activity_destination(db, payload.workshop_id, user)
     _validate_schedule(payload.opens_at, payload.closes_at)
     if payload.activity_type == "challenge" and not payload.reference_solution_code:
         raise HTTPException(
@@ -136,10 +138,11 @@ def create_activity(
         )
     activity = LearningActivity(
         course_id=course.id,
+        destination_workshop_id=workshop.id if workshop else None,
         created_by=user.id,
         activity_type=ActivityKind(payload.activity_type),
         exam_only=payload.exam_only,
-        language=payload.language or user.enrolled_language,
+        language=workshop.language if workshop else (payload.language or user.enrolled_language),
         topic_concept=payload.topic_concept.strip(),
         title=payload.title.strip(),
         problem_statement=payload.problem_statement.strip(),
@@ -220,8 +223,10 @@ def get_activity(activity_id: uuid.UUID, user: Profile = Depends(faculty_user), 
     course = _course_for_activity(db, user, activity)
     attempts = db.query(func.count(ActivityAttempt.id)).filter(ActivityAttempt.activity_id == activity.id).scalar() or 0
     detail = _activity_response(activity, course, attempt_count=attempts)
+    workshop = db.get(Workshop, activity.destination_workshop_id) if activity.destination_workshop_id else None
     detail.update(
         {
+            "destination_workshop": {"id": str(workshop.id), "name": workshop.name} if workshop else None,
             "course": _course_brief(course),
             "attempt_count": int(attempts),
             "grading_locked": attempts > 0,
@@ -509,6 +514,7 @@ def create_activity_version(
         created_by=user.id,
         activity_type=activity.activity_type,
         exam_only=activity.exam_only,
+        destination_workshop_id=activity.destination_workshop_id,
         language=activity.language,
         topic_concept=activity.topic_concept,
         title=activity.title,

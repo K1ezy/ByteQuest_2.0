@@ -120,6 +120,7 @@ function FacultyActivities() {
         const source = await getActivity(activity.activity_id);
         return createActivity({
           course_id: courseId, activity_type: source.activity_type, language: activity.language,
+          workshop_id: source.destination_workshop?.id,
           title: `Copy of ${source.title || source.topic_concept}`.slice(0, 255), topic_concept: source.topic_concept,
           problem_statement: source.problem_statement, difficulty_level: source.difficulty_level, xp_reward: source.xp_reward,
           pass_mark_percent: source.pass_mark_percent, starter_code: source.starter_code, reference_solution_code: source.reference_solution_code,
@@ -223,8 +224,14 @@ function FacultyActivities() {
                 <summary className="ic-button" aria-label={"More actions for " + (activity.title || activity.topic_concept)}>⋯</summary>
                 <div className="ic-menu-options">
                   {mayAnalyze && <Link className="ic-button" href={courseHref("/instructor/activities/" + activity.activity_id + "/analysis")}>Analysis</Link>}
-                  <button type="button" className="ic-button" disabled={rowBusy !== null} onClick={() => void copyActivity(activity, "version")}>New version</button>
-                  <button type="button" className="ic-button" disabled={rowBusy !== null} onClick={() => void copyActivity(activity, "duplicate")}>Duplicate</button>
+                  <button type="button" className="ic-button" disabled={rowBusy !== null} onClick={(event) => {
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    void copyActivity(activity, "version");
+                  }}>New version</button>
+                  <button type="button" className="ic-button" disabled={rowBusy !== null} onClick={(event) => {
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    void copyActivity(activity, "duplicate");
+                  }}>Duplicate</button>
                   <button type="button" className="ic-button" disabled title="Only administrators can archive activities at present">Archive</button>
                 </div>
               </details>} />;

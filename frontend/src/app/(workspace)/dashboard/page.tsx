@@ -16,21 +16,9 @@ interface Dashboard {
   recommendation: { rationale: string; recommended_action: string };
   next_activity: { id: string; title: string; kind: "quiz" | "challenge" } | null;
   pending_job_id: string | null;
-  due_exam: { id: string; title: string; closes_at: string } | null;
   notices: { id: string; subject: string; body: string }[];
 }
 
-const localTime = (value: string) => new Date(value).toLocaleString("en-PH", {
-  timeZone: "Asia/Manila", dateStyle: "medium", timeStyle: "short",
-});
-const relative = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
-function closesIn(value: string, now: Date) {
-  const minutes = Math.round((new Date(value).getTime() - now.getTime()) / 60_000);
-  if (minutes <= 0) return "Closing now";
-  if (minutes < 60) return `Closes ${relative.format(minutes, "minute")}`;
-  if (minutes < 48 * 60) return `Closes ${relative.format(Math.round(minutes / 60), "hour")}`;
-  return `Closes ${relative.format(Math.round(minutes / 1440), "day")}`;
-}
 const kindLabel = (kind: "quiz" | "challenge") => kind === "quiz" ? "Quiz" : "Challenge";
 const vars = (values: Record<string, string | number>) => values as CSSProperties;
 
@@ -116,18 +104,6 @@ function DashboardContent({ profile }: { profile: Profile }) {
           : <button type="button" className="button button-outline" onClick={() => void load()}>Retry</button>}
       </div>}
 
-      {data?.due_exam && (
-        <section className="dashboard-exam dashboard-reveal" aria-labelledby="due-exam-priority-title">
-          <span className="dashboard-exam-icon" aria-hidden="true">✎</span>
-          <div className="dashboard-exam-copy">
-            <span className="dashboard-kicker">Assigned exam</span>
-            <h2 id="due-exam-priority-title">{data.due_exam.title}</h2>
-            <p><strong>{closesIn(data.due_exam.closes_at, now)}</strong> · {localTime(data.due_exam.closes_at)} (Asia/Manila)</p>
-          </div>
-          <Link className="button button-primary" href={`/exams/${data.due_exam.id}`} data-tooltip="View the exam instructions or return to your attempt.">Open exam <span aria-hidden="true">→</span></Link>
-        </section>
-      )}
-
       {data?.pending_job_id && (
         <section className="pilot-card dashboard-pending dashboard-reveal" aria-labelledby="pending-title">
           <p className="dashboard-kicker"><span className="dashboard-live-dot" aria-hidden="true" />Submission in progress</p>
@@ -147,7 +123,7 @@ function DashboardContent({ profile }: { profile: Profile }) {
             <h2 id="continue-title">{nextActivity?.title ?? nextTitle}</h2>
             <p>{needsLanguage ? "Join a workshop to choose a language and start practicing." : data.recommendation.rationale}</p>
             <div className="pilot-actions">
-              <Link className={`button ${data.due_exam ? "button-outline" : "button-primary"} dashboard-next-cta`} href={nextHref}
+              <Link className="button button-primary dashboard-next-cta" href={nextHref}
                 data-tooltip={nextActivity ? "Open the activity recommended for your current progress." : undefined}>
                 {nextActivity ? "Continue quest" : needsLanguage ? "Go to Workshops" : "Explore quest map"} <span className="dashboard-arrow" aria-hidden="true">→</span>
               </Link>

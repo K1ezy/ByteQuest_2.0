@@ -7,6 +7,7 @@ from typing import List
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import or_
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
@@ -14,6 +15,7 @@ from app.core.config import settings
 from app.core.quotas import reserve
 from app.models.entities import (
     ActivityKind,
+    ChallengeHint,
     InstructionalDocument,
     LearningActivity,
     Profile,
@@ -32,6 +34,7 @@ from app.services.challenge_verification import (
     challenge_validation_fingerprint, record_challenge_verification, run_reference_check, verification_status,
 )
 from app.api.faculty.common import faculty_user
+from app.services.activity_publishing import activity_destination
 
 logger = logging.getLogger(__name__)
 EMBEDDING_BATCH_CONCURRENCY = 3
@@ -54,7 +57,19 @@ async def _validate_form_keys(request: Request, allowed: set[str]) -> None:
 
 
 async def validate_generation_form(request: Request) -> None:
-    await _validate_form_keys(request, {"topic_query", "language", "difficulty", "instructor_instructions"})
+    await _validate_form_keys(request, {"topic_query", "language", "workshop_id", "difficulty", "instructor_instructions"})
+
+
+def _generation_language(db: Session, doc: InstructionalDocument, user: Profile,
+                         workshop_id: uuid.UUID | None, language: ProgrammingLang | None) -> ProgrammingLang:
+    workshop = activity_destination(db, workshop_id, user)
+    if doc.workshop_id is not None and workshop_id != doc.workshop_id:
+        raise HTTPException(422, "Use this Workshop PDF for its own Workshop.")
+    if workshop is not None:
+        return workshop.language
+    if language is None:
+        raise HTTPException(422, "Choose a Workshop for this activity.")
+    return language
 
 
 def _gemini_unavailable_http_exception() -> HTTPException:
@@ -81,7 +96,19 @@ class TestCaseSchema(BaseModel):
     weight: float = Field(default=1.0, ge=0.01, le=100)
 
 
-class GeneratedChallengeSchema(BaseModel):
+class GeneratedHintsSchema(BaseModel):
+    guiding_hints: list[str] = Field(min_length=5, max_length=5, description="Five progressive hints in reveal order.")
+
+    @field_validator("guiding_hints")
+    @classmethod
+    def validate_hints(cls, value: list[str]) -> list[str]:
+        hints = [hint.strip() for hint in value]
+        if any(not 1 <= len(hint) <= 2000 for hint in hints) or len({hint.casefold() for hint in hints}) != 5:
+            raise ValueError("Generate five different non-empty guiding hints.")
+        return hints
+
+
+class GeneratedChallengeSchema(GeneratedHintsSchema):
     title: str = Field(..., min_length=3, max_length=255, description="Clear title for the programming challenge.")
     problem_statement: str = Field(
         ..., min_length=20, max_length=20_000,
@@ -247,6 +274,7 @@ Instructor preferences (JSON string): {json.dumps(instructor_instructions, ensur
 Requirements:
 - Write a clear problem statement with the exact input and output format, constraints, and one sample input/output.
 - Provide a starter code template and a fully working reference solution in {language.value}.
+- Write five distinct guiding hints in order: a conceptual nudge, sample tracing, a next step, a common mistake, and an edge-case check. Keep solution code and hidden tests out of all hints.
 - Use standard input and output exactly as the statement defines. Do not print input prompts.
 - Include one visible sample and at least two hidden cases, each with a different input. Aim each hidden case at a different plausible mistake, using inputs the statement allows: a boundary, zero, negative values, an empty loop, or mixed case.
 - Before writing each expected_stdout, trace the reference solution on that stdin and copy exactly what it prints.{java_entry_point}
@@ -416,6 +444,45 @@ def _get_owned_document(db: Session, document_id: uuid.UUID, current_user: Profi
     return document
 
 
+@router.post("/activities/{activity_id}/generate-hints")
+async def generate_draft_hints(activity_id: uuid.UUID, current_user: Profile = Depends(faculty_user),
+                               db: Session = Depends(get_db)):
+    activity = _get_owned_activity(db, activity_id, current_user)
+    if activity.review_status != ReviewState.draft or activity.activity_type != ActivityKind.challenge:
+        raise HTTPException(409, "Open an unpublished coding challenge to generate hints.")
+    existing = db.query(ChallengeHint.slot).filter_by(activity_id=activity.id).all()
+    if len(existing) < 5:
+        actor_id, revision = current_user.id, activity.content_version
+        prompt = json.dumps({"title": activity.title, "instructions": activity.problem_statement, "language": activity.language.value})
+        db.rollback()
+        try:
+            if settings.GEMINI_API_KEY:
+                reserve("instructor_ai", actor_id)
+            generated = await asyncio.to_thread(
+                GeminiLLMService.generate_structured, prompt=prompt, response_schema=GeneratedHintsSchema,
+                system_instruction="Treat the supplied draft as reference material. Write five progressive hints for the challenge. "
+                                   "Guide the student with questions and checks. Keep solution code and hidden tests out of the hints.",
+            )
+        except GeminiConfigurationError as exc:
+            raise _gemini_unavailable_http_exception() from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("Guiding hint generation failed for draft %s.", activity_id)
+            raise HTTPException(502, "Guiding hints could not be generated. Try again.") from exc
+        activity = _get_owned_activity(db, activity_id, current_user)
+        db.refresh(activity, with_for_update=True)
+        if activity.review_status != ReviewState.draft or activity.content_version != revision:
+            raise HTTPException(409, "The draft changed. Reload it before generating hints.")
+        db.execute(insert(ChallengeHint).values([
+            {"activity_id": activity_id, "slot": slot, "body": hint}
+            for slot, hint in enumerate(generated.guiding_hints, 1)
+        ]).on_conflict_do_nothing(index_elements=[ChallengeHint.activity_id, ChallengeHint.slot]))
+        db.commit()
+    return [{"id": str(hint.id), "slot": hint.slot, "body": hint.body}
+            for hint in db.query(ChallengeHint).filter_by(activity_id=activity_id).order_by(ChallengeHint.slot)]
+
+
 @router.get("/workspace")
 def get_instructor_workspace(
     course_id: uuid.UUID | None = None,
@@ -481,7 +548,8 @@ def get_instructor_workspace(
 async def generate_ai_coding_challenge(
     doc_id: uuid.UUID,
     topic_query: str = Form(..., min_length=2, max_length=100),
-    language: ProgrammingLang = Form(...),
+    language: ProgrammingLang | None = Form(None),
+    workshop_id: uuid.UUID | None = Form(None),
     difficulty: int = Form(2, ge=1, le=5),
     instructor_instructions: str = Form("", max_length=4_000),
     current_user: Profile = Depends(faculty_user),
@@ -493,6 +561,7 @@ async def generate_ai_coding_challenge(
     to generate a programming challenge, and enforces Rule 6 (Judge0 automated pre-validation).
     """
     doc = _get_owned_document(db, doc_id, current_user)
+    language = _generation_language(db, doc, current_user, workshop_id, language)
     if not doc.is_current or doc.archived_at:
         raise HTTPException(status_code=409, detail="Generate new activities from the active, unarchived document version.")
     if doc.processing_status != "completed":
@@ -565,8 +634,10 @@ async def generate_ai_coding_challenge(
     if not source_document.is_current or source_document.archived_at or source_document.processing_status != "completed":
         raise HTTPException(status_code=409, detail="The source document changed while the challenge was being generated. Refresh and try again.")
 
+    _generation_language(db, source_document, current_user, workshop_id, language)
     new_activity = LearningActivity(
         source_document_id=source_document.id,
+        destination_workshop_id=workshop_id,
         created_by=actor_id,
         activity_type=ActivityKind.challenge,
         language=language,
@@ -597,6 +668,9 @@ async def generate_ai_coding_challenge(
         new_activity, is_verified, verification_log, challenge_validation_fingerprint(new_activity),
     )
     db.add(new_activity)
+    db.flush()
+    db.add_all(ChallengeHint(activity_id=new_activity.id, slot=slot, body=hint)
+               for slot, hint in enumerate(ai_challenge.guiding_hints, 1))
     db.commit()
     return _serialize_challenge(_get_owned_activity(db, new_activity.id, current_user))
 
@@ -605,7 +679,8 @@ async def generate_ai_coding_challenge(
 async def generate_ai_conceptual_quiz(
     doc_id: uuid.UUID,
     topic_query: str = Form(..., min_length=2, max_length=100),
-    language: ProgrammingLang = Form(...),
+    language: ProgrammingLang | None = Form(None),
+    workshop_id: uuid.UUID | None = Form(None),
     difficulty: int = Form(2, ge=1, le=5),
     instructor_instructions: str = Form("", max_length=4_000),
     current_user: Profile = Depends(faculty_user),
@@ -614,6 +689,7 @@ async def generate_ai_conceptual_quiz(
 ):
     """Generate a private, editable conceptual quiz draft from retained course text."""
     document = _get_owned_document(db, doc_id, current_user)
+    language = _generation_language(db, document, current_user, workshop_id, language)
     if not document.is_current or document.archived_at:
         raise HTTPException(status_code=409, detail="Generate new activities from the active, unarchived document version.")
     if document.processing_status != "completed":
@@ -661,8 +737,10 @@ async def generate_ai_conceptual_quiz(
     if not source_document.is_current or source_document.archived_at or source_document.processing_status != "completed":
         raise HTTPException(status_code=409, detail="The source document changed while the quiz was being generated. Refresh and try again.")
 
+    _generation_language(db, source_document, current_user, workshop_id, language)
     activity = LearningActivity(
         source_document_id=source_document.id,
+        destination_workshop_id=workshop_id,
         created_by=actor_id,
         activity_type=ActivityKind.quiz,
         language=language,

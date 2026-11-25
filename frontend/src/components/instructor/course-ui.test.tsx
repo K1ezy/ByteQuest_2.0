@@ -75,14 +75,14 @@ it("uses the instructor navigation for a workshop without course context", () =>
 it("names each page the same on desktop and phone, and reaches every page from More", () => {
   render(<InstructorCourseShell><p>Dashboard contents</p></InstructorCourseShell>);
   const pages = [
-    "Dashboard", "Activities", "Workshops", "Materials", "Exams", "Announcements", "Progress", "Gradebook", "Gamification", "Model evaluation",
+    "Dashboard", "Activities", "Workshops", "Materials", "Announcements", "Performance and Predictions", "Student Progress", "Gradebook", "Gamification", "Model evaluation",
   ];
   const desktop = within(screen.getByRole("navigation", { name: "Instructor" }));
   expect(desktop.getAllByRole("link").map((link) => link.textContent)).toEqual(pages);
   expect(desktop.getByRole("link", { name: "Dashboard" }).getAttribute("aria-current")).toBe("page");
   expect(desktop.getByRole("link", { name: "Workshops" }).getAttribute("href")).toBe("/workshops");
   const phone = within(screen.getByRole("navigation", { name: "Instructor navigation" }));
-  expect(phone.getAllByRole("link").map((link) => link.textContent)).toEqual(["Dashboard", "Activities", "Progress", "Exams"]);
+  expect(phone.getAllByRole("link").map((link) => link.textContent)).toEqual(["Dashboard", "Activities", "Performance and Predictions", "Student Progress"]);
   // jsdom doesn't implement native modal dialogs.
   const { showModal, close } = HTMLDialogElement.prototype;
   HTMLDialogElement.prototype.showModal = function showModal() { this.open = true; };

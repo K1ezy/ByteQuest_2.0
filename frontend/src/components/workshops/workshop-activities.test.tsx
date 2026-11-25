@@ -27,13 +27,13 @@ const quests = workshop.activity_ids.map((id) => ({
 beforeEach(() => vi.clearAllMocks());
 afterEach(cleanup);
 
-it("groups activity cards, has a workshop-specific exam link, and reorders with a button", async () => {
+it("groups activity cards and reorders with a button", async () => {
   mocks.api.mockImplementation(async (_path: string, init?: RequestInit) => init?.method === "PATCH" ? workshop : quests);
   render(<WorkshopActivities />);
   expect(await screen.findByRole("heading", { name: "Loops" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Repeat" })).toBeTruthy();
   fireEvent.click(screen.getByText("Add", { selector: "summary" }));
-  expect(screen.getByRole("link", { name: "Exam" }).getAttribute("href")).toBe("/instructor/exams?workshop=w");
+  expect(screen.queryByRole("link", { name: "Exam" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Move Iterate up" }));
   await vi.waitFor(() => expect(mocks.update).toHaveBeenCalledWith(workshop));
   expect(mocks.api).toHaveBeenCalledWith("/workshops/w/activities/b", { method: "PATCH", body: '{"position":0}' });

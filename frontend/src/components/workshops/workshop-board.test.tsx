@@ -40,14 +40,14 @@ it("posts and pins an announcement from the Board", async () => {
   expect(mocks.api).toHaveBeenCalledWith("/workshops/w/announcements/post", { method: "PATCH", body: '{"pinned":true}' });
 });
 
-it("keeps posts and assigned exam windows visible in an archived workshop", async () => {
+it("keeps posts and upcoming practice visible in an archived workshop", async () => {
   workshop.archived = true;
   mocks.api.mockImplementation(async (path: string) => path.endsWith("/upcoming")
-    ? [{ id: "exam", title: "Loops exam", kind: "exam", opens_at: "2026-11-21T01:00:00Z", closes_at: "2026-11-21T02:00:00Z" }]
+    ? [{ id: "challenge", title: "Loops practice", kind: "challenge", closes_at: "2026-11-21T02:00:00Z" }]
     : [item]);
   render(<WorkshopBoard />);
   expect(await screen.findByText(item.body)).toBeTruthy();
-  expect((await screen.findByRole("link", { name: "Loops exam" })).getAttribute("href")).toBe("/exams/exam");
+  expect((await screen.findByRole("link", { name: "Loops practice" })).getAttribute("href")).toBe("/workshops/w/activities");
   expect(screen.queryByRole("button", { name: "Post announcement" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
 });

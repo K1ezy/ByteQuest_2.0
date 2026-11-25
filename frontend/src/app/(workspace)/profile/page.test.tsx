@@ -260,7 +260,7 @@ it("cancels with Escape without saving and returns focus to Edit profile", async
   expect(mocks.updateMyProfile).not.toHaveBeenCalled();
 });
 
-it("uses the activity URL for progress details and preserves embargoed exam data", async () => {
+it("uses the activity URL for progress details and hides retired exams", async () => {
   mocks.searchParams = new URLSearchParams("tab=activity");
   render(<ProfilePage />);
 
@@ -272,7 +272,7 @@ it("uses the activity URL for progress details and preserves embargoed exam data
   expect(screen.getByText("1 of 2")).toBeTruthy();
   expect(screen.getByText("1 of 3")).toBeTruthy();
   expect(screen.getByText(/Try one before opening a hint/)).toBeTruthy();
-  expect(screen.getAllByText(/Awaiting release/).length).toBeGreaterThan(0);
+  expect(screen.queryByRole("heading", { name: "Exam history" })).toBeNull();
   expect(screen.getByRole("img", { name: "Quizzes: 0%" })).toBeTruthy();
 });
 
