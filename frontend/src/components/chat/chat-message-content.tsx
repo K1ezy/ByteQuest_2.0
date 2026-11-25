@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { ChatMessage } from "./chat-session";
 
 // An unclosed fence (a reply cut at its token limit) runs to the end of the message.
 const FENCE = /```[^\n`]*\n([\s\S]*?)(?:\n?```|$)/g;
@@ -57,4 +58,21 @@ export function ChatMessageContent({ content }: { content: string }) {
   return messageParts(content).map((part, index) => part.code
     ? <CodeBlock key={index} code={part.text} />
     : <span key={index} className="chat-text">{part.text}</span>);
+}
+
+export function ChatMessageBubble({ message, sourceLabel = "Course sources" }: { message: ChatMessage; sourceLabel?: string }) {
+  const cited = Boolean(message.sources?.length);
+  const pages = cited ? message.sources : message.consulted_sources;
+  return <article className={`chat-message chat-message-${message.role}`}>
+    <span className="chat-message-role">{message.role === "user" ? "You" : "Chat Assistant"}</span>
+    <div className="chat-bubble">
+      {message.role === "assistant" ? <ChatMessageContent content={message.content} /> : message.content}
+    </div>
+    {Boolean(pages?.length) && <details className="chat-sources" open>
+      <summary>{cited ? sourceLabel : "Pages consulted"}</summary>
+      <ul>{pages?.map((source) => (
+        <li key={`${source.document_title}:${source.page_number}`}>{source.document_title}, p. {source.page_number}</li>
+      ))}</ul>
+    </details>}
+  </article>;
 }

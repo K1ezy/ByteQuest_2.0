@@ -3,11 +3,17 @@ import type { ChatMode } from "./chat-history";
 
 export type ActivityContext = { id: string; kind: "arena" | "quiz" };
 export type ChatSource = { document_title: string; page_number: number };
+export type ChatReply = { reply: string; sources?: ChatSource[]; consulted_sources?: ChatSource[] };
+export type ChatPdfAttachment = {
+  filename: string;
+  excerpts: { page_number: number; text: string }[];
+};
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   sources?: ChatSource[];
+  consulted_sources?: ChatSource[];
 };
 
 export type ChatLimits = {
@@ -49,6 +55,58 @@ export function contextMessages(messages: ChatMessage[], limits: ChatLimits) {
   return selected.reverse();
 }
 
+const PDF_STOP_WORDS = new Set(
+  "about all also am an and another answer are as ask be briefly by can challenge chapter coding could did do document does example explain file for from generate get give have help how in into is it key lesson main make me more of on or page pages pdf please practice question questions quiz short show something summary summarize summarise tell than that the their then there these they this to use using was were what when where which why will with work works would you your".split(" "),
+);
+
+function pdfWords(text: string) {
+  return (text.toLowerCase().match(/[\p{L}_][\p{L}\p{N}_+#]+/gu) ?? [])
+    .filter((term) => !PDF_STOP_WORDS.has(term))
+    .map((term) => term.length > 4 ? term.replace(/(?:ing|ed|s|e)$/u, "") : term);
+}
+
+export function pdfEvidence(attachment: ChatPdfAttachment, messages: ReturnType<typeof contextMessages>): ChatPdfAttachment {
+  const question = messages.at(-1)?.content ?? "";
+  const followUp = /^(?:why|how so|what else|more)\W*$|\b(another|that|those|it|previous|again)\b/i.test(question);
+  const earlier = followUp ? messages.slice(0, -1).findLast((message) => message.role === "user") : undefined;
+  const pageReference = /\b(?:pages?\s+|p\.\s*)(\d{1,3})(?:\s*(?:[-–]|to)\s*(\d{1,3}))?/i;
+  const pageMatch = question.match(pageReference) ?? earlier?.content.match(pageReference);
+  if (pageMatch) {
+    const start = Number(pageMatch[1]);
+    const end = Number(pageMatch[2] ?? start);
+    return { filename: attachment.filename, excerpts: attachment.excerpts
+      .filter(({ page_number }) => page_number >= start && page_number <= end).slice(0, 4) };
+  }
+
+  const terms = new Set(pdfWords(question));
+  const earlierTerms = new Set(pdfWords(earlier?.content ?? ""));
+  const overview = (!terms.size && !earlierTerms.size) || /\b(?:whole (?:pdf|lesson|document)|all about|key ideas)\b/i.test(question);
+  if (overview) {
+    const pages = attachment.excerpts.filter((excerpt, i, excerpts) =>
+      excerpt.page_number !== excerpts[i - 1]?.page_number && !/^(?:acknowledg|copyright)/i.test(excerpt.text),
+    );
+    const count = Math.min(pages.length, 8);
+    return { filename: attachment.filename, excerpts: Array.from({ length: count }, (_, i) => {
+      const page = pages[Math.round(i * (pages.length - 1) / Math.max(1, count - 1))];
+      return { ...page, text: page.text.slice(0, 650) };
+    }) };
+  }
+
+  const relevant = attachment.excerpts.map((excerpt) => {
+    const counts = new Map<string, number>();
+    for (const term of pdfWords(excerpt.text)) counts.set(term, (counts.get(term) ?? 0) + 1);
+    let score = 0;
+    for (const term of terms) {
+      const matches = counts.get(term) ?? 0;
+      if (matches) score += 4 + Math.min(matches - 1, 2);
+    }
+    for (const term of earlierTerms) if (counts.has(term)) score += 1;
+    return { excerpt, score };
+  }).filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score || b.excerpt.page_number - a.excerpt.page_number);
+  return { filename: attachment.filename, excerpts: relevant.slice(0, 4).map(({ excerpt }) => excerpt) };
+}
+
 export type ChatSnapshot = {
   ownerId: string;
   messages: ChatMessage[];
@@ -65,11 +123,11 @@ function isChatMessage(value: unknown): value is ChatMessage {
   if (!value || typeof value !== "object") return false;
   const message = value as Partial<ChatMessage>;
   return typeof message.id === "string" && (message.role === "user" || message.role === "assistant")
-    && typeof message.content === "string" && (message.sources === undefined || (
-      Array.isArray(message.sources) && message.sources.every((source) => source
+    && typeof message.content === "string" && [message.sources, message.consulted_sources].every((pages) =>
+      pages === undefined || (Array.isArray(pages) && pages.every((source) => source
         && typeof source.document_title === "string" && Number.isInteger(source.page_number)
         && source.page_number > 0)
-    ));
+      ));
 }
 
 export function loadChatSnapshot(ownerId: string): ChatSnapshot | null {

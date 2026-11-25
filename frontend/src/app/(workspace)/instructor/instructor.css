@@ -329,6 +329,11 @@
 html[data-motion="reduced"] .ic-shell * { animation: none; transition: none; }
 
 .activity-health { overflow-wrap: anywhere; }
+
+/* Keep the gradebook readable when its columns outnumber the available space. */
+.gradebook-table th { min-inline-size: 10rem; white-space: normal; }
+.gradebook-table th:first-child { min-inline-size: 12rem; }
+.gradebook-table :is(th, td):last-child { min-inline-size: auto; white-space: nowrap; }
 .activity-health a { position: relative; z-index: 1; }
 @media (pointer: coarse) {
   .activity-health a { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; }

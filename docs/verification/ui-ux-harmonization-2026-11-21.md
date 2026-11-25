@@ -171,3 +171,15 @@ The Git checkpoint is on `codex/bytequest-2026-11-24-checkpoint` and starts from
 - [x] **Local ML rehearsal.** The seeded four-section scenario supplies consented synthetic attempt and hint data for the ten-input export and model-comparison rehearsal. [ML workflow](../../ml_pipeline/README.md)
 
 **Local evidence.** The checkpoint passed 294 backend tests, 244 frontend tests, four exam-recovery checks and TypeScript. Edge checked preview placement and activity links across phone and desktop widths before the latest visual redesign. Browser checks reproduced quiz overflow before the fix, then all six cases passed on development and isolated production builds. Edge also confirmed Account → Profile and the student sidebar at 320 and 1920 px. The [hosted pilot checklist](../KVM2_LIVE_PILOT_CHECKLIST.md) holds deployment acceptance work.
+
+## Implementation checklist checkpoint for 25 November 2026
+
+The updated `codex/bytequest-2026-11-24-checkpoint` follows the integrated `feat/pilot-readiness-quick-fixes` snapshot. The [system status log](../BYTEQUEST_SYSTEM_STATUS_2026-11-21.md) records local runtime, verification and open release checks.
+
+- [x] **Instructor workspace.** Activities reopens drafts in a shared editor with versioned autosave and a publication checklist. Ready PDFs in Materials can open Gemini authoring. Gradebook keeps question and student columns readable and scrolls within its panel.
+- [x] **Student navigation and Workshops.** Dashboard, Quest Map and Workshops are the student sidebar destinations. Progress, Mastery and Rankings are in Profile. Workshop cards show the owner's profile photo with an avatar fallback.
+- [x] **Workshop lesson materials.** Instructors can upload a PDF to a Workshop they manage. Members can download it and ask Chat Assistant for a quiz or coding challenge once it is indexed. The local database has migration `20261125100000`.
+- [x] **Independent study.** Students can attach a searchable PDF in the floating or full-page Chat Assistant. The attachment stays in tab memory, and the privacy notice describes when excerpts go to Gemini.
+- [x] **Retrieval and answer quality.** PDF chat selects excerpts for each question and honors page requests. Indexed lesson retrieval combines keyword and semantic matches. The reply distinguishes citations from pages consulted and follows requests for concise answers.
+
+All 306 backend tests, 18 chat component tests and six Edge checks for PDF chat and Workshop practice passed. The production build and changed-file lint passed. The Lesson 8 evaluation found supporting pages for all 10 focused questions. The updated stack was verified on the local preview. Hosted verification remains in the [pilot checklist](../KVM2_LIVE_PILOT_CHECKLIST.md).

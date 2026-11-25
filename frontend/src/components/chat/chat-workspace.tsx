@@ -211,7 +211,7 @@ function ChatSettings({ close }: { close: () => void }) {
     <div className="chat-settings-body">
       <section><h3>Saved history</h3><p>Your saved chats are available when you sign in. They expire 30 days after the last saved message.</p></section>
       <section><h3>Temporary Chat</h3><p>A temporary chat stays in its browser tab. Sign-out clears it from that tab.</p></section>
-      <section><h3>What Gemini receives</h3><p>Gemini receives your question, recent conversation context, and relevant course excerpts in both modes.</p>
+      <section><h3>What Gemini receives</h3><p>Gemini receives your question, recent conversation context, and excerpts from relevant course materials or an attached PDF. PDF chats clear when you refresh the tab.</p>
         <Link href="/privacy">Read the ByteQuest privacy notice</Link></section>
       {confirm ? <div className="chat-history-edit" role="group" aria-label="Confirm delete all saved chats">
         <p>Delete every saved chat in your account?</p>

@@ -53,6 +53,10 @@ POLICIES: dict[str, tuple[Rule, ...]] = {
         Rule("chat_generation", "global", "day", 1200),
     ),
     "chat_conversation": (Rule("chat_conversation", "account", "day", 45),),
+    "chat_pdf_upload": (
+        Rule("chat_pdf_upload", "account", "hour", 10),
+        Rule("chat_pdf_upload", "global", "hour", 300),
+    ),
     "instructor_ai": (
         Rule("instructor_ai", "account", "hour", 2),
         Rule("instructor_ai", "account", "day", 8),

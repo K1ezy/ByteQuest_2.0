@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import httpx
 import jwt
 import anyio
+import pymupdf
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -69,6 +70,7 @@ from app.services.gamification.rollout import (
 from app.services.judge0.client import judge0_client
 from app.services.ai_rag.llm import GeminiAPIError
 from app.services import exam_worker
+from app.services import materials as material_service
 from app.services import submission_worker
 
 pytestmark = pytest.mark.integration
@@ -1946,6 +1948,7 @@ def test_chat_status_checks_access_and_limits_without_using_gemini(flow, monkeyp
         "role": "student",
         "language": "python",
         "history_enabled": settings.chat_history_enabled,
+        "pdf_upload_max_bytes": chat_api.CHAT_PDF_MAX_BYTES,
         "limits": {
             "max_messages": settings.CHAT_MAX_MESSAGES,
             "max_message_chars": settings.CHAT_MAX_MESSAGE_CHARS,
@@ -1959,6 +1962,106 @@ def test_chat_status_checks_access_and_limits_without_using_gemini(flow, monkeyp
     assert client.get(path, headers=student).json()["status"] == "unavailable"
     monkeypatch.setattr(settings, "GEMINI_ENABLED", False)
     assert client.get(path, headers=student).json()["status"] == "disabled"
+
+
+def test_chat_pdf_attachments_support_workshop_members_without_saving_a_chat(flow, monkeypatch):
+    client, new_session, users = flow
+    student = _token(users["student"])
+    instructor = _token(users["instructor"])
+    attachment_path = "/api/v1/chat/attachments/pdf"
+    reply_path = "/api/v1/chat/messages"
+    status_path = "/api/v1/chat/status"
+    monkeypatch.setattr(settings, "GEMINI_ENABLED", True)
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "synthetic-key")
+
+    with pymupdf.open() as pdf:
+        pdf.new_page().insert_text((72, 72), "A loop repeats a block of instructions.")
+        pdf.new_page().insert_text((72, 72), "A counter records how many times a condition was met.")
+        for page in range(3, 30):
+            pdf.new_page().insert_text((72, 72), f"Searchable lesson example on page {page}.")
+        file = {"file": ("Loops lesson.pdf", pdf.tobytes(), "application/pdf")}
+
+    assert client.post(attachment_path, files=file).status_code == 401
+    assert client.post(attachment_path, files=file, headers=instructor).status_code == 403
+    assert client.post(attachment_path, files=file, headers=student).status_code == 403
+    assert client.get(status_path, headers=student).json()["pdf_upload_max_bytes"] is None
+
+    workshop = client.post("/api/v1/workshops", headers=instructor, json={"name": "Loops", "language": "python"}).json()
+    joined = client.post("/api/v1/workshops/join", headers=student, json={"code": workshop["join_code"]})
+    assert joined.status_code == 200
+    status = client.get(status_path, headers=student).json()
+    assert status["status"] == "enrollment_required"
+    assert status["pdf_upload_max_bytes"] == chat_api.CHAT_PDF_MAX_BYTES
+
+    unreadable = client.post(
+        attachment_path, headers=student, files={"file": ("unreadable.pdf", b"Bad PDF", "application/pdf")},
+    )
+    assert unreadable.status_code == 422
+    with pymupdf.open() as pdf:
+        pdf.new_page()
+        scanned = client.post(
+            attachment_path, headers=student, files={"file": ("image.pdf", pdf.tobytes(), "application/pdf")},
+        )
+    assert scanned.status_code == 422 and "no selectable text" in scanned.json()["detail"]
+    oversized = client.post(
+        attachment_path, headers=student,
+        files={"file": ("large.pdf", b"0" * (chat_api.CHAT_PDF_MAX_BYTES + 1), "application/pdf")},
+    )
+    assert oversized.status_code == 413
+
+    legacy = client.post(attachment_path, headers=student, files=file)
+    assert legacy.status_code == 200 and len(legacy.json()["excerpts"]) == 12
+    attached = client.post(f"{attachment_path}?all_pages=true", headers=student, files=file)
+    assert attached.status_code == 200, attached.text
+    assert attached.headers["Cache-Control"] == "private, no-store"
+    attachment = attached.json()
+    assert attachment["filename"] == "Loops lesson.pdf"
+    assert [excerpt["page_number"] for excerpt in attachment["excerpts"]] == list(range(1, 30))
+
+    def generate(messages, instruction, turn):
+        if messages[-1][1] == "Briefly explain page 27.":
+            assert turn.mode == "quick_fact"
+            return "Use the example from the lesson."
+        assert "Generate a practice quiz" in messages[-1][1]
+        assert "A loop repeats a block of instructions." in instruction
+        assert "give three multiple-choice questions" in instruction
+        assert "untrusted reference material" in instruction
+        return "What does a counter record? [source:2]"
+
+    monkeypatch.setattr(chat_api, "_generate_chat_reply", generate)
+    question = _chat_payload("Generate a practice quiz from this PDF.")
+    assert client.post(reply_path, headers=student, json=question).status_code == 403
+    pdf_question = {**question, "attachment": {**attachment, "excerpts": attachment["excerpts"][:2]}}
+    reply = client.post(reply_path, headers=student, json=pdf_question)
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["sources"] == [{"document_title": "Loops lesson.pdf", "page_number": 2}]
+    focused = client.post(reply_path, headers=student, json={
+        **_chat_payload("Briefly explain page 27."),
+        "attachment": {**attachment, "excerpts": [attachment["excerpts"][26]]},
+    })
+    assert focused.status_code == 200 and focused.json()["sources"] == []
+    assert focused.json()["consulted_sources"] == [{"document_title": "Loops lesson.pdf", "page_number": 27}]
+    missing = client.post(reply_path, headers=student, json={
+        **_chat_payload("What does this PDF say about database transactions?"),
+        "attachment": {**attachment, "excerpts": []},
+    })
+    assert missing.status_code == 200 and missing.json()["sources"] == []
+    assert "couldn't find relevant text" in missing.json()["reply"]
+    assert client.post(reply_path, headers=instructor, json=pdf_question).status_code == 403
+    assert client.post(reply_path, headers=student, json={**pdf_question, "activity_id": str(uuid.uuid4())}).status_code == 422
+    with new_session() as db:
+        assert not db.scalar(text("select 1 from bytequest_private.chat_conversations where owner_id = :student"),
+                             {"student": users["student"]})
+
+    attempt_id, _ = _started_quiz_exam(client, new_session, users)
+    assert client.get(status_path, headers=student).json()["pdf_upload_max_bytes"] is None
+    for response in (
+        client.post(attachment_path, headers=student, files=file),
+        client.post(reply_path, headers=student, json=pdf_question),
+    ):
+        assert response.status_code == 403 and response.json()["detail"]["code"] == "exam_in_progress"
+    _set_due_at(new_session, attempt_id, datetime.now(timezone.utc) - timedelta(minutes=5))
+    assert client.post(reply_path, headers=student, json=pdf_question).status_code == 200
 
 
 def test_saved_chat_is_private_searchable_and_idempotent(flow, monkeypatch):
@@ -2861,7 +2964,7 @@ def test_tutor_skips_pdf_search_for_python_overview_and_grounds_lesson_follow_up
         if turn.search_query is None:
             return python
         assert len(messages) in (3, 5)
-        return "A parameter gives a function input [source:1]. Invented page [source:3]."
+        return "A parameter gives a function input [source:1]. Invented page [source:99]."
 
     monkeypatch.setattr(chat_api, "_generate_chat_reply", reply)
     root = "/api/v1/chat/conversations"
@@ -2890,9 +2993,32 @@ def test_tutor_skips_pdf_search_for_python_overview_and_grounds_lesson_follow_up
         assert len(body["sources"]) == 1 and body["sources"][0]["page_number"] in (3, 5, 7)
         assert "[source:" not in body["reply"]
     for instruction in instructions[1:]:
-        assert instruction.count(", page ") == 2
+        assert 2 <= instruction.count(", page ") <= 6
         assert "[source:1] " in instruction and "[source:2] " in instruction
         assert "x" * 901 not in instruction
+
+
+def test_chat_can_cite_course_text_when_embedding_fails(flow, monkeypatch):
+    client, new_session, users = flow
+    course_id = _enroll_chat_students(new_session, users["student"])
+    with new_session() as db:
+        _course_pdf(db, users["instructor"], course_id, "Lists.pdf", "Use append to add an element to a list.", 16)
+        _course_pdf(db, users["instructor"], course_id, "Loops.pdf", "A while loop repeats its body.", 4)
+
+    def embedding(question, is_query=False):
+        raise GeminiAPIError("embeddings unavailable")
+
+    def reply(messages, instruction, turn):
+        assert "Use append to add an element to a list." in instruction
+        assert "A while loop repeats its body." not in instruction
+        return "The lesson uses append [source:1]."
+
+    monkeypatch.setattr(retrieval, "generate_embedding", embedding)
+    monkeypatch.setattr(chat_api, "_generate_chat_reply", reply)
+    response = client.post("/api/v1/chat/messages", headers=_token(users["student"]),
+                           json=_chat_payload("What does my lesson say about append?"))
+    assert response.status_code == 200, response.text
+    assert response.json()["sources"] == [{"document_title": "Lists.pdf", "page_number": 16}]
 
 
 @pytest.mark.parametrize("weak_match", [False, True], ids=["embedding-error", "weak-match"])
@@ -2900,7 +3026,7 @@ def test_chat_answers_without_sources_when_retrieval_fails(flow, monkeypatch, we
     client, new_session, users = flow
     course_id = _enroll_chat_students(new_session, users["student"])
     with new_session() as db:
-        _course_pdf(db, users["instructor"], course_id, "Python Reader.pdf", "Loops.", 2)
+        _course_pdf(db, users["instructor"], course_id, "Python Reader.pdf", "Lists hold values.", 2)
 
     def embedding(text, is_query=False):
         if weak_match:
@@ -3008,11 +3134,14 @@ def test_chat_deadline_covers_slow_retrieval_and_generation(flow, monkeypatch):
     payload = _chat_payload("How does the Python Reader.pdf explain loops?")
     try:
         started = perf_counter()
-        general = client.post("/api/v1/chat/messages", headers=student, json=payload)
+        grounded = client.post("/api/v1/chat/messages", headers=student, json=payload)
         assert perf_counter() - started < 2.0
-        assert general.status_code == 200, general.text
-        assert general.json() == {"reply": "Loops repeat steps.", "sources": []}
-        assert "COURSE MATERIAL PASSAGES" not in instructions[0] and "No course material matched" in instructions[0]
+        assert grounded.status_code == 200, grounded.text
+        assert grounded.json() == {
+            "reply": "Loops repeat steps (Python Reader.pdf, p. 2).",
+            "sources": [{"document_title": "Python Reader.pdf", "page_number": 2}],
+        }
+        assert "COURSE MATERIAL PASSAGES" in instructions[0]
 
         started = perf_counter()
         timed_out = client.post("/api/v1/chat/messages", headers=student, json=payload)
@@ -3207,12 +3336,205 @@ def test_progress_recap_compares_manila_periods_and_usual_pace(flow, monkeypatch
     assert client.get("/api/v1/quests/progress-recap", headers=_token(users["instructor"])).status_code == 403
 
 
+def test_workshop_lesson_upload_download_practice_and_revocation(flow, monkeypatch):
+    client, new_session, users = flow
+    owner = _token(users["instructor"])
+    student = _token(users["student"])
+    outsider = _token(users["other_track"])
+    workshops_path = "/api/v1/workshops"
+    faculty_path = "/api/v1/faculty/materials"
+    chat_path = "/api/v1/chat/messages"
+
+    with new_session() as db:
+        course = Course(code=uuid.uuid4().hex[:24], title="Workshop lesson course")
+        db.add(course)
+        db.flush()
+        course_id = course.id
+        db.add_all([
+            CourseMember(course_id=course_id, profile_id=users["instructor"], member_role="instructor"),
+            CourseMember(course_id=course_id, profile_id=users["other_track"], member_role="student"),
+        ])
+        db.get(Profile, users["other_track"]).enrolled_language = ProgrammingLang.python
+        db.commit()
+
+    def make_workshop(name, headers=owner):
+        response = client.post(workshops_path, headers=headers, json={"name": name, "language": "python"})
+        assert response.status_code == 201, response.text
+        return response.json()
+
+    lesson_workshop = make_workshop("Loops workshop")
+    other_workshop = make_workshop("Another workshop")
+    staff_workshop = make_workshop("Another instructor", _token(users["other_instructor"]))
+    workshop_path = f"{workshops_path}/{lesson_workshop['id']}"
+    for headers, workshop in [(student, lesson_workshop), (outsider, other_workshop)]:
+        assert client.post(f"{workshops_path}/join", headers=headers, json={"code": workshop["join_code"]}).status_code == 200
+
+    with pymupdf.open() as pdf:
+        pdf.new_page().insert_text((72, 72), "A loop repeats a block of statements.")
+        pdf.new_page().insert_text((72, 72), "The range function generates a sequence of integers.")
+        pdf_bytes = pdf.tobytes()
+    saved = {}
+
+    async def upload(path, content):
+        saved[path] = content
+
+    async def download(path):
+        return saved[path]
+
+    async def delete(path):
+        del saved[path]
+
+    async def embed(chunks):
+        return [[1.0] + [0.0] * 767 for _ in chunks]
+
+    monkeypatch.setattr(material_service.pdf_storage, "upload", upload)
+    monkeypatch.setattr(material_service.pdf_storage, "download", download)
+    monkeypatch.setattr(material_service.pdf_storage, "delete", delete)
+    monkeypatch.setattr(material_service, "embed_chunks_bounded", embed)
+    monkeypatch.setattr(settings, "GEMINI_ENABLED", True)
+
+    fields = {"course_id": str(course_id), "title": "Practice loops", "language_tag": "python"}
+    file = {"file": ("loops.pdf", pdf_bytes, "application/pdf")}
+    denied = client.post(faculty_path, headers=owner, data={**fields, "workshop_id": staff_workshop["id"]}, files=file)
+    assert denied.status_code == 404 and saved == {}
+    mismatched = client.post(
+        faculty_path, headers=owner, data={**fields, "language_tag": "java", "workshop_id": lesson_workshop["id"]}, files=file,
+    )
+    assert mismatched.status_code == 422 and saved == {}
+
+    def indexing_quota(*args):
+        raise HTTPException(429, {"message": "Indexing quota reached."})
+
+    monkeypatch.setattr(material_service, "reserve", indexing_quota)
+    result = client.post(faculty_path, headers=owner, data={**fields, "workshop_id": lesson_workshop["id"]}, files=file)
+    assert result.status_code == 201, result.text
+    material = result.json()["material"]
+    assert material["state"] == "failed" and material["can_retry"]
+    lesson_id = material["document_id"]
+    list_path = f"{workshop_path}/materials"
+    lesson_path = f"{list_path}/{lesson_id}"
+    download_path = f"{lesson_path}/download"
+    assert client.get(list_path, headers=student).json() == [{
+        "document_id": lesson_id, "title": "Practice loops", "description": None, "practice_status": "unavailable",
+    }]
+    downloaded = client.get(download_path, headers=student)
+    assert downloaded.content == pdf_bytes
+    assert downloaded.headers["cache-control"] == "private, no-store"
+    assert downloaded.headers["content-type"] == "application/pdf"
+    assert "loops.pdf" in downloaded.headers["content-disposition"]
+
+    def practice(headers=student, kind="quiz", *, document_id=lesson_id, workshop_id=lesson_workshop["id"]):
+        return client.post(chat_path, headers=headers, json={
+            **_chat_payload("Create practice from this lesson."),
+            "practice": {"workshop_id": workshop_id, "document_id": document_id, "kind": kind},
+        })
+
+    assert practice().status_code == 409
+    for path in (list_path, lesson_path, download_path):
+        assert client.get(path, headers=outsider).status_code == 404
+    assert client.get(download_path).status_code == 401
+    assert practice(outsider).status_code == 404
+    assert practice(outsider, workshop_id=other_workshop["id"]).status_code == 404
+    with new_session() as db:
+        assert retrieval.tutoring_document_ids(db, users["other_track"], "student", None) == []
+
+    retried = client.post(f"{faculty_path}/{lesson_id}/retry", headers=owner)
+    assert retried.status_code == 200 and retried.json()["material"]["state"] == "ready"
+    assert client.get(lesson_path, headers=student).json()["practice_status"] == "ready"
+
+    prompts = []
+
+    def provider(history, instruction, turn):
+        prompts.append(instruction)
+        if history[-1][1] == "Briefly explain page 2.":
+            assert turn.mode == "quick_fact"
+            assert ", page 1:" not in instruction and ", page 2:" in instruction
+            return "The range function generates integers [source:1]."
+        if "coding challenge in Python" in instruction:
+            return "Write a function that uses range."
+        return "Practice the range function. [source:2]"
+
+    monkeypatch.setattr(chat_api, "reserve", lambda *args: None)
+    monkeypatch.setattr(chat_api, "_generate_chat_reply", provider)
+    assert client.get("/api/v1/chat/status", headers=student).json()["status"] == "enrollment_required"
+    for kind, expected in (("quiz", "three multiple-choice questions"), ("challenge", "coding challenge in Python")):
+        reply = practice(kind=kind)
+        assert reply.status_code == 200, reply.text
+        body = reply.json()
+        assert [source["page_number"] for source in body["sources"]] == ([2] if kind == "quiz" else [])
+        if kind == "challenge":
+            assert [source["page_number"] for source in body["consulted_sources"]] == [1, 2]
+        assert expected in prompts[-1] and "A loop repeats a block of statements." in prompts[-1]
+
+    follow_up = client.post(chat_path, headers=student, json={
+        "messages": [
+            {"role": "user", "content": "Create a quiz."},
+            {"role": "assistant", "content": "1. Which function produces a sequence of integers? A. range B. print"},
+            {"role": "user", "content": "1. A"},
+        ],
+        "practice": {"workshop_id": lesson_workshop["id"], "document_id": lesson_id, "kind": "quiz"},
+    })
+    assert follow_up.status_code == 200 and "questions the student has attempted" in prompts[-1]
+
+    page_question = client.post(chat_path, headers=student, json={
+        **_chat_payload("Briefly explain page 2."),
+        "practice": {"workshop_id": lesson_workshop["id"], "document_id": lesson_id, "kind": "quiz"},
+    })
+    assert page_question.status_code == 200
+    assert page_question.json()["sources"] == [{"document_title": "Practice loops", "page_number": 2}]
+
+    attempt_id, _ = _started_quiz_exam(client, new_session, users)
+    paused = practice()
+    assert paused.status_code == 403 and paused.json()["detail"]["code"] == "exam_in_progress"
+    assert len(prompts) == 4
+    _set_due_at(new_session, attempt_id, datetime.now(timezone.utc) - timedelta(minutes=5))
+
+    monkeypatch.setattr(material_service, "reserve", lambda *args: None)
+    moved = client.post(
+        faculty_path, headers=owner,
+        data={**fields, "replaces_document_id": lesson_id, "workshop_id": other_workshop["id"]}, files=file,
+    )
+    assert moved.status_code == 409
+    replacement = client.post(
+        f"{faculty_path}/{lesson_id}/versions", headers=owner, data=fields, files=file,
+    )
+    assert replacement.status_code == 201, replacement.text
+    revised = replacement.json()["material"]
+    assert revised["workshop_id"] == lesson_workshop["id"]
+    assert client.get(download_path, headers=student).status_code == 404
+    assert client.get(list_path, headers=student).json()[0]["document_id"] == revised["document_id"]
+
+    version_path = f"{faculty_path}/{revised['document_id']}"
+    assert client.post(f"{version_path}/archive", headers=owner).status_code == 200
+    assert client.get(list_path, headers=student).json() == []
+    assert practice(document_id=revised["document_id"]).status_code == 404
+    assert client.post(f"{version_path}/restore", headers=owner).status_code == 200
+
+    def remove_during_reply(*args):
+        with new_session() as db:
+            db.execute(text("delete from workshop_members where workshop_id = :workshop and profile_id = :student"),
+                       {"workshop": lesson_workshop["id"], "student": users["student"]})
+            db.commit()
+        return "This answer should never be returned. [source:1]"
+
+    monkeypatch.setattr(chat_api, "_generate_chat_reply", remove_during_reply)
+    revoked = practice(document_id=revised["document_id"])
+    assert revoked.status_code == 404 and "should never be returned" not in revoked.text
+    assert client.get(list_path, headers=student).status_code == 404
+    assert client.get(f"{list_path}/{revised['document_id']}/download", headers=student).status_code == 404
+
+
 def test_workshop_details_membership_and_archive(flow):
     client, new_session, users = flow
     owner, student, staff, admin = (
         _token(users[role]) for role in ("instructor", "student", "other_instructor", "admin")
     )
     base = "/api/v1/workshops"
+    avatar = "https://example.test/workshop-owner.png?v=123"
+    with new_session() as db:
+        db.get(Profile, users["instructor"]).avatar_url = avatar
+        db.get(Profile, users["student"]).avatar_url = "https://example.test/workshop-learner.png"
+        db.commit()
     created = client.post(base, headers=owner, json={"name": "Python practice", "language": "python"})
     assert created.status_code == 201, created.text
     workshop = created.json()
@@ -3220,6 +3542,7 @@ def test_workshop_details_membership_and_archive(flow):
     code = workshop["join_code"]
     assert workshop["owned_by_me"] and workshop["is_owner"]
     assert workshop["owner_name"] and workshop["joining_enabled"] and not workshop["archived"]
+    assert workshop["owner_avatar_url"] == avatar
     assert client.get(path).status_code == 401
     for headers in (staff, student):
         assert client.get(path, headers=headers).status_code == 404
@@ -3242,14 +3565,19 @@ def test_workshop_details_membership_and_archive(flow):
     join = client.post(f"{base}/join", headers=student, json={"code": code[:4].lower() + "-" + code[4:].lower()})
     assert join.status_code == 200
     assert join.json()["join_code"] is None
+    assert join.json()["owner_avatar_url"] == avatar
+    listed = client.get(base, headers=student).json()
+    assert next(item for item in listed if item["id"] == workshop["id"])["owner_avatar_url"] == avatar
     assert client.get(path, headers=student).status_code == 200
     assert client.patch(path, headers=student, json={"name": "Member edit"}).status_code == 404
     with new_session() as db:
+        db.get(Profile, users["instructor"]).avatar_url = None
         learner = db.get(Profile, users["student"])
         learner.display_name = "Workshop learner"
         learner.school_id = "26-98765"
         learner.block_section = "A"
         db.commit()
+    assert client.get(path, headers=student).json()["owner_avatar_url"] is None
     staff_student = client.get(f"{path}/people", headers=owner).json()["students"][0]
     assert staff_student["id"] == str(users["student"])
     assert staff_student["school_id"] == "26-98765"

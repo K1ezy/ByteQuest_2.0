@@ -238,6 +238,7 @@ export interface MaterialSummary {
   indexed_at: string | null;
   created_at: string | null;
   course_id?: string | null;
+  workshop_id?: string | null;
   draft_count: number;
   can_retry: boolean;
   versions?: { document_id: string; version_number: number; state: string; created_at: string | null; is_current: boolean }[];

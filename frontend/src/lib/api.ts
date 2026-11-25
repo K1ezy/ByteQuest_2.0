@@ -42,6 +42,18 @@ function formatApiErrorDetail(detail: unknown): string | null {
 }
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return (await authenticatedResponse(path, init)).json().catch(() => null) as Promise<T>;
+}
+
+export async function downloadApiPdf(path: string): Promise<Blob> {
+  const response = await authenticatedResponse(path, { headers: { Accept: "application/pdf" } });
+  if (response.headers.get("Content-Type")?.split(";")[0] !== "application/pdf") {
+    throw new Error("The lesson PDF could not be downloaded.");
+  }
+  return response.blob();
+}
+
+async function authenticatedResponse(path: string, init: RequestInit): Promise<Response> {
   if (!apiBaseUrl) throw new Error("Set NEXT_PUBLIC_API_URL in frontend/.env.local.");
 
   // Imported on demand: a static import pulls @supabase/supabase-js into every route's shared bundle.
@@ -74,8 +86,8 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     );
   }
 
-  const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
     const payload = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : null;
     const detail = payload && "detail" in payload ? payload.detail : null;
     let detailMsg: string | null = null;
@@ -109,7 +121,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
       : `Request failed (${response.status}).`);
     throw new ApiError(message, response.status, errorCode, body, retryAfterSeconds);
   }
-  return body as T;
+  return response;
 }
 
 export async function checkUsernameAvailability(username: string): Promise<boolean> {

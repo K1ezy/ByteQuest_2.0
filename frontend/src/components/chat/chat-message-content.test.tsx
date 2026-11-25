@@ -4,6 +4,7 @@ import { apiRequest } from "@/lib/api";
 import { ChatConversation } from "./chat-conversation";
 import { messageParts } from "./chat-message-content";
 import { ChatProvider } from "./chat-provider";
+import { CHAT_STORAGE_KEY } from "./chat-session";
 
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/api")>(),
@@ -71,4 +72,51 @@ it.each(["compact", "page"] as const)("renders copyable code and literal HTML in
   writeText.mockRejectedValueOnce(new Error("Denied"));
   await act(async () => fireEvent.click(view.getByRole("button", { name: "Copied" })));
   expect(view.getByText("Couldn't copy the code.")).toBeTruthy();
+});
+
+it("keeps an uploaded lesson temporary when the floating chat expands", async () => {
+  const attachment = { filename: "Workshop lesson.pdf", excerpts: [
+    { page_number: 3, text: "A counter starts at zero." },
+    { page_number: 27, text: "Split the address at @ to get its email domain." },
+  ] };
+  vi.mocked(apiRequest).mockImplementation(async (path: string) => {
+    if (path === "/chat/status") return {
+      status: "enrollment_required", role: "student", language: "python", history_enabled: true,
+      pdf_upload_max_bytes: 10 * 1024 ** 2,
+      limits: { max_messages: 12, max_message_chars: 4_000, max_total_chars: 16_000 },
+    } as never;
+    if (path === "/chat/attachments/pdf?all_pages=true") return attachment as never;
+    if (path === "/chat/messages") return { reply: "Try tracing the counter.", sources: [{ document_title: attachment.filename, page_number: 3 }] } as never;
+    throw new Error(`Unexpected request ${path}`);
+  });
+
+  const view = render(<ChatProvider><ChatConversation variant="compact" /></ChatProvider>);
+  await waitFor(() => {
+    window.dispatchEvent(new Event("online"));
+    expect(view.getByRole("button", { name: "Upload PDF" })).toBeTruthy();
+  });
+  const file = new File(["%PDF"], attachment.filename, { type: "application/pdf" });
+  fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+  await view.findByText(attachment.filename);
+  expect(vi.mocked(apiRequest).mock.calls.find(([path]) => path === "/chat/attachments/pdf?all_pages=true")?.[1]?.body).toBeInstanceOf(FormData);
+
+  view.rerender(<ChatProvider><ChatConversation variant="page" /></ChatProvider>);
+  expect(view.getByText("Temporary PDF chat")).toBeTruthy();
+  expect(view.getByText(attachment.filename)).toBeTruthy();
+  fireEvent.change(view.getByRole("textbox", { name: "Your question" }), { target: { value: "Briefly explain page 27." } });
+  fireEvent.click(view.getByRole("button", { name: "Send" }));
+  await view.findByText("Try tracing the counter.");
+  const sent = vi.mocked(apiRequest).mock.calls.find(([path]) => path === "/chat/messages");
+  expect(JSON.parse(String(sent?.[1]?.body))).toEqual({
+    activity_id: null,
+    attachment: { filename: attachment.filename, excerpts: [attachment.excerpts[1]] },
+    messages: [{ role: "user", content: "Briefly explain page 27." }],
+  });
+  expect(vi.mocked(apiRequest).mock.calls.some(([path]) => path.includes("/conversations"))).toBe(false);
+  expect(sessionStorage.getItem(CHAT_STORAGE_KEY)).toBeNull();
+
+  fireEvent.click(view.getByRole("button", { name: "Remove PDF" }));
+  fireEvent.click(view.getByRole("button", { name: "End PDF chat" }));
+  expect(view.queryByText("Try tracing the counter.")).toBeNull();
+  expect(view.getByRole("button", { name: "Upload PDF" })).toBeTruthy();
 });

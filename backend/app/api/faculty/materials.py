@@ -82,6 +82,7 @@ async def create_material(
     description: Optional[str] = Form(None, max_length=4_000),
     topic_concept: Optional[str] = Form(None, max_length=100),
     replaces_document_id: Optional[uuid.UUID] = Form(None),
+    workshop_id: Optional[uuid.UUID] = Form(None),
     file: UploadFile = File(...),
     user: Profile = Depends(faculty_user),
     db: Session = Depends(get_db),
@@ -97,6 +98,7 @@ async def create_material(
         language_tag=language_tag,
         topic_concept=topic_concept,
         replaces_document_id=replaces_document_id,
+        workshop_id=workshop_id,
     )
     serialized = serialize_material(document, draft_count=material_draft_count(db, document.id))
     return {
@@ -176,6 +178,8 @@ def update_material(
     db: Session = Depends(get_db),
 ):
     document, course = _material_for_user(db, user, document_id)
+    if document.workshop_id is not None and payload.language_tag != document.language_tag:
+        raise HTTPException(422, "A workshop lesson keeps its programming language.")
     document.title = payload.title.strip()
     document.description = payload.description.strip() if payload.description and payload.description.strip() else None
     document.language_tag = payload.language_tag

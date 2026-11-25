@@ -86,6 +86,7 @@
 .workshop-filter [aria-pressed="true"] { color: var(--purple-dark); background: var(--purple-soft); border-color: var(--line-strong); }
 .workshop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 16.5rem), 1fr)); gap: 1rem; }
 .workshop-card {
+  --workshop-avatar-size: clamp(2.75rem, 6vw, 3.75rem);
   display: grid;
   grid-template-rows: auto 1fr;
   overflow: hidden;
@@ -96,7 +97,30 @@
 }
 .workshop-card:hover { border-color: var(--green); }
 .workshop-card:hover h3 { text-decoration: underline; text-underline-offset: .15em; }
-.workshop-card-copy { display: grid; align-content: start; gap: .4rem; padding: 1rem; }
+.workshop-card-cover { position: relative; min-width: 0; }
+.workshop-card-avatar {
+  position: absolute;
+  inset-inline-end: 1rem;
+  inset-block-end: 0;
+  z-index: 2;
+  display: flex;
+  transform: translateY(50%);
+  pointer-events: none;
+}
+.workshop-card-avatar .user-avatar {
+  width: var(--workshop-avatar-size);
+  height: var(--workshop-avatar-size);
+  border: 3px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.workshop-card-copy {
+  display: grid;
+  align-content: start;
+  gap: .4rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: calc(var(--workshop-avatar-size) / 2 + .5rem) 1rem 1rem;
+}
 .workshop-card-copy h3 { font-size: var(--text-lg); }
 .workshop-card-copy p { color: var(--muted); font-size: var(--text-sm); }
 .workshop-card-copy p:last-child { border-top: 1px solid var(--line); padding-top: .55rem; margin-top: .3rem; }
@@ -142,6 +166,11 @@
   color: var(--ink);
 }
 .workshop-panel { display: grid; gap: .75rem; align-content: start; }
+.workshop-materials :is(h2, h3, p) { margin: 0; overflow-wrap: anywhere; }
+.workshop-materials > ul { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
+.workshop-lesson { display: grid; gap: .625rem; min-width: 0; padding: .875rem; border: 1px solid var(--line); border-radius: .75rem; }
+.workshop-lesson-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.workshop-lesson-actions .button { min-height: 44px; max-width: 100%; white-space: normal; }
 .workshop-panel > .button { justify-self: start; }
 .workshop-dialog { width: min(34rem, calc(100% - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; overflow-wrap: anywhere; margin: auto; }
 .workshop-dialog::backdrop { background: rgb(14 23 23 / 58%); }

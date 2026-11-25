@@ -4,6 +4,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -20,6 +21,7 @@ from app.models.entities import (
     Exam,
     ExamAssignment,
     ExamAttempt,
+    InstructionalDocument,
     LearningActivity,
     Profile,
     ProgrammingLang,
@@ -36,6 +38,8 @@ from app.services.attempt_visibility import (
 from app.services.course_access import student_exam_course_clause
 from app.services.gamification.mastery_map import first_visible_completions
 from app.services.gamification.solve_quality import best_challenge_stars
+from app.services.materials import get_workshop_lesson, workshop_lessons
+from app.services.storage.supabase_storage import StorageError, pdf_storage
 
 router = APIRouter(prefix="/api/v1/workshops", tags=["Workshops"])
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -132,6 +136,7 @@ class WorkshopView(WorkshopClassroomDetails):
     joining_enabled: bool
     archived: bool
     owner_name: str
+    owner_avatar_url: str | None = None
     member_count: int
     activity_ids: list[uuid.UUID]
     activities: list[WorkshopActivityView]
@@ -194,6 +199,21 @@ class WorkshopProgressRow(BaseModel):
 class WorkshopProgress(BaseModel):
     activities: list[WorkshopActivityOption]
     students: list[WorkshopProgressRow]
+
+
+class WorkshopLesson(BaseModel):
+    document_id: uuid.UUID
+    title: str
+    description: str | None
+    practice_status: Literal["ready", "indexing", "unavailable"]
+
+
+def _lesson_view(lesson: InstructionalDocument) -> WorkshopLesson:
+    practice_status = {"completed": "ready", "processing": "indexing"}.get(lesson.processing_status, "unavailable")
+    return WorkshopLesson(
+        document_id=lesson.id, title=lesson.title, description=lesson.description,
+        practice_status=practice_status,
+    )
 
 
 def can_manage(workshop: Workshop, user: Profile) -> bool:
@@ -274,8 +294,12 @@ def _workshop_views(db: Session, rows: list[Workshop], user: Profile) -> list[Wo
     ids = [workshop.id for workshop in rows]
     if not ids:
         return []
-    owners = dict(db.query(Profile.id, func.coalesce(func.nullif(Profile.display_name, ""), Profile.username))
-                  .filter(Profile.id.in_({workshop.created_by for workshop in rows})).all())
+    owners = {
+        owner.id: owner
+        for owner in db.query(
+            Profile.id, func.coalesce(func.nullif(Profile.display_name, ""), Profile.username).label("name"), Profile.avatar_url,
+        ).filter(Profile.id.in_({workshop.created_by for workshop in rows}))
+    }
     counts = dict(db.query(WorkshopMember.workshop_id, func.count(WorkshopMember.profile_id))
                   .filter(WorkshopMember.workshop_id.in_(ids))
                   .group_by(WorkshopMember.workshop_id).all())
@@ -308,7 +332,8 @@ def _workshop_views(db: Session, rows: list[Workshop], user: Profile) -> list[Wo
             join_code=workshop.join_code if can_manage(workshop, user) else None,
             joining_enabled=workshop.joining_enabled,
             archived=workshop.archived_at is not None,
-            owner_name=owners[workshop.created_by],
+            owner_name=owners[workshop.created_by].name,
+            owner_avatar_url=owners[workshop.created_by].avatar_url,
             member_count=counts.get(workshop.id, 0),
             activity_ids=[link.activity_id for link in activities[workshop.id]],
             activities=activities[workshop.id],
@@ -592,6 +617,49 @@ def leave_workshop(
         raise HTTPException(403, "Only students can leave a workshop.")
     workshop = get_workshop(db, workshop_id, current_user, lock=True)
     return _remove_student(db, workshop, current_user.id)
+
+
+@router.get("/{workshop_id}/materials", response_model=list[WorkshopLesson])
+def list_workshop_materials(
+    workshop_id: uuid.UUID, response: Response,
+    user: Profile = Depends(get_current_user), db: Session = Depends(get_db),
+) -> list[WorkshopLesson]:
+    get_workshop(db, workshop_id, user)
+    response.headers["Cache-Control"] = "private, no-store"
+    rows = workshop_lessons(db, workshop_id, user).order_by(
+        InstructionalDocument.created_at.desc(), InstructionalDocument.id.desc(),
+    )
+    return [_lesson_view(row) for row in rows]
+
+
+@router.get("/{workshop_id}/materials/{document_id}", response_model=WorkshopLesson)
+def read_workshop_material(
+    workshop_id: uuid.UUID, document_id: uuid.UUID, response: Response,
+    user: Profile = Depends(get_current_user), db: Session = Depends(get_db),
+) -> WorkshopLesson:
+    response.headers["Cache-Control"] = "private, no-store"
+    return _lesson_view(get_workshop_lesson(db, workshop_id, document_id, user))
+
+
+@router.get("/{workshop_id}/materials/{document_id}/download", response_class=Response)
+async def download_workshop_material(
+    workshop_id: uuid.UUID, document_id: uuid.UUID,
+    user: Profile = Depends(get_current_user), db: Session = Depends(get_db),
+) -> Response:
+    lesson = get_workshop_lesson(db, workshop_id, document_id, user)
+    storage_path = lesson.storage_path
+    db.rollback()
+    try:
+        content = await pdf_storage.download(storage_path)
+    except StorageError:
+        raise HTTPException(502, "The PDF is temporarily unavailable. Try again.") from None
+    lesson = get_workshop_lesson(db, workshop_id, document_id, user)
+    filename = quote(lesson.uploaded_original_name or "lesson.pdf", safe="")
+    return Response(content, media_type="application/pdf", headers={
+        "Cache-Control": "private, no-store",
+        "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+        "X-Content-Type-Options": "nosniff",
+    })
 
 
 @router.get("/{workshop_id}/activities", response_model=list[WorkshopQuest])

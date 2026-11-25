@@ -19,6 +19,7 @@ export function useWorkshop() {
 const pages = [
   { label: "Board", suffix: "" },
   { label: "Activities", suffix: "/activities" },
+  { label: "Materials", suffix: "/materials" },
   { label: "People", suffix: "/people" },
   { label: "Progress", suffix: "/progress", management: true },
   { label: "Settings", suffix: "/settings", management: true },

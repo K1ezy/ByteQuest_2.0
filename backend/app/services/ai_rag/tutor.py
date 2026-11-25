@@ -28,7 +28,7 @@ _DEBUG_REQUEST = re.compile(
 )
 _ERROR_TRACE = re.compile(r"\b(?:traceback\b|(?:\w*error|\w*exception)\s*:)", re.IGNORECASE)
 _CODE = re.compile(r"```|\n\s*\w+\s*=|\b(?:print|input|int|range)\s*\(")
-_BRIEF = re.compile(r"\b(?:briefly|in one sentence|in a sentence|just the (?:answer|output))\b", re.IGNORECASE)
+_BRIEF = re.compile(r"\b(?:briefly|short and concise|keep it (?:short|concise)|in one sentence|in a sentence|just the (?:answer|output))\b", re.IGNORECASE)
 _EXPLAIN = re.compile(r"\b(?:explain|why|how|example|compare|difference|walk me through|teach|show me)\b", re.IGNORECASE)
 _FACT = re.compile(
     r"^(?:(?:is|are|do|does|can|will|has|have)\b|which\b|"

@@ -11,7 +11,7 @@ import logging
 import re
 import uuid
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.models.entities import DocumentChunk, InstructionalDocument, LearningActivity, PlatformSetting
@@ -33,6 +33,7 @@ _QUESTION_WORDS = set(
     ("about according can could does explain from give how lesson please python should that the "
      "their them this what when where which who why with would you your").split()
 )
+_PAGE_REFERENCE = re.compile(r"\b(?:pages?\s+|p\.\s*)(\d{1,3})(?:\s*(?:[-–]|to)\s*(\d{1,3}))?", re.IGNORECASE)
 
 _NEAREST = text(
     """
@@ -95,6 +96,30 @@ def leading_chunks(db: Session, document_id: uuid.UUID, limit: int) -> list[dict
     ]
 
 
+def requested_pages(question: str) -> tuple[int, int] | None:
+    match = _PAGE_REFERENCE.search(question)
+    return (int(match[1]), int(match[2] or match[1])) if match else None
+
+
+def lesson_practice_passages(
+    db: Session, document: InstructionalDocument, pages: tuple[int, int] | None = None,
+) -> list[dict]:
+    query = db.query(DocumentChunk.page_number, func.left(DocumentChunk.content_text, PASSAGE_CHARS)).filter(
+        DocumentChunk.document_id == document.id,
+    ).order_by(DocumentChunk.chunk_index)
+    if pages is None:
+        count = min(document.total_chunks, 6)
+        indices = [round(i * (document.total_chunks - 1) / max(1, count - 1)) for i in range(count)]
+        query = query.filter(DocumentChunk.chunk_index.in_(indices))
+    else:
+        query = query.filter(DocumentChunk.page_number.between(*pages)).limit(4)
+    return [
+        {"document_title": document.title, "page_number": page_number, "excerpt": excerpt}
+        for page_number, excerpt in query
+        if excerpt.strip()
+    ]
+
+
 def _searchable(query):
     return query.filter(
         InstructionalDocument.is_current.is_(True),
@@ -111,7 +136,8 @@ def activity_document_ids(db: Session, activity: LearningActivity) -> list[uuid.
     if source is None:
         return []
     current = _searchable(db.query(InstructionalDocument.id)).filter(
-        InstructionalDocument.document_family_id == source.document_family_id
+        InstructionalDocument.document_family_id == source.document_family_id,
+        InstructionalDocument.workshop_id.is_(None),
     ).first()
     return [current[0]] if current is not None else []
 
@@ -121,7 +147,8 @@ def course_document_ids(db: Session, course_ids: list[uuid.UUID]) -> list[uuid.U
     if not course_ids:
         return []
     rows = _searchable(db.query(InstructionalDocument.id)).filter(
-        InstructionalDocument.course_id.in_(course_ids)
+        InstructionalDocument.course_id.in_(course_ids),
+        InstructionalDocument.workshop_id.is_(None),
     ).all()
     return [row[0] for row in rows]
 
@@ -158,6 +185,30 @@ def _chat_excerpt(content: str, question: str) -> str:
     return max(
         windows, key=lambda window: (len(terms.intersection(_WORDS.findall(window.casefold()))), len(window)),
     ).strip()
+
+
+def keyword_chat_passages(db: Session, document_ids: list[uuid.UUID], question: str) -> list[dict]:
+    terms = sorted(set(_WORDS.findall(question[:2_000].casefold())) - _QUESTION_WORDS - {
+        "according", "document", "lesson", "reader", "say",
+    })
+    if not document_ids or not terms:
+        return []
+    config = text("'simple'::regconfig")
+    words = func.to_tsvector(config, DocumentChunk.content_text)
+    match = func.to_tsquery(config, " | ".join(terms[:20]))
+    rows = (
+        db.query(DocumentChunk.id, DocumentChunk.document_id, InstructionalDocument.title,
+                 DocumentChunk.page_number, DocumentChunk.content_text)
+        .join(InstructionalDocument, InstructionalDocument.id == DocumentChunk.document_id)
+        .filter(DocumentChunk.document_id.in_(document_ids), words.bool_op("@@")(match))
+        .order_by(func.ts_rank_cd(words, match).desc(), DocumentChunk.chunk_index, DocumentChunk.id)
+        .limit(4)
+    )
+    return [
+        {"chunk_id": str(chunk_id), "document_id": str(document_id), "document_title": title,
+         "page_number": page, "excerpt": _chat_excerpt(content, question)}
+        for chunk_id, document_id, title, page, content in rows
+    ]
 
 
 def tutoring_passages(

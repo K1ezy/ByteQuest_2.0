@@ -6,12 +6,14 @@ const instructorId = "f0000000-0000-4000-8000-000000000001";
 const defaultCourse = { id: "f0000000-0000-4000-8000-000000000002", title: "Intro to Java", code: "JAVA" };
 const course = { id: "f0000000-0000-4000-8000-000000000003", title: "Python Foundations", code: "PY" };
 const documentId = "f0000000-0000-4000-8000-000000000004";
+const workshopId = "f0000000-0000-4000-8000-000000000020";
 const draftId = "f0000000-0000-4000-8000-000000000005";
 const manualId = "f0000000-0000-4000-8000-000000000006";
 const scope = `course=${course.id}`;
 const timestamp = "2026-11-25T08:00:00Z";
 const identifier = "reusable_nested_function_".repeat(7);
 const title = `Defining and calling functions in a program with input and output ${identifier}`;
+const workshopName = `Afternoon programming workshop ${identifier}`;
 const instructions = "Use the examples from the reading to choose the correct answer about defining a function.";
 
 const material: MaterialSummary = {
@@ -91,6 +93,10 @@ test.beforeEach(async ({ page }, info) => {
       id: instructorId, role: "instructor", username: "layout-instructor", enrolled_language: "python",
     } });
     if (path === "/faculty/courses") return route.fulfill({ json: { courses: [defaultCourse, course], default_course_id: defaultCourse.id } });
+    if (path === "/workshops") return route.fulfill({ json: [
+      { id: workshopId, name: workshopName, owned_by_me: true, archived: false, language: "python" },
+      { id: "foreign-workshop", name: "Another instructor's workshop", owned_by_me: false, archived: false, language: "python" },
+    ] });
     if (path === "/faculty/dashboard") return route.fulfill({ json: dashboard });
     if (path === "/faculty/gamification-insights") return route.fulfill({ json: { topics: [] } });
     if (path === "/faculty/activities") {
@@ -158,6 +164,11 @@ test.beforeEach(async ({ page }, info) => {
       expect(request.method() === "POST" ? request.postData() : searchParams.get("course_id")).toContain(course.id);
       if (request.method() === "POST") {
         source = request.postData()?.includes("scan.pdf") ? unreadable : processing;
+        if (request.postData()?.includes("workshop-lesson.pdf")) {
+          expect(request.postData()).toContain('name="workshop_id"');
+          expect(request.postData()).toContain(workshopId);
+          source = { ...material, workshop_id: workshopId };
+        }
         return route.fulfill({ status: 201, json: { material: source, message: "PDF saved." } });
       }
       const items = source ? [source] : [];
@@ -187,6 +198,20 @@ test.beforeEach(async ({ page }, info) => {
     source = material;
     return route.fulfill({ status: 204 });
   });
+});
+
+test("instructors can send a PDF to a managed workshop", async ({ page }) => {
+  await page.goto(`/instructor/materials?${scope}&workshop=${workshopId}`);
+  const form = page.getByRole("region", { name: "Upload a course PDF" });
+  const destination = form.getByLabel("Destination");
+  await expect(destination).toHaveValue(workshopId);
+  await expect(destination.locator('option[value="foreign-workshop"]')).toHaveCount(0);
+  await expect(form.getByText(`Students in ${workshopName}`, { exact: false })).toBeVisible();
+  await expectContentToFit(page, form, ["#material-workshop", "#material-workshop-help", ".ws-inline-actions button"]);
+  await form.getByLabel("Title").fill("Functions lesson");
+  await form.getByLabel("PDF file").setInputFiles({ name: "workshop-lesson.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4") });
+  await form.getByRole("button", { name: "Upload to workshop" }).click();
+  await expect(page.getByText(`PDF shared with ${workshopName}. Practice is ready.`, { exact: true })).toBeVisible();
 });
 
 for (const kind of ["quiz", "challenge"] as const) {

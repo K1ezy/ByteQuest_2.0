@@ -174,6 +174,7 @@ class InstructionalDocument(Base):
     processing_status = Column(String(20), default="processing", nullable=False)
     total_chunks = Column(Integer, default=0, nullable=False)
     course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True)
+    workshop_id = Column(UUID(as_uuid=True), ForeignKey("workshops.id", ondelete="RESTRICT"), nullable=True)
     processing_error = Column(Text, nullable=True)
     uploaded_original_name = Column(String(255), nullable=True)
     indexed_at = Column(DateTime(timezone=True), nullable=True)

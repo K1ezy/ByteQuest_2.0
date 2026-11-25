@@ -2795,6 +2795,18 @@ html[data-contrast="high"] .exam-preview-card.is-selected-card {
 }
 
 .chat-transcript { display: flex; flex-direction: column; gap: 1rem; }
+.chat-practice-card .chat-page-header { flex-wrap: wrap; }
+.chat-practice-card .chat-page-header > * { min-width: 0; }
+.chat-practice-card .chat-availability p,
+.chat-lesson-practice :is(h2, p, label, .chat-sources, .chat-suggestions button) { overflow-wrap: anywhere; }
+.chat-practice-intro { display: grid; gap: .5rem; }
+.chat-practice-intro h2 { font-size: 1.25rem; }
+.chat-lesson-practice :is(h2, p) { margin: 0; }
+.chat-lesson-practice .chat-suggestions button { min-height: 44px; max-width: 100%; white-space: normal; }
+.chat-lesson-practice .chat-dock > p { margin-bottom: .5rem; }
+.chat-composer.chat-practice-form { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.chat-practice-form .chat-input { width: 100%; }
+.chat-practice-form .chat-suggestions { justify-content: flex-end; }
 .chat-transcript:focus-visible { outline: 2px solid var(--control-focus); outline-offset: -3px; }
 .chat-availability { display: grid; align-content: center; justify-items: start; gap: .75rem; padding: clamp(1rem, 4vw, 2rem); }
 .chat-availability :is(h2, h3) { margin: 0; font-size: 1.125rem; }
@@ -2879,7 +2891,7 @@ html[data-contrast="high"] .exam-preview-card.is-selected-card {
 .chat-code-copy:hover { background: var(--violet-50); }
 .chat-code-copy:focus-visible { outline: 2px solid var(--violet-700); outline-offset: -2px; }
 .chat-sources { padding-inline-start: .5rem; border-inline-start: 2px solid var(--line-strong); color: var(--muted); font-size: .8125rem; overflow-wrap: anywhere; }
-.chat-sources span { font-weight: 700; }
+.chat-sources summary { font-weight: 700; cursor: pointer; }
 .chat-sources ul { margin: .125rem 0 0; padding-inline-start: 1rem; }
 
 .chat-thinking,
@@ -2903,6 +2915,10 @@ html[data-contrast="high"] .exam-preview-card.is-selected-card {
 }
 
 .chat-composer { display: flex; align-items: flex-end; gap: .5rem; }
+.chat-pdf-row { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; min-width: 0; }
+.chat-pdf-row .chat-pdf-name { flex: 1 1 8rem; min-width: 0; max-height: 3em; overflow-y: auto; overflow-wrap: anywhere; margin: 0; }
+.chat-pdf-row .chat-pdf-action { min-height: 44px; max-width: 100%; white-space: normal; }
+.chat-pdf-error { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
 .chat-input {
   flex: 1;
   min-width: 0;

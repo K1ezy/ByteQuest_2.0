@@ -42,6 +42,7 @@ interface UserAvatarProps {
   url?: string | null;
   size?: "nav" | "profile";
   busy?: boolean;
+  loading?: "lazy" | "eager";
   className?: string;
 }
 
@@ -51,6 +52,7 @@ export function UserAvatar({
   url,
   size = "nav",
   busy = false,
+  loading,
   className = "",
 }: UserAvatarProps) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
@@ -65,7 +67,7 @@ export function UserAvatar({
       {showImage ? (
         // The URL is user-controlled storage and may be remote, so next/image cannot safely infer its host.
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={url || undefined} alt={`${name}'s profile photo`} onError={() => setFailedUrl(url || null)} />
+        <img src={url || undefined} alt={`${name}'s profile photo`} loading={loading} onError={() => setFailedUrl(url || null)} />
       ) : (
         <span className="user-avatar-identicon" aria-hidden="true" style={{ background: `hsl(${hue} 70% 94%)` }}>
           <svg viewBox="0 0 5 5" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">

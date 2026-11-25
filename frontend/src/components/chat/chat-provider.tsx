@@ -3,17 +3,24 @@
 import {
   createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode,
 } from "react";
-import { ApiError, apiRequest } from "@/lib/api";
+import { ApiError, apiRequest, getErrorMessage } from "@/lib/api";
 import { newRequestId } from "@/lib/network";
 import type { UserRole } from "@/lib/types";
 import { chatHistory, turnMessages, type ChatMode, type ConversationSummary, type SavedReply } from "./chat-history";
 import {
-  activityFromPath, contextMessages, DEFAULT_LIMITS, loadChatSnapshot, MAX_SAVED_MESSAGES,
-  safeChatReturnPath, saveChatSnapshot, type ChatLimits, type ChatMessage, type ChatSource,
+  activityFromPath, contextMessages, DEFAULT_LIMITS, loadChatSnapshot, MAX_SAVED_MESSAGES, pdfEvidence,
+  safeChatReturnPath, saveChatSnapshot, type ChatLimits, type ChatMessage, type ChatPdfAttachment, type ChatReply,
 } from "./chat-session";
 
 type ServerChatState = "ready" | "exam_in_progress" | "enrollment_required" | "disabled" | "unavailable";
-type ChatStatusResponse = { status: ServerChatState; role: UserRole; language: string | null; limits: ChatLimits; history_enabled?: boolean };
+type ChatStatusResponse = {
+  status: ServerChatState;
+  role: UserRole;
+  language: string | null;
+  limits: ChatLimits;
+  history_enabled?: boolean;
+  pdf_upload_max_bytes?: number | null;
+};
 type ChatAvailability = ServerChatState | "checking" | "offline" | "connection_error" | "session";
 type ChatError = {
   kind: "network" | "rate_limit" | "unavailable" | "invalid" | "session" | "forbidden" | "pending" | "unknown";
@@ -129,21 +136,28 @@ function useChatController() {
   const [historyRevision, setHistoryRevision] = useState(0);
   const [before, setBefore] = useState<number | null>(null);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
+  const [pdfAttachment, setPdfAttachment] = useState<ChatPdfAttachment | null>(null);
+  const [pdfUploading, setPdfUploading] = useState(false);
+  const [pdfError, setPdfError] = useState("");
 
   const userRef = useRef<string | null | undefined>(undefined);
   const messagesRef = useRef<ChatMessage[]>([]);
   const lastActivity = useRef<string | null>(null);
   const replyRequest = useRef<AbortController | null>(null);
   const statusRequest = useRef<AbortController | null>(null);
+  const pdfRequest = useRef<AbortController | null>(null);
   const transcriptRequest = useRef<AbortController | null>(null);
   const conversationRef = useRef<ConversationSummary | null>(null);
   const restoreId = useRef<string | null>(null);
   const newConversationId = useRef<string | null>(null);
   const drafts = useRef<Record<string, string>>({});
   const routeActivity = activityFromPath(returnPath);
-  const activity = routeActivity?.id === detachedActivity ? null : routeActivity;
+  const activity = pdfAttachment || routeActivity?.id === detachedActivity ? null : routeActivity;
   const limits = serverStatus?.limits ?? DEFAULT_LIMITS;
   const historyEnabled = serverStatus?.history_enabled === true;
+  const pdfLimit = serverStatus?.pdf_upload_max_bytes ?? 0;
+  const canUploadPdf = pdfLimit > 0 && (availability === "ready" || availability === "enrollment_required");
+  const readyToSend = availability === "ready" || (pdfAttachment !== null && canUploadPdf);
   const canBrowseHistory = historyEnabled && ["ready", "disabled", "unavailable", "enrollment_required"].includes(availability);
 
   const replaceMessages = useCallback((next: ChatMessage[]) => {
@@ -168,8 +182,17 @@ function useChatController() {
     setPending(false);
   }, []);
 
+  const clearPdf = useCallback(() => {
+    pdfRequest.current?.abort();
+    pdfRequest.current = null;
+    setPdfUploading(false);
+    setPdfError("");
+    setPdfAttachment(null);
+  }, []);
+
   const clearConversation = useCallback(() => {
     stopReply();
+    clearPdf();
     newConversationId.current = null;
     lastActivity.current = null;
     replaceMessages([]);
@@ -177,13 +200,14 @@ function useChatController() {
     setError(null);
     setScrollToLatest(true);
     saveChatSnapshot(null);
-  }, [replaceMessages, stopReply]);
+  }, [clearPdf, replaceMessages, stopReply]);
 
   const transitionAccount = useCallback((next: string | null) => {
     const previous = userRef.current;
     if (previous === next) return;
     userRef.current = next;
     stopReply();
+    clearPdf();
     cancelTranscript();
     statusRequest.current?.abort();
     statusRequest.current = null;
@@ -207,7 +231,7 @@ function useChatController() {
     setError(snapshot?.messages.at(-1)?.role === "user" ? INTERRUPTED_REPLY : null);
     setScrollToLatest(true);
     setOwnerId(next);
-  }, [cancelTranscript, replaceMessages, stopReply, updateConversation]);
+  }, [cancelTranscript, clearPdf, replaceMessages, stopReply, updateConversation]);
 
   useEffect(() => {
     let active = true;
@@ -240,6 +264,7 @@ function useChatController() {
       subscription?.unsubscribe();
       window.removeEventListener("bytequest:auth-cleared", onCleared);
       replyRequest.current?.abort();
+      pdfRequest.current?.abort();
       statusRequest.current?.abort();
       transcriptRequest.current?.abort();
     };
@@ -247,6 +272,7 @@ function useChatController() {
 
   useEffect(() => {
     if (!ownerId || userRef.current !== ownerId) return;
+    if (pdfAttachment) return;
     // Keep a safe return path for this account even before their first question.
     const conversationId = conversation?.id ?? restoreId.current;
     if (conversationId) {
@@ -259,7 +285,7 @@ function useChatController() {
       ownerId, messages: cachedMessages, draft, returnPath, detachedActivity, lastActivityId: lastActivity.current,
       mode, conversationId, savedDrafts: Object.fromEntries(Object.entries(drafts.current).slice(-25)),
     });
-  }, [ownerId, messages, draft, returnPath, detachedActivity, pending, error, mode, conversation, historyRevision]);
+  }, [ownerId, messages, draft, returnPath, detachedActivity, pending, error, mode, conversation, historyRevision, pdfAttachment]);
 
   const setReturnPath = useCallback((path: string) => {
     const safePath = safeChatReturnPath(path);
@@ -322,14 +348,14 @@ function useChatController() {
     if (!navigator.onLine) {
       statusRequest.current = null;
       setAvailability((previous) => {
-        if (previous === "ready" || previous === "offline") return "offline";
+        if (previous === "ready" || previous === "enrollment_required" || previous === "offline") return "offline";
         return previous === "checking" ? "connection_error" : previous;
       });
       return;
     }
     const controller = new AbortController();
     statusRequest.current = controller;
-    setAvailability((previous) => background && previous === "ready" ? previous : "checking");
+    setAvailability((previous) => background && (previous === "ready" || previous === "enrollment_required") ? previous : "checking");
     try {
       const result = await apiRequest<ChatStatusResponse>("/chat/status", { signal: controller.signal });
       if (controller.signal.aborted) return;
@@ -339,10 +365,10 @@ function useChatController() {
         restoreId.current = null;
         setMode("temporary");
       }
-      if (result.status === "ready") {
+      if (result.status === "ready" || result.pdf_upload_max_bytes) {
         setError((previous) => previous?.blocked ? INTERRUPTED_REPLY : previous);
       }
-      if (result.status !== "ready" && replyRequest.current) {
+      if (result.status !== "ready" && !result.pdf_upload_max_bytes && replyRequest.current) {
         stopReply();
         setError(INTERRUPTED_REPLY);
       }
@@ -375,7 +401,7 @@ function useChatController() {
     setScrollToLatest(true);
     let sentTo: ConversationSummary | null = null;
     try {
-      if (mode === "saved" && historyEnabled) {
+      if (!pdfAttachment && mode === "saved" && historyEnabled) {
         let current = conversationRef.current;
         if (!current) {
           // Reused on retry, so a lost create response cannot open (and charge for) a second chat.
@@ -392,15 +418,23 @@ function useChatController() {
         return;
       }
       setMode("temporary");
-      const response = await apiRequest<{ reply: string; sources?: ChatSource[] }>("/chat/messages", {
+      const messages = contextMessages(history, limits);
+      const response = await apiRequest<ChatReply>("/chat/messages", {
         method: "POST",
-        body: JSON.stringify({ messages: contextMessages(history, limits), activity_id: activityId }),
+        body: JSON.stringify({
+          messages,
+          activity_id: activityId,
+          ...(pdfAttachment && { attachment: pdfEvidence(pdfAttachment, messages) }),
+        }),
         signal: controller.signal,
       });
       if (controller.signal.aborted) return;
       const reply = response.reply.trim();
       if (!reply) throw new Error("Empty chat response");
-      const message: ChatMessage = { id: newRequestId(), role: "assistant", content: reply, sources: response.sources };
+      const message: ChatMessage = {
+        id: newRequestId(), role: "assistant", content: reply,
+        sources: response.sources, consulted_sources: response.consulted_sources,
+      };
       replaceMessages([...messagesRef.current, message].slice(-MAX_SAVED_MESSAGES));
     } catch (caught) {
       if (controller.signal.aborted) return;
@@ -483,7 +517,7 @@ function useChatController() {
 
   function canSend() {
     return ownerId && userRef.current === ownerId && !replyRequest.current && !transcriptRequest.current && !restoreId.current
-      && (!conversationRef.current || historyEnabled) && availability === "ready"
+      && !pdfRequest.current && (!conversationRef.current || historyEnabled) && readyToSend
       && (!error?.retryAt || Date.now() >= error.retryAt);
   }
 
@@ -529,6 +563,44 @@ function useChatController() {
     setMode(next);
   }
 
+  async function uploadPdf(file: File) {
+    if (!canUploadPdf || !ownerId || ownerId !== userRef.current || pdfRequest.current || replyRequest.current) return;
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      setPdfError("Choose a PDF file.");
+      return;
+    }
+    if (file.size > pdfLimit) {
+      setPdfError(`Choose a PDF up to ${pdfLimit / 1024 ** 2} MB.`);
+      return;
+    }
+    const controller = new AbortController();
+    pdfRequest.current = controller;
+    setPdfError("");
+    setPdfUploading(true);
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      const attachment = await apiRequest<ChatPdfAttachment>("/chat/attachments/pdf?all_pages=true", {
+        method: "POST", body, signal: controller.signal,
+      });
+      if (controller.signal.aborted || ownerId !== userRef.current) return;
+      const currentMessages = mode === "temporary" && !pdfAttachment ? messagesRef.current : [];
+      startChat("temporary");
+      replaceMessages(currentMessages);
+      setDraft(draft);
+      setPdfAttachment(attachment);
+    } catch (caught) {
+      if (controller.signal.aborted) return;
+      if (caught instanceof ApiError && caught.code === "exam_in_progress") setAvailability("exam_in_progress");
+      setPdfError(getErrorMessage(caught));
+    } finally {
+      if (pdfRequest.current === controller) {
+        pdfRequest.current = null;
+        setPdfUploading(false);
+      }
+    }
+  }
+
   function openConversation(selected: ConversationSummary) {
     if (!canBrowseHistory) return;
     if (conversationRef.current?.id === selected.id) return;
@@ -558,10 +630,11 @@ function useChatController() {
 
   return {
     windowMode, setWindowMode,
-    signedIn: ownerId === undefined ? null : Boolean(ownerId),
+    ownerId, signedIn: ownerId === undefined ? null : Boolean(ownerId),
     messages, draft, setDraft, pending, error, returnPath, setReturnPath, activity, detachActivity,
     scrollToLatest, setScrollToLatest, sendMessage, retryLast, checkReply, editLast, clearConversation,
     refreshAvailability, availability, role: serverStatus?.role, language: serverStatus?.language, limits,
+    pdfAttachment, canUploadPdf, readyToSend, pdfUploading, pdfError, uploadPdf,
     mode, conversation, historyEnabled, canBrowseHistory, historyRevision, startChat, openConversation, updateHistory,
     loadingTranscript, canLoadEarlier: before !== null,
     loadEarlier: () => {

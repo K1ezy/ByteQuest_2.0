@@ -76,10 +76,18 @@ export interface Workshop extends WorkshopClassroomDetails {
   joining_enabled: boolean;
   archived: boolean;
   owner_name: string;
+  owner_avatar_url?: string | null;
   member_count: number;
   activity_ids: string[];
   activities: { activity_id: string; topic: string | null; position: number; added_at: string }[];
   next_closes_at?: string | null;
+}
+
+export interface WorkshopLesson {
+  document_id: string;
+  title: string;
+  description: string | null;
+  practice_status: "ready" | "indexing" | "unavailable";
 }
 
 export interface Evaluation {

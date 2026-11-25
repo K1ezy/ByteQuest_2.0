@@ -18,9 +18,9 @@ MAX_EXTRACTED_CHARACTERS = 200_000
 _pdf_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pdf-extraction")
 
 
-async def extract_pdf_chunks(pdf_bytes: bytes) -> list[dict[str, Any]]:
+async def extract_pdf_chunks(pdf_bytes: bytes, target_chunk_tokens: int = 750) -> list[dict[str, Any]]:
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(_pdf_executor, extract_chunks_from_pdf, pdf_bytes)
+    return await loop.run_in_executor(_pdf_executor, extract_chunks_from_pdf, pdf_bytes, target_chunk_tokens)
 
 
 def extract_chunks_from_pdf(

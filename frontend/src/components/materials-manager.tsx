@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { getErrorMessage } from "@/lib/api";
+import type { Workshop } from "@/lib/types";
 import { useWorkspace } from "@/components/workspace/workspace-provider";
 import { PageHeader } from "@/components/instructor/course-ui";
 import {
@@ -53,6 +54,7 @@ const STATUS_OPTIONS = [
 
 type UploadState = {
   course: string;
+  workshop: string;
   title: string;
   description: string;
   language: string;
@@ -60,7 +62,7 @@ type UploadState = {
   file: File | null;
 };
 
-const EMPTY_UPLOAD: UploadState = { course: "", title: "", description: "", language: "python", topic: "", file: null };
+const EMPTY_UPLOAD: UploadState = { course: "", workshop: "", title: "", description: "", language: "python", topic: "", file: null };
 
 /**
  * One materials library for both roles. Faculty work inside the selected course
@@ -75,6 +77,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
   const searchParams = useSearchParams();
   const focusedMaterial = searchParams.get("material");
   const replaceRequested = searchParams.get("replace") === "1";
+  const requestedWorkshop = searchParams.get("workshop");
   const status = searchParams.get("status") || "";
   const appliedSearch = searchParams.get("q") || "";
   const courseFilter = admin ? searchParams.get("course") || "" : courseId || "";
@@ -91,6 +94,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const uploadButton = useRef<HTMLButtonElement>(null);
   const openedReplacement = useRef<string | null>(null);
+  const openedWorkshop = useRef<string | null>(null);
 
   const path = useMemo(
     () =>
@@ -104,6 +108,9 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
     [admin, appliedSearch, courseFilter, scope, status],
   );
   const { data, error, loading, reload } = useApi<MaterialList | AdminMaterialList>(path);
+  const destinations = useApi<Workshop[]>(admin ? null : "/workshops", true);
+  const workshops = (destinations.data ?? []).filter((workshop) => workshop.owned_by_me && !workshop.archived);
+  const uploadWorkshop = workshops.find((workshop) => workshop.id === upload.workshop);
   const maxUploadBytes = data?.max_upload_bytes;
 
   useEffect(() => {
@@ -127,21 +134,28 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
     router.replace(`${pathname}?${next.toString()}`, { scroll: false });
   }
 
-  function openUpload(target: MaterialSummary | null) {
+  const openUpload = useCallback((target: MaterialSummary | null, workshop = "") => {
     setReplaceTarget(target);
-    setUpload({
-      course: upload.course,
+    setUpload((previous) => ({
+      course: previous.course,
+      workshop,
       title: target?.title || "",
       description: target?.description || "",
       language: target?.language || "python",
       topic: target?.topic_concept || "",
       file: null,
-    });
+    }));
     setErrors({});
     setUploadOpen(true);
     setEditing(null);
     window.requestAnimationFrame(() => fileRef.current?.focus());
-  }
+  }, []);
+
+  useEffect(() => {
+    if (admin || replaceRequested || !requestedWorkshop || !courseId || openedWorkshop.current === requestedWorkshop) return;
+    openedWorkshop.current = requestedWorkshop;
+    openUpload(null, requestedWorkshop);
+  }, [admin, courseId, openUpload, replaceRequested, requestedWorkshop]);
 
   useEffect(() => {
     if (admin || !replaceRequested || !focusedMaterial || !data || !("course" in data) || data.course.id !== courseId) return;
@@ -150,7 +164,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
     openedReplacement.current = target.document_id;
     // The dashboard deep link opens the existing replacement form once per material.
     openUpload(target);
-  }, [admin, courseId, data, focusedMaterial, replaceRequested]);
+  }, [admin, courseId, data, focusedMaterial, openUpload, replaceRequested]);
 
   function startEdit(material: MaterialSummary) {
     setEditing(material);
@@ -169,6 +183,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
     const uploadCourse = admin ? upload.course : courseId;
     const found: Record<string, string> = {};
     if (!uploadCourse) found.course = "Choose a course.";
+    if (upload.workshop && !uploadWorkshop) found.workshop = "Choose a workshop you manage.";
     if (upload.title.trim().length < 2) found.title = "Enter a title of at least 2 characters.";
     if (!upload.file) found.file = "Choose a PDF file.";
     else if (!upload.file.name.toLowerCase().endsWith(".pdf")) found.file = "Only PDF files are supported.";
@@ -182,8 +197,9 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
     const formData = new FormData();
     formData.append("course_id", uploadCourse);
     formData.append("title", upload.title.trim());
-    formData.append("language_tag", upload.language);
+    formData.append("language_tag", uploadWorkshop?.language ?? upload.language);
     formData.append("file", upload.file);
+    if (uploadWorkshop) formData.append("workshop_id", uploadWorkshop.id);
     if (upload.description.trim()) formData.append("description", upload.description.trim());
     if (upload.topic.trim()) formData.append("topic_concept", upload.topic.trim());
 
@@ -193,7 +209,9 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
       const result = await uploadMaterial(scope, formData, replaceTarget?.document_id);
       setNotice({
         tone: result.material.state === "ready" ? "success" : "warning",
-        text: result.message,
+        text: uploadWorkshop
+          ? `PDF shared with ${uploadWorkshop.name}. ${result.material.state === "ready" ? "Practice is ready." : result.message}`
+          : result.message,
       });
       setUploadOpen(false);
       setReplaceTarget(null);
@@ -202,7 +220,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
       reload();
       await refreshCourses();
     } catch (caught) {
-      setNotice({ tone: "error", text: `${getErrorMessage(caught)} Nothing was changed; your form values are still here.` });
+      setNotice({ tone: "error", text: getErrorMessage(caught) });
     } finally {
       setBusy("");
     }
@@ -306,7 +324,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
       ) : (
         <PageHeader
           title="Materials"
-          subtitle="Course PDFs become the citable evidence for generated drafts."
+          subtitle="Upload PDFs for course authoring or share them with a Workshop for student practice."
           actions={!uploadOpen ? (
             <button ref={uploadButton} type="button" className="ic-button ic-primary" onClick={() => openUpload(null)}>Upload PDF</button>
           ) : undefined}
@@ -349,6 +367,24 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
                 <FieldError>{errors.course}</FieldError>
               </div>
             ) : null}
+            {!admin && !replaceTarget && (
+              <div className="ws-field full">
+                <label htmlFor="material-workshop">Destination</label>
+                <select id="material-workshop" value={upload.workshop}
+                  onChange={(event) => setUpload({ ...upload, workshop: event.target.value })}
+                  aria-describedby="material-workshop-help" aria-invalid={Boolean(errors.workshop)}>
+                  <option value="">Course library</option>
+                  {upload.workshop && !uploadWorkshop && <option value={upload.workshop} disabled>Selected workshop</option>}
+                  {workshops.map((workshop) => <option key={workshop.id} value={workshop.id}>{workshop.name}</option>)}
+                </select>
+                <p className="ws-muted" id="material-workshop-help">{uploadWorkshop
+                  ? `Students in ${uploadWorkshop.name} can download this PDF and practice from it once it’s indexed.`
+                  : "Choose a Workshop to share the PDF with its students."}</p>
+                {destinations.loading && <p role="status">Loading workshops…</p>}
+                {destinations.error && <div role="alert"><p>{destinations.error}</p><Button type="button" variant="quiet" onClick={destinations.reload}>Reload workshops</Button></div>}
+                <FieldError>{errors.workshop}</FieldError>
+              </div>
+            )}
             <div className="ws-field">
               <label htmlFor="material-title">Title</label>
               <input
@@ -379,7 +415,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
             </div>
             <div className="ws-field">
               <label htmlFor="material-language">Language track</label>
-              <select id="material-language" value={upload.language} onChange={(event) => setUpload({ ...upload, language: event.target.value })}>
+              <select id="material-language" value={uploadWorkshop?.language ?? upload.language} disabled={Boolean(uploadWorkshop || replaceTarget?.workshop_id)} onChange={(event) => setUpload({ ...upload, language: event.target.value })}>
                 {LANGUAGE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
@@ -403,9 +439,9 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
             </div>
             <div className="ws-inline-actions full">
               <Button variant="primary" type="submit" disabled={busy !== ""} aria-busy={busy === "upload"}>
-                {busy === "upload" ? "Uploading and indexing…" : replaceTarget ? "Save new version" : "Upload and index"}
+                {busy === "upload" ? "Uploading and indexing…" : replaceTarget ? "Save new version" : uploadWorkshop ? "Upload to workshop" : "Upload and index"}
               </Button>
-              <span className="ws-muted">The file is validated before processing; failures keep a visible record.</span>
+              <span className="ws-muted">A PDF with selectable text can be used for chat practice.</span>
             </div>
           </form>
         </section>
@@ -431,7 +467,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
             {admin ? null : (
               <div className="ws-field">
                 <label htmlFor="edit-language">Language track</label>
-                <select id="edit-language" value={editForm.language} onChange={(event) => setEditForm({ ...editForm, language: event.target.value })}>
+                <select id="edit-language" value={editForm.language} disabled={Boolean(editing.workshop_id)} onChange={(event) => setEditForm({ ...editForm, language: event.target.value })}>
                   {LANGUAGE_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
@@ -541,6 +577,7 @@ export function MaterialsManager({ scope }: { scope: MaterialScope }) {
                     Uploaded {formatDateTime(material.created_at)} · {material.draft_count} linked draft
                     {material.draft_count === 1 ? "" : "s"}
                   </span>
+                  {material.workshop_id && <p className="ws-muted">{workshops.find((item) => item.id === material.workshop_id)?.name ?? "Workshop lesson"}</p>}
                   {material.processing_error ? (
                     <p className="ws-row-note">
                       <strong>Processing note:</strong> {material.processing_error}{" "}

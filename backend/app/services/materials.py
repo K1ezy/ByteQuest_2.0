@@ -19,7 +19,10 @@ from sqlalchemy.orm import Session
 
 from app.core.quotas import reserve
 from app.core.request_size import MAX_PDF_BYTES, MIB
-from app.models.entities import DocumentChunk, InstructionalDocument, LearningActivity, ProcessingJob, Profile
+from app.models.entities import (
+    Course, DocumentChunk, InstructionalDocument, LearningActivity, ProcessingJob, Profile, UserRole,
+    Workshop, WorkshopMember,
+)
 from app.services.ai_rag.embeddings import embed_chunks_bounded
 from app.services.ai_rag.gemini_client import GeminiConfigurationError
 from app.services.ai_rag.pdf_processor import extract_pdf_chunks
@@ -81,6 +84,7 @@ def serialize_material(document: InstructionalDocument, *, draft_count: int = 0)
         "indexed_at": iso(document.indexed_at),
         "created_at": iso(document.created_at),
         "course_id": str(document.course_id) if document.course_id else None,
+        "workshop_id": str(document.workshop_id) if document.workshop_id else None,
         "draft_count": draft_count,
         "can_retry": material_state(document) == "failed",
     }
@@ -165,6 +169,42 @@ async def _index_stored_pdf(
     return True, None, False
 
 
+def workshop_lessons(db: Session, workshop_id: uuid.UUID, user: Profile):
+    query = (
+        db.query(InstructionalDocument)
+        .join(Workshop, Workshop.id == InstructionalDocument.workshop_id)
+        .join(Course, Course.id == InstructionalDocument.course_id)
+        .filter(
+            Workshop.id == workshop_id,
+            Workshop.archived_at.is_(None),
+            Course.status == "active",
+            InstructionalDocument.is_current.is_(True),
+            InstructionalDocument.archived_at.is_(None),
+        )
+    )
+    if user.role == UserRole.admin:
+        return query
+    if user.role == UserRole.instructor:
+        return query.filter(Workshop.created_by == user.id)
+    return query.join(WorkshopMember, WorkshopMember.workshop_id == Workshop.id).filter(
+        WorkshopMember.profile_id == user.id,
+    )
+
+
+def get_workshop_lesson(
+    db: Session, workshop_id: uuid.UUID, document_id: uuid.UUID, user: Profile,
+) -> InstructionalDocument:
+    lesson = (
+        workshop_lessons(db, workshop_id, user)
+        .filter(InstructionalDocument.id == document_id)
+        .one_or_none()
+        if user.account_status == "active" else None
+    )
+    if lesson is None:
+        raise HTTPException(404, "Workshop lesson not found.")
+    return lesson
+
+
 async def upload_material(
     db: Session,
     *,
@@ -176,6 +216,7 @@ async def upload_material(
     language_tag,
     topic_concept: Optional[str],
     replaces_document_id: Optional[uuid.UUID] = None,
+    workshop_id: Optional[uuid.UUID] = None,
 ) -> tuple[InstructionalDocument, ProcessingJob]:
     filename = file.filename or ""
     if PurePath(filename).suffix.casefold() != ".pdf":
@@ -215,6 +256,18 @@ async def upload_material(
             )
         family_id = supersedes.document_family_id
         version_number = supersedes.version_number + 1
+        if workshop_id is not None and workshop_id != supersedes.workshop_id:
+            raise HTTPException(409, "A replacement PDF keeps the original workshop destination.")
+        workshop_id = supersedes.workshop_id
+
+    if workshop_id is not None:
+        workshop = db.query(Workshop).filter_by(id=workshop_id, created_by=actor.id).with_for_update().one_or_none()
+        if workshop is None:
+            raise HTTPException(404, "Workshop not found.")
+        if workshop.archived_at is not None:
+            raise HTTPException(409, "Restore the workshop before uploading a lesson.")
+        if workshop.language != language_tag:
+            raise HTTPException(422, "Choose a workshop in the PDF's programming language.")
 
     document_id = uuid.uuid4()
     storage_path = f"course_materials/{course_id}/{document_id}.pdf"
@@ -226,6 +279,7 @@ async def upload_material(
             detail={"code": "storage_unavailable", "message": str(exc)},
         ) from exc
 
+    saved = False
     try:
         document = InstructionalDocument(
             id=document_id,
@@ -246,6 +300,7 @@ async def upload_material(
             status="processing",
             total_chunks=0,
             course_id=course_id,
+            workshop_id=workshop_id,
         )
         if supersedes is not None:
             supersedes.is_current = False
@@ -265,8 +320,18 @@ async def upload_material(
         )
         db.add(job)
         db.commit()
+        saved = True
 
-        ready, cause, retryable = await _index_stored_pdf(db, document=document, content=content, actor_id=actor.id)
+        try:
+            with db.begin_nested():
+                ready, cause, retryable = await _index_stored_pdf(db, document=document, content=content, actor_id=actor.id)
+        except HTTPException as exc:
+            if exc.status_code not in (429, 503):
+                raise
+            ready, cause, retryable = False, exc.detail["message"], True
+        except Exception:
+            logger.exception("Could not index saved PDF %s.", document_id)
+            ready, cause, retryable = False, "Indexing stopped before it finished. Retry indexing.", True
         if ready:
             job.status = "completed"
             job.retryable = False
@@ -305,21 +370,29 @@ async def upload_material(
         return document, job
     except HTTPException:
         db.rollback()
-        try:
-            await pdf_storage.delete(storage_path)
-        except StorageError:
-            logger.warning("Could not remove an unreferenced PDF after a rejected upload.")
+        if not saved:
+            try:
+                await pdf_storage.delete(storage_path)
+            except StorageError:
+                logger.warning("Could not remove an unreferenced PDF after a rejected upload.")
         raise
     except Exception:
         db.rollback()
         logger.exception("Material upload failed for course %s.", course_id)
-        try:
-            await pdf_storage.delete(storage_path)
-        except StorageError:
-            pass
+        if not saved:
+            try:
+                await pdf_storage.delete(storage_path)
+            except StorageError:
+                logger.warning("Could not remove an unreferenced PDF after a failed upload.")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"code": "upload_failed", "message": "The material could not be saved. Try again."},
+            detail={
+                "code": "processing_status_unavailable" if saved else "upload_failed",
+                "message": (
+                    "The PDF was saved. Reload Materials to check its processing status."
+                    if saved else "The material could not be saved. Try again."
+                ),
+            },
         ) from None
 
 

@@ -9,6 +9,7 @@ import { InstructorIcon, PageHeader } from "@/components/instructor/course-ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { Button, useApi } from "@/components/workspace/ui";
 import { ApiError, apiRequest } from "@/lib/api";
+import { reachableServiceUrl } from "@/lib/network";
 import { publishProfileUpdate } from "@/lib/profile-events";
 import { roleLabels } from "@/lib/navigation";
 import type { Workshop } from "@/lib/types";
@@ -41,9 +42,15 @@ function WorkshopGrid({ archived }: { archived: boolean }) {
       {rows.map((item, index) => {
         const classroom = classroomSummary(item);
         return <Link href={`/workshops/${item.id}`} className="workshop-card" key={item.id}>
-          <WorkshopBanner language={item.language} eager={index === 0}>
-            <span className="workshop-language">{workshopLanguages[item.language]}</span>
-          </WorkshopBanner>
+          <div className="workshop-card-cover">
+            <WorkshopBanner language={item.language} eager={index === 0}>
+              <span className="workshop-language">{workshopLanguages[item.language]}</span>
+            </WorkshopBanner>
+            <span className="workshop-card-avatar" aria-hidden="true">
+              <UserAvatar seed={item.owner_name} name={item.owner_name} loading="lazy"
+                url={item.owner_avatar_url ? reachableServiceUrl(item.owner_avatar_url) : null} />
+            </span>
+          </div>
           <div className="workshop-card-copy">
             <h3>{item.name}</h3>
             <p>{item.owner_name}</p>
