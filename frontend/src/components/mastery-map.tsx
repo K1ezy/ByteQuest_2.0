@@ -26,7 +26,7 @@ function MasteryPath({ concepts }: { concepts: MasteryConcept[] }) {
         const memory = item.memory && MEMORY_LABELS[item.memory.state];
         const language = workshopLanguages[item.language];
         const name = [
-          `${item.concept} in ${language}`, `${item.completed} of ${item.total} complete`, `${item.mastery_percent}% mastery`, state.toLowerCase(),
+          `${item.concept} in ${language}`, `${item.completed} of ${item.total} complete`, `${item.mastery_percent}% of its activities passed`, state.toLowerCase(),
           item.average_stars !== null && `average ${item.average_stars} of ${MAX_STARS} stars`,
           weak && `weak spot ${weak.toLowerCase()}`,
           memory && `memory ${memory.toLowerCase()}`,
@@ -44,6 +44,7 @@ function MasteryPath({ concepts }: { concepts: MasteryConcept[] }) {
               </span>
               <span className="mastery-node-detail" aria-hidden="true">
                 <strong>{item.concept}</strong>
+                <span className="mastery-node-caption">{item.mastery_percent}% of its activities passed</span>
                 <span className="tag quest-language">{language}</span>
                 <StatusChip state={item.state} label={state} tone={item.state === "mastered" ? "good" : "muted"} />
                 {item.average_stars !== null ? (

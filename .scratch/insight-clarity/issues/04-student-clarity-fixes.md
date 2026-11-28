@@ -4,8 +4,8 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #19
 
-- [ ] Component tests for the recap card sentences, the grid legend, the ring label and the language filter
-- [ ] Wording never says "failed"
+- [x] Component tests for the recap card sentences, the grid legend, the ring label and the language filter
+- [x] Wording never says "failed"

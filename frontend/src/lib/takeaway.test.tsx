@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { MIN_SAMPLE, activitiesPassedSentence, firstTryHeadline, firstTrySentence, notEnoughData, trendTakeaway } from "./takeaway";
+import { MIN_SAMPLE, activitiesPassedSentence, firstTryHeadline, firstTrySentence, notEnoughData, recapSentence, trendTakeaway } from "./takeaway";
 
 it("needs at least five values before describing a trend", () => {
   expect(MIN_SAMPLE).toBe(5);
@@ -36,4 +36,14 @@ it("headlines the first-try chart with a count, then the trend or a not-enough-d
     .toBe("5 of your last 8 first tries passed. Your first-try scores are rising (up about 33 points).");
   expect(firstTryHeadline(tries([100, 100, 100, 100, 100, 100, 100, 100, 100, 50])))
     .toBe("7 of your last 8 first tries passed. Your first-try scores are falling (down about 12 points).");
+});
+
+it("leads each recap item with a plain sentence", () => {
+  expect(recapSentence("solved", 3, 7)).toBe("You solved 3 challenges in the last 7 days.");
+  expect(recapSentence("solved", 1, 3)).toBe("You solved 1 challenge in the last 3 days.");
+  expect(recapSentence("self_solved", 1, 7)).toBe("You solved 1 without a hint.");
+  expect(recapSentence("solved", 2, 1)).toBe("You solved 2 challenges in the last 1 day.");
+  expect(recapSentence("recoveries", 0, 7)).toBe("You fixed 0 errors on your own.");
+  expect(recapSentence("recalls", 1, 7)).toBe("You passed 1 recall.");
+  expect(recapSentence("active_days", 4, 7)).toBe("You practised on 4 of the last 7 days.");
 });

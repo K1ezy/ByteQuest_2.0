@@ -23,6 +23,7 @@ it("keeps the same concept separate per language, labels it, and filters by lang
   const java = screen.getByRole("link", { name: /Loops in Java, 0 of 1 complete/ });
   expect(java.getAttribute("href")).toBe("/quests?concept=Loops&language=java");
   expect(python).toBeTruthy();
+  expect(screen.getAllByText("0% of its activities passed").length).toBe(1);
 
   fireEvent.click(within(screen.getByRole("group", { name: "Language" })).getByRole("button", { name: "Java" }));
   expect(screen.queryByRole("link", { name: /Loops in Python/ })).toBeNull();

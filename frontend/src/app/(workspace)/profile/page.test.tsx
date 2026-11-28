@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
   router: { replace: vi.fn(), push: vi.fn() },
@@ -291,7 +291,7 @@ it("opens Mastery inside Profile with links to filtered quests", async () => {
   });
   render(<ProfilePage />);
 
-  const node = await screen.findByRole("link", { name: /Loops & arrays in Python, 2 of 3 complete, 67% mastery/ });
+  const node = await screen.findByRole("link", { name: /Loops & arrays in Python, 2 of 3 complete, 67% of its activities passed/ });
   expect(node.getAttribute("href")).toBe("/quests?concept=Loops%20%26%20arrays&language=python");
   expect(screen.getByRole("link", { name: "Mastery" }).getAttribute("aria-current")).toBe("page");
   expect(screen.getByRole("heading", { name: "Debugger's Codex" })).toBeTruthy();
@@ -433,7 +433,7 @@ it("links recorded topics, shows badge descriptions and provides a score trend t
       activity_type: "quiz", score_percentage: 85, is_successful: true, created_at: "2026-11-24T04:00:00Z",
       can_open_quest: index !== 5, is_exam: index === 5,
     })),
-    by_topic:["Strings & files","General"].map(topic => ({language:"java",topic,attempts:1,average_score:40})),
+    by_topic:[...["Strings & files","General"].map(topic => ({language:"java",topic,attempts:1,average_score:40})),{language:"python",topic:"Loops",attempts:2,average_score:90}],
     score_trend:[],
     first_tries:[{activity_id:"a",title:"Intro",language:"python",created_at:"2026-11-05T00:00:00Z",score_percentage:40,passed:false},
       {activity_id:"b",title:"Practice",language:"java",created_at:"2026-11-06T00:00:00Z",score_percentage:100,passed:true}],
@@ -442,6 +442,11 @@ it("links recorded topics, shows badge descriptions and provides a score trend t
   render(<ProfilePage/>);
   expect((await screen.findByRole("link",{name:"Practise Strings & files"})).getAttribute("href")).toBe("/quests?concept=Strings%20%26%20files&language=java");
   expect(screen.getByText("Strings & files · Java")).toBeTruthy();
+  expect(screen.getByRole("list", { name: "What the shades mean" }).textContent).toContain("4 or more");
+  fireEvent.click(within(screen.getByRole("group", { name: "Topic language" })).getByRole("button", { name: "Python" }));
+  expect(screen.queryByText("Strings & files · Java")).toBeNull();
+  expect(screen.getByText("Loops · Python")).toBeTruthy();
+  fireEvent.click(within(screen.getByRole("group", { name: "Topic language" })).getByRole("button", { name: "All languages" }));
   expect(screen.queryByRole("link",{name:"Practise General"})).toBeNull();
   expect(screen.getByText("Finish one quest.")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Practice quiz 0" }).getAttribute("href")).toBe("/quiz/quiz-0");

@@ -1,5 +1,6 @@
 "use client";
 
+import { recapSentence } from "@/lib/takeaway";
 import Link from "next/link";
 import { useState } from "react";
 import { Button, Notice, useApi } from "@/components/workspace/ui";
@@ -100,8 +101,10 @@ export function ProgressRecap({ userId }: { userId: string }) {
           <ul className="recap-list">
             {shown.metrics.map((metric) => (
               <li key={metric.key}>
-                <span className="recap-label">{metric.label}</span>
-                <strong className="recap-value">{metric.current}</strong>
+                <span className="recap-sentence">{recapSentence(metric.key, metric.current, shown.days)}</span>
+                {/* The sentence already says the number, so screen readers skip the repeat. */}
+                <span className="recap-label" aria-hidden="true">{metric.label}</span>
+                <strong className="recap-value" aria-hidden="true">{metric.current}</strong>
                 {shown.enough_activity ? (
                   <span className={`recap-change${metric.change > 0 ? " is-up" : ""}`}>
                     {metric.change > 0 ? <span aria-hidden="true">▲ </span> : null}

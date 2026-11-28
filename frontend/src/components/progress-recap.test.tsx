@@ -60,6 +60,7 @@ it("shows true counts but no changes when there is too little activity", async (
   render(<ProgressRecap userId="student-1" />);
   expect(await screen.findByText(/Not enough activity yet to compare/)).toBeTruthy();
   expect(screen.getByText("Challenges solved")).toBeTruthy();
+  expect(screen.getByText(/^You solved 2 challenges in the last \d+ days\.$/)).toBeTruthy();
   expect(screen.queryByText(/vs previous|fewer than|Same as/)).toBeNull();
 });
 

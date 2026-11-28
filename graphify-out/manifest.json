@@ -744,9 +744,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/profile/page.test.tsx": {
-    "mtime": 1795864067.7989237,
-    "seen": 1795864267.4205143,
-    "ast_hash": "1d0da90cb58b2285cd41067bdd4bc2f7",
+    "mtime": 1795864449.8129427,
+    "seen": 1795864628.3591797,
+    "ast_hash": "ef90a61cef1631a57cf6a00b95b86e01",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/profile/page.tsx": {
@@ -1824,9 +1824,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/mastery-map.tsx": {
-    "mtime": 1795856940.045973,
-    "seen": 1795857429.2225966,
-    "ast_hash": "2754f560a16c334431c0c9f436e8ff63",
+    "mtime": 1795864339.8889923,
+    "seen": 1795864628.3929415,
+    "ast_hash": "e15825451bb8cf3d4b597a204478a420",
     "semantic_hash": ""
   },
   "backend/app/api/reviews.py": {
@@ -1932,15 +1932,15 @@
     "semantic_hash": ""
   },
   "frontend/src/components/progress-recap.test.tsx": {
-    "mtime": 1794733115.1864643,
-    "seen": 1795545913.947662,
-    "ast_hash": "f57227286282f9faa8328a38948c396f",
+    "mtime": 1795864432.0535455,
+    "seen": 1795864628.3971477,
+    "ast_hash": "ee1656a731d4ef94233785418b45cd41",
     "semantic_hash": ""
   },
   "frontend/src/components/progress-recap.tsx": {
-    "mtime": 1795506786.8360646,
-    "seen": 1795545913.947662,
-    "ast_hash": "108f8f16fdc46bf351a6bc381b4381a9",
+    "mtime": 1795864537.58212,
+    "seen": 1795864628.3971477,
+    "ast_hash": "25ef5ed0dbf9bdc2c94e3bc93696c411",
     "semantic_hash": ""
   },
   "frontend/src/lib/network.test.tsx": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795864228.2145016,
-    "seen": 1795864267.5017495,
-    "ast_hash": "e02ec62abd0db42b20cc545b0baa5fb0",
+    "mtime": 1795864596.7159815,
+    "seen": 1795864628.4523227,
+    "ast_hash": "4d4a2b156f7f9f999a3c6d2c73b4942a",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -2952,9 +2952,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/profile/student-progress.tsx": {
-    "mtime": 1795864161.6045518,
-    "seen": 1795864267.4546294,
-    "ast_hash": "acbcdbce71c4016f76d09d5f646ef126",
+    "mtime": 1795864339.9095573,
+    "seen": 1795864628.3971477,
+    "ast_hash": "c926e853d3ff61e021bd7ba63ac5ff41",
     "semantic_hash": ""
   },
   "frontend/src/components/student-exam-list.tsx": {
@@ -3174,9 +3174,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/mastery-map.test.tsx": {
-    "mtime": 1795857135.9948676,
-    "seen": 1795857429.2225966,
-    "ast_hash": "09f1574d3a6e41c6fa7ff575894d8d0a",
+    "mtime": 1795864339.8905468,
+    "seen": 1795864628.3929415,
+    "ast_hash": "462dce2f026c4c2a565f8541e980c734",
     "semantic_hash": ""
   },
   "docs/handoff/CODEX_CHECKPOINT_2026-11-28.md": {
@@ -3198,9 +3198,9 @@
     "semantic_hash": ""
   },
   ".scratch/insight-clarity/issues/03-student-first-try-chart.md": {
-    "mtime": 1795861937.4495714,
-    "seen": 1795862611.7694468,
-    "ast_hash": "bd01b351a4a0de043ced8d041e415d60",
+    "mtime": 1795864268.5589933,
+    "seen": 1795864628.4412086,
+    "ast_hash": "4a1d2f76fdd1203f3b03a70add64897a",
     "semantic_hash": ""
   },
   ".scratch/insight-clarity/issues/04-student-clarity-fixes.md": {
@@ -3264,15 +3264,15 @@
     "semantic_hash": ""
   },
   "frontend/src/lib/takeaway.test.tsx": {
-    "mtime": 1795863976.9412782,
-    "seen": 1795864267.4807312,
-    "ast_hash": "38e8223742a202359ff5ea28ee33d07a",
+    "mtime": 1795864537.5811198,
+    "seen": 1795864628.4259298,
+    "ast_hash": "29508a88d5b7502c08a9dabb27c6f82e",
     "semantic_hash": ""
   },
   "frontend/src/lib/takeaway.ts": {
-    "mtime": 1795863965.3323605,
-    "seen": 1795864267.4807312,
-    "ast_hash": "48cc5dcc9246d692135f54e316d84545",
+    "mtime": 1795864537.5811198,
+    "seen": 1795864628.4259298,
+    "ast_hash": "1da625bde4e21b205303fac4a432c8d1",
     "semantic_hash": ""
   }
 }

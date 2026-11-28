@@ -120,6 +120,9 @@ function SolvingHabits({ pattern }: { pattern: HelpPattern }) {
 
 export function StudentProgress({ a, profile }: { a: StudentAnalytics; profile: Profile }) {
   const typeLabel = (t: string) => (t === "quiz" ? "Quizzes" : t === "challenge" ? "Coding challenges" : t);
+  const [topicLanguage, setTopicLanguage] = useState<string | null>(null);
+  const topicLanguages = [...new Set(a.by_topic.map(t => t.language))].sort();
+  const topics = topicLanguage ? a.by_topic.filter(t => t.language === topicLanguage) : a.by_topic;
   const firstTries = a.first_tries ?? [];
   const firstTryTitle = firstTryHeadline(firstTries.map(t => ({ score: t.score_percentage, passed: t.passed })));
   return (
@@ -153,6 +156,11 @@ export function StudentProgress({ a, profile }: { a: StudentAnalytics; profile: 
             </li>
           ))}
         </ol>
+        <ul className="profile-activity-legend" aria-label="What the shades mean">
+          {["No attempts", "1 attempt", "2 attempts", "3 attempts", "4 or more"].map((text, level) => (
+            <li key={level} className={`level-${level}`}><span aria-hidden="true" />{text}</li>
+          ))}
+        </ul>
         <p className="profile-activity-note">Activity is counted by calendar day in Asia/Manila. Breaks are normal—this view celebrates consistency without penalizing time away.</p>
       </section>
 
@@ -201,7 +209,12 @@ export function StudentProgress({ a, profile }: { a: StudentAnalytics; profile: 
                 <h2 id="bytopic-title">Average score by topic</h2>
               </div>
             </div>
-            <MeterList label="Average score by topic" rows={a.by_topic.map(t => ({
+            {topicLanguages.length > 1 ? <div className="quest-filters" role="group" aria-label="Topic language">
+              {[null, ...topicLanguages].map(value => <button type="button" key={value ?? "all"} className="filter-button"
+                aria-pressed={topicLanguage === value} onClick={() => setTopicLanguage(value)}>
+                {value ? workshopLanguages[value as keyof typeof workshopLanguages] : "All languages"}</button>)}
+            </div> : null}
+            <MeterList label="Average score by topic" rows={topics.map(t => ({
               id: `${t.language}:${t.topic}`, name: `${t.topic} · ${workshopLanguages[t.language]}`, value: t.average_score, total: 100,
               figure: Math.round(t.average_score) + "%",
               detail: <>{t.attempts} tries {t.topic !== "General" && <PracticeLink topic={t.topic} language={t.language} />}</>,

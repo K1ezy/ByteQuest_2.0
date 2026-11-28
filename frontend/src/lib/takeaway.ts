@@ -51,3 +51,16 @@ export function firstTryHeadline(tries: { score: number; passed: boolean }[]): s
   return `${passed} of your last ${plural(latest.length, "first try", "first tries")} passed. `
     + trendTakeaway(latest.map((t) => t.score), "Your first-try scores");
 }
+
+/** The sentence that leads each Dashboard recap item: what the student did in the period. */
+export function recapSentence(
+  key: "solved" | "self_solved" | "recoveries" | "recalls" | "active_days", count: number, days: number,
+): string {
+  switch (key) {
+    case "solved": return `You solved ${plural(count, "challenge", "challenges")} in the last ${plural(days, "day", "days")}.`;
+    case "self_solved": return `You solved ${count} without a hint.`;
+    case "recoveries": return `You fixed ${plural(count, "error", "errors")} on your own.`;
+    case "recalls": return `You passed ${plural(count, "recall", "recalls")}.`;
+    case "active_days": return `You practised on ${count} of the last ${plural(days, "day", "days")}.`;
+  }
+}
