@@ -13,3 +13,4 @@ Instructors teach several languages at once, and students take more than one of 
 - An archived Workshop, or one the student leaves, stops new attempts on its activities; past attempts, XP, stars and badges stay.
 - Students in no active Workshop see only their history and course-only activities.
 - The stored per-student language is no longer read. It stays in the database until a later cleanup, because research exports may still read it.
+- "Next up" is the open, unfinished activity due soonest across every Workshop, except right after an unmastered attempt, when the adaptive rule first suggests practice on that same concept (decided 28 November 2026).
