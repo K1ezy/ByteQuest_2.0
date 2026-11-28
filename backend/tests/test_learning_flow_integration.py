@@ -55,7 +55,7 @@ from app.models.entities import (
     UserRole,
     Exam, ExamAttempt, ExamRetakeGrant, SubmissionJob, ResearchConsent,
     Badge, ChallengeHint, ConceptReview, HintUse, PlatformSetting, StudentBadge,
-    DocumentChunk, InstructionalDocument, Workshop, WorkshopAnnouncement,
+    DocumentChunk, InstructionalDocument, Workshop, WorkshopAnnouncement, WorkshopMember, WorkshopActivity,
 )
 from app.services.ai_rag import llm, retrieval
 from app.services.ai_rag.gemini_client import GeminiConfigurationError
@@ -77,6 +77,9 @@ pytestmark = pytest.mark.integration
 TEST_JWT_SECRET = "bytequest-integration-tests-only-secret"
 HIDDEN_INPUT = "private-case-input-9087"
 HIDDEN_OUTPUT = "private-case-output-9087"
+
+
+FIXTURE_CLASS = "Fixture class"
 
 
 def _token(user_id: uuid.UUID) -> dict[str, str]:
@@ -305,6 +308,7 @@ def test_submission_comparison_uses_previous_coding_practice_and_only_public_fie
         other_revision = _challenge(db, users["instructor"], reference="PRINT_INPUT")
         for activity_id in (same_revision, other_revision):
             db.get(LearningActivity, activity_id).review_status = ReviewState.published
+            _share_with_fixture_class(db, db.get(LearningActivity, activity_id))
         db.commit()
 
     initial = _graded_job(client, student, same_revision, "FAIL")
@@ -405,6 +409,7 @@ def test_grading_worker_official_path_does_not_require_the_api_app(flow):
         challenge_id = _challenge(db, users["instructor"])
         activity = db.get(LearningActivity, challenge_id)
         activity.review_status = ReviewState.published
+        _share_with_fixture_class(db, activity)
         db.commit()
 
     queued = client.post(
@@ -425,7 +430,7 @@ def test_grading_worker_official_path_does_not_require_the_api_app(flow):
     assert body["result"]["evaluation"]["is_successful"] is True
 
 
-def _review_and_publish(new_session, activity_id: uuid.UUID, instructor_id: uuid.UUID) -> None:
+def _review_and_publish(new_session, activity_id: uuid.UUID, instructor_id: uuid.UUID, *, share: bool = True) -> None:
     """Verify (challenges) and publish through the shared rules every publish path uses."""
     with new_session() as db:
         activity = db.get(LearningActivity, activity_id)
@@ -433,6 +438,8 @@ def _review_and_publish(new_session, activity_id: uuid.UUID, instructor_id: uuid
             activity = anyio.run(verify_saved_challenge, db, activity)
             assert activity is not None and activity.judge0_verified
         apply_publish_rules(db, activity, db.get(Profile, instructor_id))
+        if share:
+            _share_with_fixture_class(db, activity)
         db.commit()
 
 
@@ -518,6 +525,7 @@ def test_quiz_submission_succeeds_without_a_second_database_connection(flow, mon
         activity_id = _quiz(db, users["instructor"])
         activity = db.get(LearningActivity, activity_id)
         activity.review_status = ReviewState.published
+        _share_with_fixture_class(db, activity)
         db.commit()
 
     def no_spare_connection():
@@ -695,6 +703,7 @@ def test_pilot_drafts_jobs_hints_and_consent_gate(flow, monkeypatch):
     with new_session() as db:
         activity = db.get(LearningActivity, activity_id)
         activity.review_status = ReviewState.published
+        _share_with_fixture_class(db, activity)
         activity.judge0_verified = True
         db.commit()
     draft_url = f"/api/v1/pilot/drafts/{activity_id}"
@@ -809,6 +818,7 @@ def test_student_can_retry_saved_job_after_the_challenge_closes(flow, monkeypatc
         activity_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
         activity = db.get(LearningActivity, activity_id)
         activity.review_status = ReviewState.published
+        _share_with_fixture_class(db, activity)
         activity.judge0_verified = True
         db.commit()
     body = {"activity_id": str(activity_id), "source_code": "PRINT_INPUT"}
@@ -847,6 +857,7 @@ def test_invite_guessing_and_failed_ai_hint_quota(flow, monkeypatch):
         activity_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
         activity = db.get(LearningActivity, activity_id)
         activity.review_status = ReviewState.published
+        _share_with_fixture_class(db, activity)
         db.commit()
 
     assert client.post("/api/v1/workshops/join", headers=student,
@@ -887,6 +898,7 @@ def test_publish_retires_the_previous_version(flow):
         original_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
         original = db.get(LearningActivity, original_id)
         original.review_status = ReviewState.published
+        _share_with_fixture_class(db, original)
         original.judge0_verified = True
         version_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
         db.get(LearningActivity, version_id).version_of = original_id
@@ -939,6 +951,7 @@ def _started_quiz_exam(client, new_session, users) -> tuple[str, str]:
     with new_session() as db:
         quiz_id = _quiz(db, users["instructor"])
         db.get(LearningActivity, quiz_id).review_status = ReviewState.published
+        _share_with_fixture_class(db, db.get(LearningActivity, quiz_id))
         db.commit()
     instructor = _token(users["instructor"])
     student = _token(users["student"])
@@ -1011,11 +1024,37 @@ def test_workshop_list_query_count_does_not_grow_with_workshops(flow):
     assert queries_to_list_workshops() == with_one, "each extra workshop must not add queries"
 
 
-def _published_activity(db: Session, activity_id: uuid.UUID) -> None:
+def _published_activity(db: Session, activity_id: uuid.UUID, *, share: bool = True) -> None:
     activity = db.get(LearningActivity, activity_id)
     activity.review_status = ReviewState.published
     activity.judge0_verified = True
+    if share:
+        _share_with_fixture_class(db, activity)
     db.commit()
+
+
+def _share_with_fixture_class(db: Session, activity: LearningActivity) -> None:
+    """Share a published activity with a class Workshop of its language (ADR 0001).
+
+    Workshops decide what a student sees, so the fixture's Python student and Java
+    student ("other_track") each belong to the class Workshop of their language. It is
+    created on first use, so tests that never publish keep an empty Workshop list.
+    """
+    name = f"{FIXTURE_CLASS} {activity.language.value}"
+    workshop = db.query(Workshop).filter(Workshop.name == name).one_or_none()
+    if workshop is None:
+        owner = db.query(Profile.id).filter(Profile.role == UserRole.admin,
+                                            Profile.pseudonym_id.like("test_%")).order_by(Profile.id).first()
+        workshop = Workshop(name=name, language=activity.language, created_by=owner.id,
+                            join_code=uuid.uuid4().hex[:8].upper())
+        db.add(workshop)
+        db.flush()
+        member = {ProgrammingLang.python: "student", ProgrammingLang.java: "other_track"}.get(activity.language)
+        members = db.query(Profile.id).filter(Profile.role == UserRole.student, Profile.pseudonym_id.like("test_%"),
+                                              Profile.enrolled_language == activity.language).all() if member else []
+        db.add_all(WorkshopMember(workshop_id=workshop.id, profile_id=row.id) for row in members)
+    if not db.query(WorkshopActivity).filter_by(workshop_id=workshop.id, activity_id=activity.id).first():
+        db.add(WorkshopActivity(workshop_id=workshop.id, activity_id=activity.id))
 
 
 def _ranked_student(db: Session, xp: int, *, handle: str | None = None,
@@ -1242,12 +1281,13 @@ def test_mastery_map_matches_quest_visibility_and_orders_concepts(flow):
         ]:
             activity = db.get(LearningActivity, activity_id)
             activity.topic_concept, activity.sequence_order = name, sequence
-            if activity_id != draft:
-                activity.review_status = ReviewState.published
             if activity_id == other:
-                activity.language = ProgrammingLang.java
+                activity.language = ProgrammingLang.java  # shared with a Java class this student isn't in
             if activity_id == future:
                 activity.opens_at = datetime.now(timezone.utc) + timedelta(days=1)
+            if activity_id != draft:
+                activity.review_status = ReviewState.published
+                _share_with_fixture_class(db, activity)
         db.add(ActivityAttempt(student_id=users["student"], activity_id=first, attempt_number=1, is_successful=True))
         db.add(SubmissionJob(
             student_id=users["student"], activity_id=own, idempotency_key="map-syntax",
@@ -1347,6 +1387,8 @@ def test_challenge_with_no_test_cases_records_no_practice_or_codex_progress(flow
             topic_concept="Without tests", title="No cases", review_status=ReviewState.published,
         )
         db.add(activity)
+        db.flush()
+        _share_with_fixture_class(db, activity)
         db.commit()
         activity_id = str(activity.id)
     accepted = client.post("/api/v1/submission-jobs", headers={**student, "Idempotency-Key": "zero-test-cases"},
@@ -1370,10 +1412,12 @@ def _recall_concept(new_session, users, now):
             quiz = db.get(LearningActivity, quiz_id)
             quiz.topic_concept = "BQ Recall"
             quiz.review_status = ReviewState.published
+            _share_with_fixture_class(db, quiz)
         smaller = _quiz(db, users["instructor"])
         quiz = db.get(LearningActivity, smaller)
         quiz.topic_concept = "BQ Too Few Questions"
         quiz.review_status = ReviewState.published
+        _share_with_fixture_class(db, quiz)
         # Two questions: below the three-question floor for a recall.
         quiz.quiz_questions_json = {"questions": quiz.quiz_questions_json["questions"][:2]}
         db.add_all([
@@ -1394,6 +1438,7 @@ def test_three_question_concept_gets_a_short_recall_with_a_two_thirds_bar(flow, 
         quiz = db.get(LearningActivity, quiz_id)
         quiz.topic_concept = "BQ Short Recall"
         quiz.review_status = ReviewState.published
+        _share_with_fixture_class(db, quiz)
         db.add(ActivityAttempt(student_id=users["student"], activity_id=quiz_id, attempt_number=1,
                                is_successful=True, created_at=now - timedelta(days=REVIEW_INTERVAL_DAYS[0])))
         db.commit()
@@ -1711,7 +1756,7 @@ def test_chat_status_checks_access_and_limits_without_using_gemini(flow, monkeyp
     assert response.json() == {
         "status": "ready",
         "role": "student",
-        "language": "python",
+        "language": None,  # students have no single language (ADR 0001)
         "history_enabled": settings.chat_history_enabled,
         "pdf_upload_max_bytes": chat_api.CHAT_PDF_MAX_BYTES,
         "limits": {
@@ -2144,7 +2189,7 @@ def test_chat_rejects_nonvisible_student_activity(flow, monkeypatch, visibility)
     monkeypatch.setattr(chat_api, "_generate_chat_reply", fake_reply)
     with new_session() as db:
         activity_id = _challenge(db, users["instructor"])
-        _published_activity(db, activity_id)
+        _published_activity(db, activity_id, share=False)  # course-only: visibility comes from the course
         activity = db.get(LearningActivity, activity_id)
         activity.course_id = course_id
         now = datetime.now(timezone.utc)
@@ -2770,6 +2815,7 @@ def test_ai_failures_leave_drafts_and_hint_allowance_intact(flow, monkeypatch, c
         activity_id = _challenge(db, users["instructor"], reference="PRINT_INPUT")
         activity = db.get(LearningActivity, activity_id)
         activity.review_status = ReviewState.published
+        _share_with_fixture_class(db, activity)
         activity.course_id = course_id
         db.commit()
 
@@ -3290,6 +3336,7 @@ def test_workshop_activity_updates_are_ordered_and_observe_archive_and_scope(flo
         ids = [_quiz(db, users["instructor"]) for _ in range(3)]
         for activity_id in ids:
             db.get(LearningActivity, activity_id).review_status = ReviewState.published
+            _share_with_fixture_class(db, db.get(LearningActivity, activity_id))
         db.commit()
     first, second, third = map(str, ids)
     root = "/api/v1/workshops"
@@ -3324,8 +3371,10 @@ def test_workshop_activity_catalog_and_details_use_workshop_scope(flow):
         shared, available, draft = [_quiz(db, users["instructor"]) for _ in range(3)]
         activity = db.get(LearningActivity, shared)
         activity.review_status = ReviewState.published
+        _share_with_fixture_class(db, activity)
         activity.opens_at = datetime.now(timezone.utc) + timedelta(days=1)
         db.get(LearningActivity, available).review_status = ReviewState.published
+        _share_with_fixture_class(db, db.get(LearningActivity, available))
         db.commit()
     base = "/api/v1/workshops"
     created = client.post(base, headers=owner, json={
@@ -3404,6 +3453,7 @@ def test_workshop_upcoming_reports_practice_only_even_with_legacy_exams(flow):
             activity_ids.append(activity_id)
             activity = db.get(LearningActivity, activity_id)
             activity.review_status = ReviewState.published
+            _share_with_fixture_class(db, activity)
             activity.closes_at = now + timedelta(days=days)
         course = Course(code=uuid.uuid4().hex[:24], title="Restricted exam course")
         db.add(course)
@@ -3439,6 +3489,7 @@ def test_workshop_progress_is_read_only_practice_and_current_members_only(flow):
         activity_ids = [_quiz(db, users["instructor"]) for _ in range(3)]
         for activity_id in activity_ids:
             db.get(LearningActivity, activity_id).review_status = ReviewState.published
+            _share_with_fixture_class(db, db.get(LearningActivity, activity_id))
         now = datetime.now(timezone.utc)
         exam = Exam(created_by=users["instructor"], title="Separate exam", opens_at=now,
                     closes_at=now + timedelta(hours=1), duration_minutes=30)
@@ -3502,3 +3553,97 @@ def test_a_new_consent_form_version_asks_students_again(flow, monkeypatch):
     assert (status["choice"], status["previous_version"]) == ("accepted", None)
     with new_session() as db:
         assert users["student"] in consented_student_ids(db, [users["student"]])
+
+
+def _class_workshop(client: TestClient, instructor: dict[str, str], language: str, *activity_ids: uuid.UUID) -> str:
+    created = client.post("/api/v1/workshops", headers=instructor, json={
+        "name": f"{language} class {uuid.uuid4().hex[:6]}", "language": language,
+        "activity_ids": [str(activity_id) for activity_id in activity_ids],
+    })
+    assert created.status_code == 201, created.text
+    return created.json()["id"]
+
+
+def _add_member(new_session, workshop_id: str, student_id: uuid.UUID) -> None:
+    with new_session() as db:
+        db.add(WorkshopMember(workshop_id=uuid.UUID(workshop_id), profile_id=student_id))
+        db.commit()
+
+
+def _quest_ids(client: TestClient, headers: dict[str, str]) -> set[str]:
+    response = client.get("/api/v1/quests", headers=headers)
+    assert response.status_code == 200, response.text
+    return {row["id"] for row in response.json()}
+
+
+def test_workshops_decide_what_a_student_opens_in_any_language(flow, monkeypatch):
+    client, new_session, users = flow
+    instructor, student = _token(users["instructor"]), _token(users["student"])
+    with new_session() as db:
+        python_quiz = _quiz(db, users["instructor"])
+        java_challenge = _challenge(db, users["instructor"], reference="print(2 * int(input()))")
+        db.get(LearningActivity, java_challenge).language = ProgrammingLang.java
+        db.commit()
+    for activity_id in (python_quiz, java_challenge):
+        _review_and_publish(new_session, activity_id, users["instructor"], share=False)
+    python_class = _class_workshop(client, instructor, "python", python_quiz)
+    java_class = _class_workshop(client, instructor, "java", java_challenge)
+    for workshop_id in (python_class, java_class):
+        _add_member(new_session, workshop_id, users["student"])
+
+    # A student who studies Python reaches the Java Workshop's challenge like the Python quiz.
+    assert {str(python_quiz), str(java_challenge)} <= _quest_ids(client, student)
+    assert _graded_job(client, student, java_challenge, "print(2 * int(input()))")["xp_awarded"] == 40
+    quiz = client.post("/api/v1/quests/submit-quiz", headers=student, json={
+        "activity_id": str(python_quiz), "answers": {"q1": "A", "q2": "A", "q3": "A"}})
+    assert quiz.status_code == 200, quiz.text
+
+    # The AI tutor accepts the Java activity as context for this student.
+    prompts = []
+    monkeypatch.setattr(chat_api, "_generate_chat_reply",
+                        lambda messages, system_instruction, turn: prompts.append(system_instruction) or "Trace it.")
+    _enroll_chat_students(new_session, users["student"])
+    chat = client.post("/api/v1/chat/messages", headers=student, json=_chat_payload(activity_id=java_challenge))
+    assert chat.status_code == 200, chat.text
+    assert "Programming language: Java" in prompts[-1]
+
+    # A student outside both Workshops sees and opens neither, whatever their language.
+    outsider = _token(users["other_track"])
+    assert not {str(python_quiz), str(java_challenge)} & _quest_ids(client, outsider)
+    refused = client.post("/api/v1/submission-jobs", headers={**outsider, "Idempotency-Key": uuid.uuid4().hex},
+                          json={"activity_id": str(java_challenge), "source_code": "print(1)", "dry_run_only": False})
+    assert refused.status_code == 404
+
+    # Archiving the Java Workshop closes its activity to new attempts.
+    assert client.post(f"/api/v1/workshops/{java_class}/archive", headers=instructor, json={}).status_code == 200
+    assert str(java_challenge) not in _quest_ids(client, student)
+    closed = client.post("/api/v1/submission-jobs", headers={**student, "Idempotency-Key": uuid.uuid4().hex},
+                         json={"activity_id": str(java_challenge), "source_code": "print(1)", "dry_run_only": False})
+    assert closed.status_code == 404
+    # Nothing earned is taken away: the solved challenge's XP stays on the profile.
+    assert client.get("/api/v1/profile/me", headers=student).json()["xp_points"] >= 40
+
+
+def test_leaving_one_workshop_keeps_an_activity_another_workshop_shares(flow):
+    client, new_session, users = flow
+    instructor, student = _token(users["instructor"]), _token(users["student"])
+    with new_session() as db:
+        quiz_id = _quiz(db, users["instructor"])
+    _review_and_publish(new_session, quiz_id, users["instructor"], share=False)
+    first = _class_workshop(client, instructor, "python", quiz_id)
+    second = _class_workshop(client, instructor, "python", quiz_id)
+    for workshop_id in (first, second):
+        _add_member(new_session, workshop_id, users["student"])
+
+    assert client.request("DELETE", f"/api/v1/workshops/{first}/membership", headers=student, json={}).status_code == 204
+    assert str(quiz_id) in _quest_ids(client, student)
+    assert client.request("DELETE", f"/api/v1/workshops/{second}/membership", headers=student, json={}).status_code == 204
+    assert str(quiz_id) not in _quest_ids(client, student)
+
+
+def test_a_published_activity_outside_every_workshop_reaches_no_student(flow):
+    client, new_session, users = flow
+    with new_session() as db:
+        quiz_id = _quiz(db, users["instructor"])
+    _review_and_publish(new_session, quiz_id, users["instructor"], share=False)
+    assert str(quiz_id) not in _quest_ids(client, _token(users["student"]))

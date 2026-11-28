@@ -21,7 +21,7 @@ from app.services.profile_attention import (
 from app.services.gamification.progression import XP_PER_LEVEL, quest_completion
 from app.services.gamification.sequencer import determine_track_recommendation
 from app.services.gamification.solve_quality import help_pattern
-from app.services.attempt_visibility import published_track_clause
+from app.services.attempt_visibility import published_student_clause
 from app.services.usernames import normalize_username
 from sqlalchemy.exc import IntegrityError
 from app.models.entities import (
@@ -508,7 +508,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
             LearningActivity.title,
             LearningActivity.topic_concept,
             LearningActivity.activity_type,
-            case((published_track_clause(user), True), else_=False).label("quest_available"),
+            case((published_student_clause(user), True), else_=False).label("quest_available"),
         )
         .join(LearningActivity, LearningActivity.id == ActivityAttempt.activity_id)
         .filter(visible_attempt_filter)

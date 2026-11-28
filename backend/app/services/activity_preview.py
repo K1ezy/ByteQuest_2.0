@@ -12,7 +12,7 @@ from app.models.entities import (
     Profile, Workshop, WorkshopActivity, WorkshopMember,
 )
 from app.services.attempt_visibility import (
-    practice_attempt_clause, published_track_clause, workshop_shareable_activity_clause,
+    practice_attempt_clause, published_student_clause, workshop_shareable_activity_clause,
 )
 from app.services.course_access import has_course_role
 from app.services.ml_predictor.exam_history import course_exam_ids
@@ -56,7 +56,7 @@ def practice_preview(db: Session, student: Profile, activity: LearningActivity) 
         ActivityAttempt.student_id == student.id, practice_attempt_clause(),
         LearningActivity.id != activity.id, LearningActivity.activity_type == activity.activity_type,
         LearningActivity.exam_only.is_(False),
-        published_track_clause(student),
+        published_student_clause(student),
     )
     rows = _top_results(db, results.filter(LearningActivity.id.in_(shared_activities)))
     scope: Literal["workshop", "course"] = "workshop"

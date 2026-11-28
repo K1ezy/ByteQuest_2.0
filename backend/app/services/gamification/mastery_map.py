@@ -11,7 +11,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, load_only
 
 from app.models.entities import ActivityAttempt, ActivityKind, LearningActivity, Profile, ProgrammingLang, _utcnow
-from app.services.attempt_visibility import learner_visible_attempt_clause, published_track_clause
+from app.services.attempt_visibility import learner_visible_attempt_clause, published_student_clause
 from app.services.gamification.codex import ERROR_LABELS, ErrorCategory, practice_errors
 from app.services.gamification.memory import MemoryConcept, review_overview
 from app.services.gamification.quiz_content import StoredQuizQuestion, parse_quiz_questions
@@ -44,7 +44,7 @@ def visible_concept_activities(
     query = db.query(LearningActivity).options(load_only(
         LearningActivity.id, LearningActivity.activity_type, LearningActivity.topic_concept,
         LearningActivity.sequence_order, LearningActivity.quiz_questions_json,
-    )).filter(published_track_clause(student, now))
+    )).filter(published_student_clause(student, now))
     if concept is not None:
         query = query.filter(LearningActivity.topic_concept == concept)
     activities = []

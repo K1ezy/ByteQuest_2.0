@@ -4,12 +4,12 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #7
 
-- [ ] A student in a Python and a Java Workshop can open, submit and be graded on an activity from each (API integration test)
-- [ ] An activity shared only by a Workshop the student isn't in is refused
-- [ ] An archived Workshop, or one the student left, refuses new attempts while past attempts, XP, stars and badges stay visible
-- [ ] An activity shared by another Workshop the student still belongs to stays open after leaving one Workshop
-- [ ] Chat about a Java activity uses Java for a student who is also in a Python Workshop
-- [ ] Old track-based access tests are rewritten to assert the new rule; backend suite passes
+- [x] A student in a Python and a Java Workshop can open, submit and be graded on an activity from each (API integration test)
+- [x] An activity shared only by a Workshop the student isn't in is refused
+- [x] An archived Workshop, or one the student left, refuses new attempts while past attempts, XP, stars and badges stay visible
+- [x] An activity shared by another Workshop the student still belongs to stays open after leaving one Workshop
+- [x] Chat about a Java activity uses Java for a student who is also in a Python Workshop
+- [x] Old track-based access tests are rewritten to assert the new rule; backend suite passes

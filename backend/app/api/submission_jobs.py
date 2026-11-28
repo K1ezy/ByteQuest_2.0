@@ -117,11 +117,10 @@ def submit_job(
         LearningActivity.id == body.activity_id,
         LearningActivity.activity_type == ActivityKind.challenge,
         LearningActivity.review_status == ReviewState.published,
-        LearningActivity.language == user.enrolled_language,
         student_visible_activity_clause(user.id, accepted_at),
     ).first()
     if activity is None:
-        raise HTTPException(404, "Published challenge not found on your track.")
+        raise HTTPException(404, "Published challenge not found in your Workshops.")
     if not body.dry_run_only and activity_is_closed(activity, accepted_at):
         raise HTTPException(409, "This challenge is closed for submissions.")
     # Practice and official work hold separate budgets, so sample runs can never

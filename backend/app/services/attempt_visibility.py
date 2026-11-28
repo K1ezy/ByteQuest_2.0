@@ -124,14 +124,11 @@ def activity_has_opened(activity: LearningActivity, now: datetime | None = None)
 
 
 def student_activity_clause(student_id: uuid.UUID):
-    """A student reaches an activity through its course, or a workshop holding it.
+    """A student reaches an activity through an active Workshop that shares it, or its course.
 
-    Joining a workshop by code adds a workshop membership and no course row,
-    so scoping on the course alone would hide the activities a student joined for.
-
-    An activity with no course belongs to no one and cannot be scoped, so it stays
-    visible to its language track: seeded content must not vanish silently.
-    An archived course closes its activities on both paths; past attempts stay on record.
+    Workshops, not a per-student language, decide what a student sees (ADR 0001), so
+    an activity shared by no Workshop and no course of the student's reaches no student.
+    An archived or left Workshop stops granting access; past attempts stay on record.
     """
     in_course = exists().where(
         and_(
@@ -146,13 +143,15 @@ def student_activity_clause(student_id: uuid.UUID):
             WorkshopMember.workshop_id == WorkshopActivity.workshop_id,
             WorkshopMember.profile_id == student_id,
             Workshop.id == WorkshopActivity.workshop_id,
-            or_(LearningActivity.destination_workshop_id.is_(None), and_(
-                LearningActivity.destination_workshop_id == Workshop.id, Workshop.archived_at.is_(None))),
+            Workshop.archived_at.is_(None),
+            or_(LearningActivity.destination_workshop_id.is_(None),
+                LearningActivity.destination_workshop_id == Workshop.id),
             workshop_shareable_activity_clause(Workshop.created_by),
         )
     ).correlate(LearningActivity)
-    return and_(course_open_clause(), or_(in_workshop, and_(LearningActivity.destination_workshop_id.is_(None),
-                                                           or_(LearningActivity.course_id.is_(None), in_course))))
+    course_only = and_(LearningActivity.destination_workshop_id.is_(None),
+                       LearningActivity.course_id.is_not(None), in_course)
+    return and_(course_open_clause(), or_(in_workshop, course_only))
 
 
 def student_visible_activity_clause(student_id: uuid.UUID, now: datetime | None = None):
@@ -169,9 +168,8 @@ def student_visible_activity_clause(student_id: uuid.UUID, now: datetime | None 
     )
 
 
-def published_track_clause(student: Profile, now: datetime | None = None):
+def published_student_clause(student: Profile, now: datetime | None = None):
     return and_(
-        LearningActivity.language == student.enrolled_language,
         LearningActivity.review_status == ReviewState.published,
         student_visible_activity_clause(student.id, now),
     )

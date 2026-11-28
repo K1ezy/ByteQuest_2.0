@@ -45,11 +45,10 @@ def challenge(db: Session, activity_id: uuid.UUID, user: Profile) -> LearningAct
         LearningActivity.id == activity_id,
         LearningActivity.activity_type == ActivityKind.challenge,
         LearningActivity.review_status == ReviewState.published,
-        LearningActivity.language == user.enrolled_language,
         student_visible_activity_clause(user.id),
     ).first()
     if activity is None:
-        raise HTTPException(404, "Published challenge not found on your track.")
+        raise HTTPException(404, "Published challenge not found in your Workshops.")
     return activity
 
 

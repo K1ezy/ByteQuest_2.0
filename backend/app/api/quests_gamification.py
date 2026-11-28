@@ -49,7 +49,7 @@ from app.services.gamification.sequencer import (
 from app.services.attempt_visibility import (
     activity_is_closed,
     learner_visible_attempt_clause,
-    published_track_clause,
+    published_student_clause,
 )
 from app.services.ml_predictor.audit import record_prediction_outcome
 from app.services.ml_predictor.shadow import record_shadow_prediction
@@ -246,7 +246,7 @@ def quest_performance_preview(
 ) -> ActivityPreview:
     _ensure_student(current_user)
     activity = db.query(LearningActivity).filter(
-        LearningActivity.id == activity_id, published_track_clause(current_user),
+        LearningActivity.id == activity_id, published_student_clause(current_user),
         LearningActivity.activity_type.in_((ActivityKind.challenge, ActivityKind.quiz)),
         LearningActivity.exam_only.is_(False),
     ).first()
@@ -264,7 +264,7 @@ def list_published_quests(
     """List visible quests with detail for every quest or just the requested one."""
     now = datetime.now(timezone.utc)
     visibility = (
-        published_track_clause(current_user, now) if current_user.role == UserRole.student
+        published_student_clause(current_user, now) if current_user.role == UserRole.student
         else LearningActivity.review_status == ReviewState.published
     )
     query = db.query(LearningActivity).filter(visibility)
@@ -367,7 +367,7 @@ def submit_conceptual_quiz(
         .filter(
             LearningActivity.id == payload.activity_id,
             LearningActivity.activity_type == ActivityKind.quiz,
-            published_track_clause(current_user, accepted_at),
+            published_student_clause(current_user, accepted_at),
         )
         .first()
     )

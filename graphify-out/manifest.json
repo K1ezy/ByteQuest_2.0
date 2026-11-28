@@ -12,9 +12,9 @@
     "semantic_hash": ""
   },
   "backend/app/api/chat.py": {
-    "mtime": 1795586943.140212,
-    "seen": 1795587865.3480105,
-    "ast_hash": "09f22482b9775bc556ae644186c9a5ad",
+    "mtime": 1795839730.4975667,
+    "seen": 1795839880.5214982,
+    "ast_hash": "c803e480a87f171c3c6d18105a90acc8",
     "semantic_hash": ""
   },
   "backend/app/api/exams.py": {
@@ -30,21 +30,21 @@
     "semantic_hash": ""
   },
   "backend/app/api/pilot.py": {
-    "mtime": 1795586943.1432116,
-    "seen": 1795587865.3520205,
-    "ast_hash": "aeb0d098bfbbf915c2dca8d1cb5278c8",
+    "mtime": 1795839042.4369571,
+    "seen": 1795839880.525396,
+    "ast_hash": "20eaec1190713acf0d1755bd3d3b2ab4",
     "semantic_hash": ""
   },
   "backend/app/api/profiles.py": {
-    "mtime": 1795587209.2191615,
-    "seen": 1795587865.3520205,
-    "ast_hash": "fcc4bafdc9ab9cb9e211216cc8199f69",
+    "mtime": 1795839033.694481,
+    "seen": 1795839880.525396,
+    "ast_hash": "4a5b9cbbdf241c8e4cece5585d8ad4eb",
     "semantic_hash": ""
   },
   "backend/app/api/quests_gamification.py": {
-    "mtime": 1795647961.1612957,
-    "seen": 1795648205.5107126,
-    "ast_hash": "35974c6de05755d982245a838c1a92d9",
+    "mtime": 1795839033.7146146,
+    "seen": 1795839880.525396,
+    "ast_hash": "460661b9dec24669a00d3f7d886ff573",
     "semantic_hash": ""
   },
   "backend/app/api/rag_instructor.py": {
@@ -54,15 +54,15 @@
     "semantic_hash": ""
   },
   "backend/app/api/submission_jobs.py": {
-    "mtime": 1795586943.144209,
-    "seen": 1795587865.3530211,
-    "ast_hash": "449128029bf610f3d6dd67b24171bd87",
+    "mtime": 1795839042.4209552,
+    "seen": 1795839880.525929,
+    "ast_hash": "9d483a22fddcddb9f45a7dedbcdc756b",
     "semantic_hash": ""
   },
   "backend/app/api/submissions.py": {
-    "mtime": 1795002117.9605029,
-    "seen": 1795545913.9461555,
-    "ast_hash": "c4427cc4def7d207bc754fc6eb900245",
+    "mtime": 1795839042.286384,
+    "seen": 1795839880.525929,
+    "ast_hash": "82d3c69acbdcaa15f4cb09389a83231b",
     "semantic_hash": ""
   },
   "backend/app/core/config.py": {
@@ -156,9 +156,9 @@
     "semantic_hash": ""
   },
   "backend/app/services/attempt_visibility.py": {
-    "mtime": 1795586632.1555953,
-    "seen": 1795587865.3600209,
-    "ast_hash": "db08ff31429593730e96e9ad1bcb63c0",
+    "mtime": 1795839032.6145568,
+    "seen": 1795839880.532441,
+    "ast_hash": "4447a7145e005ee6e25a8e315c5e36bc",
     "semantic_hash": ""
   },
   "backend/app/services/audit.py": {
@@ -198,9 +198,9 @@
     "semantic_hash": ""
   },
   "backend/app/services/gamification/progression.py": {
-    "mtime": 1795506147.7615485,
-    "seen": 1795545913.9461555,
-    "ast_hash": "a02f21c3bb720254b7376cc3e9c89c04",
+    "mtime": 1795839724.6452506,
+    "seen": 1795839880.536237,
+    "ast_hash": "cf895596de6d600182a57ae880224a1f",
     "semantic_hash": ""
   },
   "backend/app/services/gamification/quiz_content.py": {
@@ -432,9 +432,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_learning_flow_integration.py": {
-    "mtime": 1795647989.6514711,
-    "seen": 1795648205.578225,
-    "ast_hash": "8db54e8cfc170e762fe4239596a4826d",
+    "mtime": 1795839724.6478784,
+    "seen": 1795839880.5554154,
+    "ast_hash": "c28c605debd0cb1a2ae02ea91db3a21d",
     "semantic_hash": ""
   },
   "backend/tests/test_ml_exam_features.py": {
@@ -1266,9 +1266,9 @@
     "semantic_hash": ""
   },
   "CLAUDE.md": {
-    "mtime": 1795339558.4024708,
-    "seen": 1795545913.947662,
-    "ast_hash": "7bddde95a76522ba1af4b223280077a2",
+    "mtime": 1795835541.9108088,
+    "seen": 1795839880.6481,
+    "ast_hash": "e768de6649f87872026d97eab13adeae",
     "semantic_hash": ""
   },
   "README.md": {
@@ -1812,9 +1812,9 @@
     "semantic_hash": ""
   },
   "backend/app/services/gamification/mastery_map.py": {
-    "mtime": 1795512143.4219043,
-    "seen": 1795545913.9461555,
-    "ast_hash": "2955b426163064ee78fd1d0c0e26396c",
+    "mtime": 1795839033.8009548,
+    "seen": 1795839880.535706,
+    "ast_hash": "5ba96945c2668d8e217fdf8a88635bc3",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/quests/page.test.tsx": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795832948.4217558,
-    "seen": 1795832977.0841646,
-    "ast_hash": "88ed6f151c2309c018f1fede7a118d2f",
+    "mtime": 1795839846.0860198,
+    "seen": 1795839880.6500907,
+    "ast_hash": "a8a56d709f2fd2ca7497d777c5564a63",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -2874,9 +2874,9 @@
     "semantic_hash": ""
   },
   "backend/app/services/activity_preview.py": {
-    "mtime": 1795530042.156244,
-    "seen": 1795545913.9461555,
-    "ast_hash": "524dcf1dd584464329a5ef6625929923",
+    "mtime": 1795839033.774134,
+    "seen": 1795839880.5297885,
+    "ast_hash": "c2184279423c3b496d4dbb3391f7d6a2",
     "semantic_hash": ""
   },
   "backend/scripts/export_ml_dataset.py": {
@@ -3042,9 +3042,9 @@
     "semantic_hash": ""
   },
   "GLOSSARY.md": {
-    "mtime": 1795572048.9566474,
-    "seen": 1795572358.294073,
-    "ast_hash": "d7488f61585906dfe5dde852516724b8",
+    "mtime": 1795838249.0553432,
+    "seen": 1795839880.6481,
+    "ast_hash": "a27e4d18487409bed3509c26a05abba8",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/instructor/predictions/page.tsx": {
@@ -3093,6 +3093,84 @@
     "mtime": 1795832898.5793533,
     "seen": 1795832976.978442,
     "ast_hash": "3df6db16920fa00a01e89d964cd62ac1",
+    "semantic_hash": ""
+  },
+  ".scratch/workshop-languages/issues/01-workshop-access-rule.md": {
+    "mtime": 1795838806.3916543,
+    "seen": 1795839880.6470935,
+    "ast_hash": "711157290365c62e92b14e05548e3a09",
+    "semantic_hash": ""
+  },
+  ".scratch/workshop-languages/issues/02-join-by-code-and-workshop-languages.md": {
+    "mtime": 1795838810.4822652,
+    "seen": 1795839880.6470935,
+    "ast_hash": "6d5041adab3b4532f595012f92fb3e11",
+    "semantic_hash": ""
+  },
+  ".scratch/workshop-languages/issues/03-quest-map-across-languages.md": {
+    "mtime": 1795838816.2563205,
+    "seen": 1795839880.6470935,
+    "ast_hash": "d430186740957c2a539dbd844eb3d1b1",
+    "semantic_hash": ""
+  },
+  ".scratch/workshop-languages/issues/04-one-xp-and-next-up.md": {
+    "mtime": 1795838821.7430618,
+    "seen": 1795839880.6470935,
+    "ast_hash": "19387de3f89f3271bb74f3bbc46d4606",
+    "semantic_hash": ""
+  },
+  ".scratch/workshop-languages/issues/05-class-leaderboard.md": {
+    "mtime": 1795838825.8863587,
+    "seen": 1795839880.6470935,
+    "ast_hash": "23c532228f8f985324376fa77c00c5bf",
+    "semantic_hash": ""
+  },
+  ".scratch/workshop-languages/issues/06-mastery-and-reviews-across-languages.md": {
+    "mtime": 1795838831.7967663,
+    "seen": 1795839880.6470935,
+    "ast_hash": "8a057857c6ca076cff75a6cac59c49c3",
+    "semantic_hash": ""
+  },
+  ".scratch/workshop-languages/issues/07-ml-predictions-per-workshop.md": {
+    "mtime": 1795838837.2902951,
+    "seen": 1795839880.6470935,
+    "ast_hash": "3cdd48962c5d9089b7e8482d576f3e71",
+    "semantic_hash": ""
+  },
+  ".scratch/workshop-languages/issues/08-finish-verify-codex-checkpoint.md": {
+    "mtime": 1795838848.8526533,
+    "seen": 1795839880.6470935,
+    "ast_hash": "2f34d1078439f02e8d12ee9e580745bf",
+    "semantic_hash": ""
+  },
+  ".scratch/workshop-languages/spec.md": {
+    "mtime": 1795838610.223803,
+    "seen": 1795839880.6470935,
+    "ast_hash": "526f6c8c4afcf7e9ae36ce9b8ed86ad2",
+    "semantic_hash": ""
+  },
+  "docs/adr/0001-workshops-decide-what-students-see.md": {
+    "mtime": 1795838527.8428729,
+    "seen": 1795839880.6572318,
+    "ast_hash": "35901acf675e06b77b43a51db7fe566a",
+    "semantic_hash": ""
+  },
+  "docs/agents/domain.md": {
+    "mtime": 1795835541.861667,
+    "seen": 1795839880.6572318,
+    "ast_hash": "b20c849deb2944f6fa5365c51f9cd134",
+    "semantic_hash": ""
+  },
+  "docs/agents/issue-tracker.md": {
+    "mtime": 1795835537.974495,
+    "seen": 1795839880.6572318,
+    "ast_hash": "864c7d5bf5113c82b8aa6c05887bc84a",
+    "semantic_hash": ""
+  },
+  "docs/agents/triage-labels.md": {
+    "mtime": 1795835541.8153498,
+    "seen": 1795839880.6572318,
+    "ast_hash": "d7e50dac17098ccade780750b97517a1",
     "semantic_hash": ""
   }
 }

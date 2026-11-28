@@ -95,7 +95,6 @@ def run_code_submission(
         db.query(LearningActivity)
         .filter(
             LearningActivity.id == payload.activity_id,
-            LearningActivity.language == current_user.enrolled_language,
             LearningActivity.activity_type == ActivityKind.challenge,
             LearningActivity.review_status == ReviewState.published,
             student_activity_clause(current_user.id),
