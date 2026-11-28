@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795882870.6396723,
-    "seen": 1795882898.22264,
-    "ast_hash": "235ee7db19414a5cb79dc8d0a889e655",
+    "mtime": 1795883419.9314108,
+    "seen": 1795883448.8204653,
+    "ast_hash": "cc2e8b4e627038403adc0383de973b2f",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -3228,9 +3228,9 @@
     "semantic_hash": ""
   },
   ".scratch/insight-clarity/issues/08-activity-and-gamification-insights.md": {
-    "mtime": 1795861964.7784622,
-    "seen": 1795862611.7694468,
-    "ast_hash": "f3301f5bec11bbd5025abf22a5d063fc",
+    "mtime": 1795882899.195258,
+    "seen": 1795883448.8129954,
+    "ast_hash": "70c7e425b5656984a0bba08eed94d21a",
     "semantic_hash": ""
   },
   ".scratch/insight-clarity/issues/09-layout-tests-and-wrap-up.md": {
@@ -3273,6 +3273,12 @@
     "mtime": 1795865056.1721127,
     "seen": 1795880178.3700383,
     "ast_hash": "9fcc992f30bf6c42e68073ecbbc2232c",
+    "semantic_hash": ""
+  },
+  "frontend/layout-tests/insight-clarity.layout.ts": {
+    "mtime": 1795883193.3903584,
+    "seen": 1795883448.7267246,
+    "ast_hash": "5204f909312caa41b2e3f698a4aab9c8",
     "semantic_hash": ""
   }
 }

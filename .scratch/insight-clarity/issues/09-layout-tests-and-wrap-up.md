@@ -4,9 +4,9 @@
 
 **Blocked by:** 01, 02, 03, 04, 05, 06, 07, 08
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #24
 
-- [ ] Layout tests for the changed screens pass at all three sizes
-- [ ] Backend and frontend suites pass
-- [ ] System status log updated
+- [x] Layout tests for the changed screens pass at all three sizes
+- [x] Backend and frontend suites pass
+- [x] System status log updated

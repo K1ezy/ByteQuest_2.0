@@ -4799,8 +4799,8 @@ html[data-contrast="high"] .solve-stars .is-earned { color: #7a4a00; }
 .insights-table th[scope="row"] { font-weight: 650; text-align: left; }
 .insights-meters { display: grid; gap: 14px; margin: 12px 0 0; padding: 0; list-style: none; }
 /* A fixed figure column keeps every bar the same length, so rows compare at a glance. */
-.insights-meters li { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(120px, 2fr) 9rem; align-items: center; gap: 12px; }
-.insights-meter-name { display: grid; gap: 1px; min-width: 0; }
+.insights-meters li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(4rem, 2fr) auto; align-items: center; gap: 12px; }
+.insights-meter-name { display: grid; gap: 1px; min-width: 0; overflow-wrap: anywhere; }
 .insights-meter-name strong { color: var(--ink); font-size: var(--text-sm); }
 .insights-meter-name span { color: var(--muted); font-size: var(--text-3xs); }
 .insights-meter-track { display: block; height: 10px; overflow: hidden; border-radius: 999px; background: var(--purple-soft); }
