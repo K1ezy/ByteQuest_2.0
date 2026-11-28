@@ -4,10 +4,10 @@
 
 **Blocked by:** 01, 02, 03, 04, 05, 06, 07
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #14
 
-- [ ] A search of the app code finds no reads or writes of the per-student language
-- [ ] Backend suite, frontend suite and Playwright layout test pass
-- [ ] System status log updated
-- [ ] Codex checkpoint written and linked from AGENTS.md
+- [x] A search of the app code finds no reads or writes of the per-student language
+- [x] Backend suite, frontend suite and Playwright layout test pass
+- [x] System status log updated
+- [x] Codex checkpoint written and linked from AGENTS.md

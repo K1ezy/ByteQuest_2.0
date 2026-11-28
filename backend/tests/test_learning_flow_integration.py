@@ -2267,7 +2267,7 @@ def test_one_challenge_reads_the_same_to_admin_instructor_and_student(flow, monk
 
     # Instructor: author, verify, publish, with a 60% pass mark.
     created = client.post("/api/v1/faculty/activities", headers=instructor, json={
-        "course_id": course_id, "activity_type": "challenge", "title": "Double it",
+        "course_id": course_id, "activity_type": "challenge", "language": "python", "title": "Double it",
         "topic_concept": "Arithmetic", "problem_statement": "Read a number and print twice its value.",
         "difficulty_level": 1, "xp_reward": 40, "pass_mark_percent": 60,
         "starter_code": "value = int(input())", "reference_solution_code": "print(int(input()) * 2)",
@@ -2376,8 +2376,9 @@ def test_instructor_chooses_the_activity_language_not_their_own_track(flow):
     java = client.post("/api/v1/faculty/activities", headers=instructor, json={**quiz, "language": "java"})
     assert java.status_code == 201, java.text
     assert java.json()["activity"]["language"] == "java"
+    # Accounts have no language of their own (ADR 0001), so an activity outside a Workshop must name one.
     default = client.post("/api/v1/faculty/activities", headers=instructor, json={**quiz, "title": "Default check"})
-    assert default.json()["activity"]["language"] == "python"  # the instructor's own track
+    assert default.status_code == 422 and default.json()["detail"]["field"] == "language"
     assert client.post("/api/v1/faculty/activities", headers=instructor,
                        json={**quiz, "language": "cobol"}).status_code == 422
 

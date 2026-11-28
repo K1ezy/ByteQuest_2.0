@@ -432,9 +432,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_learning_flow_integration.py": {
-    "mtime": 1795857519.0780687,
-    "seen": 1795857848.6744113,
-    "ast_hash": "05ab74d5d7593ca138c292560e9cbc4f",
+    "mtime": 1795858026.5602727,
+    "seen": 1795858326.1301708,
+    "ast_hash": "c047b7181082eb7ebcd56363f7ff0296",
     "semantic_hash": ""
   },
   "backend/tests/test_ml_exam_features.py": {
@@ -1986,9 +1986,9 @@
     "semantic_hash": ""
   },
   "backend/app/api/faculty/activities.py": {
-    "mtime": 1795657855.7998784,
-    "seen": 1795658107.1389353,
-    "ast_hash": "9af453a1afa4211c36c03aaad74f4fd6",
+    "mtime": 1795857906.935689,
+    "seen": 1795858326.0927322,
+    "ast_hash": "fff2327eae0ee17d23423976b3be86b7",
     "semantic_hash": ""
   },
   "backend/app/api/faculty/common.py": {
@@ -2430,9 +2430,9 @@
     "semantic_hash": ""
   },
   "AGENTS.md": {
-    "mtime": 1795339556.8841422,
-    "seen": 1795545913.947662,
-    "ast_hash": "4e36ce8b254e299c954baeb74dfdc272",
+    "mtime": 1795858285.9884703,
+    "seen": 1795858326.2260718,
+    "ast_hash": "3b2e31b685b6c4bff1fcba531182d4d2",
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_LIVE_DEPLOYMENT_STACK.md": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795857818.4078214,
-    "seen": 1795857848.7994235,
-    "ast_hash": "f0a80d88763f4e8c6942e1042eca980b",
+    "mtime": 1795858298.1436608,
+    "seen": 1795858326.2300735,
+    "ast_hash": "b2f0d7f62a15520ac6d88ff49dc5410c",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -3132,9 +3132,9 @@
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/issues/07-ml-predictions-per-workshop.md": {
-    "mtime": 1795838837.2902951,
-    "seen": 1795839880.6470935,
-    "ast_hash": "3cdd48962c5d9089b7e8482d576f3e71",
+    "mtime": 1795857849.7824094,
+    "seen": 1795858326.2250855,
+    "ast_hash": "9621a6a81db18bd364e531599a86541c",
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/issues/08-finish-verify-codex-checkpoint.md": {
@@ -3177,6 +3177,12 @@
     "mtime": 1795857135.9948676,
     "seen": 1795857429.2225966,
     "ast_hash": "09f1574d3a6e41c6fa7ff575894d8d0a",
+    "semantic_hash": ""
+  },
+  "docs/handoff/CODEX_CHECKPOINT_2026-11-28.md": {
+    "mtime": 1795858283.8793063,
+    "seen": 1795858326.2370741,
+    "ast_hash": "7005cc015f41f5c6fdc381f641fc74b4",
     "semantic_hash": ""
   }
 }

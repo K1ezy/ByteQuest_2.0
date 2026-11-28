@@ -131,6 +131,12 @@ def create_activity(
     course = resolve_workspace_course(db, user, payload.course_id, allow_admin=False)
     workshop = activity_destination(db, payload.workshop_id, user)
     _validate_schedule(payload.opens_at, payload.closes_at)
+    language = workshop.language if workshop else payload.language
+    if language is None:  # accounts have no language of their own (ADR 0001)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "validation_error", "field": "language", "message": "Choose the activity's programming language."},
+        )
     if payload.activity_type == "challenge" and not payload.reference_solution_code:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -142,7 +148,7 @@ def create_activity(
         created_by=user.id,
         activity_type=ActivityKind(payload.activity_type),
         exam_only=payload.exam_only,
-        language=workshop.language if workshop else (payload.language or user.enrolled_language),
+        language=language,
         topic_concept=payload.topic_concept.strip(),
         title=payload.title.strip(),
         problem_statement=payload.problem_statement.strip(),
