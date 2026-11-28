@@ -20,6 +20,7 @@ import {
   useApi,
 } from "@/components/workspace/ui";
 import { Gradebook } from "@/components/instructor/gradebook";
+import { languageList } from "@/components/workshops/workshop-ui";
 import {
   formatDateTime,
   getStudentPerformance,
@@ -206,7 +207,7 @@ function FacultyPerformance() {
                       displayName={row.display_name}
                       pseudonym={row.pseudonym}
                       username={row.username}
-                      meta={row.enrolled_language?.toUpperCase() ?? "Language not chosen"}
+                      meta={languageList(row.workshop_languages) || "No workshop yet"}
                     />
                   </td>
                   <td data-label={metrics.activities_passed.label}>

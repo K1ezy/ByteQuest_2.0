@@ -26,7 +26,7 @@ test("Workshop lessons stay downloadable and old practice links open regular cha
     const path = new URL(route.request().url()).pathname;
     switch (path) {
       case "/api/v1/profile/me":
-        return route.fulfill({ json: { id: studentId, role: "student", username: "layout-student", enrolled_language: "python" } });
+        return route.fulfill({ json: { id: studentId, role: "student", username: "layout-student", workshop_languages: ["python"] } });
       case `/api/v1/workshops/${workshopId}`:
         return route.fulfill({ json: {
           id: workshopId, name: "Python Workshop", language: "python", owner_name: "Instructor",

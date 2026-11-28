@@ -6,7 +6,8 @@ export interface Profile {
   pseudonym_id: string;
   username: string;
   role: UserRole;
-  enrolled_language: ProgrammingLanguage | null;
+  /** Languages of the active Workshops this account belongs to (ADR 0001); students choose none separately. */
+  workshop_languages: ProgrammingLanguage[];
   year_level: number;
   semester: number;
   xp_points: number;

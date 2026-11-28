@@ -1586,6 +1586,7 @@ def test_account_creation_provisions_a_profile_and_course_access(workspace, monk
         profile = db.query(Profile).filter(Profile.id == new_id).one()
         assert profile.role == UserRole.instructor
         assert profile.email == "new.faculty@example.test"
+        assert profile.enrolled_language is None  # nobody is given a language; Workshops supply it (ADR 0001)
         membership = (
             db.query(CourseMember)
             .filter(CourseMember.profile_id == new_id, CourseMember.course_id == ids["course_a"])

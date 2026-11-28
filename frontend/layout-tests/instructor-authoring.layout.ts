@@ -95,7 +95,7 @@ test.beforeEach(async ({ page }, info) => {
     const { pathname, searchParams } = new URL(request.url());
     const path = pathname.replace("/api/v1", "");
     if (path === "/profile/me") return route.fulfill({ json: {
-      id: instructorId, role: "instructor", username: "layout-instructor", enrolled_language: "python",
+      id: instructorId, role: "instructor", username: "layout-instructor", workshop_languages: ["python"],
     } });
     if (path === "/faculty/courses") return route.fulfill({ json: { courses: [defaultCourse, course], default_course_id: defaultCourse.id } });
     if (path === "/workshops") return route.fulfill({ json: [

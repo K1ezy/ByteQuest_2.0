@@ -40,7 +40,7 @@ export function GeminiActivityForm({ courseId, preselectedId }: { courseId: stri
   const source = items.find((item) => item.document_id === sourceId);
   const sourceReady = Boolean(source && ready(source));
   const workshop = destinations.workshops.find((item) => item.id === (source?.workshop_id ?? workshopId));
-  const effectiveLanguage = workshop?.language ?? source?.language ?? profile.enrolled_language ?? "python";
+  const effectiveLanguage = workshop?.language ?? source?.language ?? "python";
   const effectiveTopic = topic ?? source?.topic_concept ?? "";
   const dirty = Boolean(file || title || topic !== null || workshopId || instructions || kind !== "quiz" || difficulty !== 2);
 

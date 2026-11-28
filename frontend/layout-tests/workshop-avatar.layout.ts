@@ -22,7 +22,7 @@ test("workshop covers and owner photos fit the cards and fall back safely", asyn
     activities: [], next_closes_at: null,
   };
   await page.route("**/api/v1/profile/me", (route) => route.fulfill({ json: {
-    id, role: "student", username: "layout-student", enrolled_language: "python",
+    id, role: "student", username: "layout-student", workshop_languages: ["python"],
   } }));
   await page.route("**/api/v1/workshops", (route) => route.fulfill({ json: [
     { ...workshop, id: "with-photo", name: title, owner_avatar_url: "/illustrations/quest-scroll-purple.png",

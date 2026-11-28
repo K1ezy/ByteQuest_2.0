@@ -1,5 +1,6 @@
 "use client";
 
+import { languageList } from "@/components/workshops/workshop-ui";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
@@ -174,7 +175,7 @@ export function AppShell({ profile, children }: { profile: Profile; children: Re
         <span className="bq-app-location">{title}</span>
       </>}
       <div className="bq-app-utilities">
-        {profile.role === "student" && profile.enrolled_language && <span className="tag bq-app-context">{profile.enrolled_language.toUpperCase()}</span>}
+        {profile.role === "student" && profile.workshop_languages.length > 0 && <span className="tag bq-app-context">{languageList(profile.workshop_languages)}</span>}
         <span className="tag bq-app-context">{roleLabels[profile.role]}</span>
         <ChatShell />
         <AccountMenu key={titleKey} profile={profile} />

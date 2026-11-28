@@ -20,7 +20,10 @@ from app.models.entities import (
     InstructionalDocument,
     LearningActivity,
     Profile,
+    ProgrammingLang,
     ReviewState,
+    Workshop,
+    WorkshopMember,
 )
 from app.services.attempt_visibility import practice_attempt_clause
 from app.services.workspace_common import (
@@ -227,6 +230,23 @@ def published_activity_ids(db: Session, course_ids: Sequence[uuid.UUID]) -> list
         .all()
     )
     return [row[0] for row in rows]
+
+
+def workshop_languages_by_profile(db: Session, profile_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, list[ProgrammingLang]]:
+    """Each account's Workshop languages: those of the active Workshops it belongs to (ADR 0001)."""
+    ids = list(profile_ids)
+    languages: dict[uuid.UUID, list[ProgrammingLang]] = {profile_id: [] for profile_id in ids}
+    if not ids:
+        return languages
+    rows = (db.query(WorkshopMember.profile_id, Workshop.language)
+            .join(Workshop, Workshop.id == WorkshopMember.workshop_id)
+            .filter(WorkshopMember.profile_id.in_(ids), Workshop.archived_at.is_(None))
+            .distinct().order_by(Workshop.language).all())
+    for profile_id, language in rows:
+        languages[profile_id].append(language)
+    for found in languages.values():
+        found.sort(key=lambda language: language.value)
+    return languages
 
 
 def enrolled_students(db: Session, course_id: uuid.UUID) -> list[Profile]:

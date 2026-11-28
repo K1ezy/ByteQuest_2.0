@@ -4,7 +4,7 @@ import type { Workshop } from "@/lib/types";
 
 const mocks = vi.hoisted(() => ({ api: vi.fn(), update: vi.fn() }));
 vi.mock("@/components/app-shell", () => ({
-  useShellProfile: () => ({ role: "instructor", enrolled_language: "python" }),
+  useShellProfile: () => ({ role: "instructor", workshop_languages: ["python"] }),
 }));
 vi.mock("./workshop-layout", () => ({ useWorkshop: () => ({ workshop, setWorkshop: mocks.update }) }));
 vi.mock("@/lib/api", async (original) => ({

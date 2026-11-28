@@ -14,7 +14,7 @@ import httpx
 from fastapi import HTTPException, status
 
 from app.core.config import settings
-from app.models.entities import Profile, ProgrammingLang, UserRole
+from app.models.entities import Profile, UserRole
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ def build_profile(user_id: uuid.UUID, email: str, role: UserRole, display_name: 
         pseudonym_id=f"usr_{user_id.hex[:20]}",
         username=starter_username(user_id, display_name),
         role=role,
-        enrolled_language=ProgrammingLang.python,
+        enrolled_language=None,  # explicit: the column default would pick a language (ADR 0001)
         year_level=1,
         semester=1,
         xp_points=0,

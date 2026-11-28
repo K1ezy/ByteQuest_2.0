@@ -68,9 +68,9 @@ function DashboardContent({ profile }: { profile: Profile }) {
   }, [load]);
 
   const nextActivity = data?.next_activity;
-  const needsLanguage = !profile.enrolled_language;
-  const nextHref = nextActivity ? questHref({ id: nextActivity.id, activity_type: nextActivity.kind }) : needsLanguage ? "/workshops" : "/quests";
-  const nextTitle = needsLanguage ? "Choose your programming language"
+  const needsWorkshop = data?.recommendation.recommended_action === "join_workshop";
+  const nextHref = nextActivity ? questHref({ id: nextActivity.id, activity_type: nextActivity.kind }) : needsWorkshop ? "/workshops" : "/quests";
+  const nextTitle = needsWorkshop ? "Join a workshop to see its activities"
     : data?.recommendation.recommended_action === "no_published_activities" ? "Your quests are coming soon" : "No next quest available";
 
   const announcementList = <StudentAnnouncements items={announcements?.items ?? []} now={now} onEmpty={() => heading.current?.focus()} />;
@@ -121,11 +121,11 @@ function DashboardContent({ profile }: { profile: Profile }) {
               {nextActivity && <span className="dashboard-chip">{kindLabel(nextActivity.kind)}</span>}
             </div>
             <h2 id="continue-title">{nextActivity?.title ?? nextTitle}</h2>
-            <p>{needsLanguage ? "Join a workshop to choose a language and start practicing." : data.recommendation.rationale}</p>
+            <p>{data.recommendation.rationale}</p>
             <div className="pilot-actions">
               <Link className="button button-primary dashboard-next-cta" href={nextHref}
                 data-tooltip={nextActivity ? "Open the activity recommended for your current progress." : undefined}>
-                {nextActivity ? "Continue quest" : needsLanguage ? "Go to Workshops" : "Explore quest map"} <span className="dashboard-arrow" aria-hidden="true">→</span>
+                {nextActivity ? "Continue quest" : needsWorkshop ? "Go to Workshops" : "Explore quest map"} <span className="dashboard-arrow" aria-hidden="true">→</span>
               </Link>
               {nextActivity && <Link className="button button-quiet" href="/quests">Full quest map</Link>}
               <Link className="button button-quiet" href="/profile?tab=mastery">Review concepts</Link>

@@ -78,7 +78,8 @@ function PracticeQuestList({ category, allPractice }: { category: PracticeCatego
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const profile = useShellProfile();
-  const language = profile.enrolled_language;
+  // A student with no Workshop has nothing to list yet (ADR 0001).
+  const needsWorkshop = profile.role === "student" && !profile.workshop_languages.length;
   const isStudent = profile.role === "student";
   const [quests, setQuests] = useState<Quest[]>([]);
   const [workshops, setWorkshops] = useState<Workshop[] | null>(null);
@@ -128,17 +129,17 @@ function PracticeQuestList({ category, allPractice }: { category: PracticeCatego
   }, [isStudent]);
 
   useEffect(() => {
-    if (language) {
+    if (!needsWorkshop) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       void loadData();
     }
     return () => request.current?.abort();
-  }, [language, loadData]);
+  }, [needsWorkshop, loadData]);
 
   const workshopsByQuest = useMemo(() => {
     const sources = new Map<string, QuestWorkshopSource[]>();
     for (const workshop of workshops ?? []) {
-      if (workshop.archived || workshop.language !== language) continue;
+      if (workshop.archived) continue;
       for (const activity of workshop.activities) {
         const activityWorkshops = sources.get(activity.activity_id) ?? [];
         activityWorkshops.push({ id: workshop.id, name: workshop.name, sharedAt: activity.added_at });
@@ -146,7 +147,7 @@ function PracticeQuestList({ category, allPractice }: { category: PracticeCatego
       }
     }
     return sources;
-  }, [language, workshops]);
+  }, [workshops]);
   const scopedQuests = useMemo(() => allPractice ? quests : quests.filter((quest) => workshopsByQuest.has(quest.id)),
     [allPractice, quests, workshopsByQuest]);
   const nextQuest = scopedQuests.find((quest) => !quest.is_completed);
@@ -275,10 +276,10 @@ function PracticeQuestList({ category, allPractice }: { category: PracticeCatego
     query.delete("concept");
   }
 
-  if (!profile.enrolled_language) {
+  if (needsWorkshop) {
     return <section className="empty-state quest-filter-empty">
-      <h2>Choose your programming language</h2>
-      <p>Join a workshop to pick your language and see its practice quests.</p>
+      <h2>Join a workshop to see its activities</h2>
+      <p>Enter the join code your instructor gave you. Its coding challenges and quizzes appear here, in any language.</p>
       <Link className="button button-primary" href="/workshops">Go to Workshops</Link>
     </section>;
   }
@@ -301,7 +302,7 @@ function PracticeQuestList({ category, allPractice }: { category: PracticeCatego
   if (!quests.length) {
     return <section className="empty-state quest-filter-empty">
       <h2>No published activities yet</h2>
-      <p>Check again after your instructor publishes an activity for your track.</p>
+      <p>Check again after your instructor publishes an activity.</p>
     </section>;
   }
 

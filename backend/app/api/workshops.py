@@ -71,7 +71,6 @@ class CreateWorkshop(WorkshopClassroomDetails):
 
 class JoinWorkshop(WorkshopMutation):
     code: str = Field(min_length=8, max_length=12)
-    language: ProgrammingLang | None = None
 
 
 class UpdateWorkshop(WorkshopClassroomDetails):
@@ -413,19 +412,6 @@ def join_workshop(
         raise HTTPException(404, "No workshop matches that code.")
     if workshop.archived_at is not None or not workshop.joining_enabled:
         raise HTTPException(409, CLOSED_JOIN_MESSAGE)
-    if current_user.role == UserRole.student:
-        # A student may try joining two different workshops at the same time.
-        current_user = db.query(Profile).filter_by(id=current_user.id).with_for_update().populate_existing().one()
-        if current_user.enrolled_language is None:
-            if payload.language is None:
-                raise HTTPException(422, "Choose a programming language before joining.")
-            if payload.language != workshop.language:
-                label = {"cpp": "C++", "python": "Python", "java": "Java"}[workshop.language.value]
-                raise HTTPException(409, f"This workshop uses {label}. Choose {label} to join.")
-            current_user.enrolled_language = workshop.language
-            current_user.track_selected_at = datetime.now(timezone.utc)
-        elif workshop.language != current_user.enrolled_language:
-            raise HTTPException(409, "This workshop uses a different language track. Change your track before joining.")
     if not db.query(WorkshopMember.id).filter_by(workshop_id=workshop.id, profile_id=current_user.id).first():
         from app.services.ml_predictor.shadow import capture_assignment_predictions
         joined_at = datetime.now(timezone.utc)
@@ -666,10 +652,9 @@ def workshop_activity_details(
     workshop = get_workshop(db, workshop_id, current_user)
     rows = _activity_links(db, [workshop.id]).add_entity(LearningActivity).all()
     is_student = current_user.role == UserRole.student
-    on_track = current_user.enrolled_language == workshop.language
     completed = {}
     stars = {}
-    if is_student and on_track and rows:
+    if is_student and rows:
         completed = first_visible_completions(db, current_user.id, [activity.id for _, activity in rows])
         stars = best_challenge_stars(db, current_user.id, [
             activity.id for _, activity in rows if activity.activity_type == ActivityKind.challenge
@@ -677,7 +662,7 @@ def workshop_activity_details(
     now = datetime.now(timezone.utc)
     items = []
     for link, activity in rows:
-        can_open = is_student and on_track and activity_has_opened(activity, now)
+        can_open = is_student and activity_has_opened(activity, now)
         items.append(WorkshopQuest(
             id=activity.id, title=activity.title, activity_type=activity.activity_type, language=activity.language,
             topic_concept=activity.topic_concept, difficulty_level=activity.difficulty_level,

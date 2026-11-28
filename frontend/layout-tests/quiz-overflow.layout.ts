@@ -31,7 +31,7 @@ test.beforeEach(async ({ page }, info) => {
     if (path.endsWith("/profile/me")) {
       return route.fulfill({ json: {
         id: studentId, role: "student", username: "layout-test", pseudonym_id: "layout-student",
-        enrolled_language: "python", xp_points: 0, current_level: 1,
+        workshop_languages: ["python"], xp_points: 0, current_level: 1,
       } });
     }
     if (path.endsWith("/quests")) return route.fulfill({ json: [quest] });

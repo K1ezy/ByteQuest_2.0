@@ -4,7 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 const mocks = vi.hoisted(() => ({ apiRequest: vi.fn() }));
 
 vi.mock("@/components/app-shell", () => ({
-  useShellProfile: () => ({ username: "kieser", display_name: null, enrolled_language: "python" }),
+  useShellProfile: () => ({ username: "kieser", display_name: null, workshop_languages: ["python"] }),
 }));
 vi.mock("@/lib/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/api")>();

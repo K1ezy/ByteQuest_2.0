@@ -160,7 +160,7 @@ export default function Arena({ activityId }: { activityId: string }) {
   const router = useRouter();
   const [quest, setQuest] = useState<Quest | null>(null);
   const [trackActivities, setTrackActivities] = useState<Quest[]>([]);
-  const { id: userId, role, enrolled_language: language } = useShellProfile();
+  const { id: userId, role } = useShellProfile();
   const [code, setCode] = useState("");
   const [starter, setStarter] = useState("");
   type SyncState = "synced" | "saving" | "saved-local" | "error";
@@ -343,12 +343,11 @@ export default function Arena({ activityId }: { activityId: string }) {
     async function load() {
       try {
         if (role !== "student") throw new Error("Code submissions are available to student accounts.");
-        if (!language) throw new Error("Join a workshop to choose your language before opening a code challenge.");
         const activities = await apiRequest<Quest[]>(`/quests?details_for=${encodeURIComponent(activityId)}`);
         if (!active) return;
         setTrackActivities(activities);
         const target = activities.find((item) => item.id === activityId && item.activity_type === "challenge");
-        if (!target) throw new Error("This published challenge is not available on your selected language track.");
+        if (!target) throw new Error("This challenge isn’t shared in any of your workshops.");
         setQuest(target);
         const savedRun = readSampleRun(`bytequest:sample-job:${userId}:${target.id}`);
         setSampleRun(savedRun);
@@ -411,7 +410,7 @@ export default function Arena({ activityId }: { activityId: string }) {
     }
     void load();
     return () => { active = false; };
-  }, [activityId, language, role, userId]);
+  }, [activityId, role, userId]);
 
   useEffect(() => {
     if (!questId || !draftLoaded) return;

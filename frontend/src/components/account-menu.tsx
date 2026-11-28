@@ -1,5 +1,6 @@
 "use client";
 
+import { languageList } from "@/components/workshops/workshop-ui";
 import Link from "next/link";
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { AccessibilitySettings } from "@/components/accessibility-settings";
@@ -88,7 +89,7 @@ export function AccountMenu({ profile }: { profile: Profile }) {
       </div>
     </div>
     <div className="bq-account-context">
-      {profile.role === "student" && profile.enrolled_language && <span className="tag">{profile.enrolled_language.toUpperCase()}</span>}
+      {profile.role === "student" && profile.workshop_languages.length > 0 && <span className="tag">{languageList(profile.workshop_languages)}</span>}
       <span className="tag">{roleLabels[profile.role]}</span>
     </div>
     <Link ref={firstLinkRef} href="/profile" onClick={close}>Profile</Link>

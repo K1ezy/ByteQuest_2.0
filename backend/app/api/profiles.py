@@ -43,7 +43,6 @@ router = APIRouter(prefix="/api/v1/profile", tags=["Profile"])
 class OnboardingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    enrolled_language: ProgrammingLang
     year_level: int = Field(default=1, ge=1, le=4)
     semester: int = Field(default=1, ge=1, le=2)
 
@@ -55,7 +54,7 @@ class ProfileResponse(BaseModel):
     pseudonym_id: str
     username: str
     role: UserRole
-    enrolled_language: ProgrammingLang | None
+    workshop_languages: list[ProgrammingLang] = []
     year_level: int
     semester: int
     xp_points: int
@@ -104,7 +103,7 @@ def _require_student(profile: Profile) -> None:
     if profile.role != UserRole.student:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Learning track changes are only available to student accounts.",
+            detail="Academic details are only available to student accounts.",
         )
 
 
@@ -188,14 +187,10 @@ def complete_student_onboarding(
     current_user: Profile = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProfileResponse:
-    """Save the student's curriculum track and academic context."""
+    """Save the student's academic context. Workshops, not a chosen language, set what they study."""
     _require_student(current_user)
-    if current_user.enrolled_language is None:
-        raise HTTPException(409, "Choose your first language when joining a workshop.")
-    current_user.enrolled_language = payload.enrolled_language
     current_user.year_level = payload.year_level
     current_user.semester = payload.semester
-    current_user.track_selected_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(current_user)

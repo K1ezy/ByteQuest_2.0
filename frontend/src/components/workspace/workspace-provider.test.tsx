@@ -14,7 +14,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/components/chat/chat-shell", () => ({ ChatShell: () => null }));
 vi.mock("@/hooks/use-sign-out", () => ({ useSignOut: () => ({ signOut: vi.fn() }) }));
 
-const admin = { id: "admin-a", role: "admin", enrolled_language: "python" } as Profile;
+const admin = { id: "admin-a", role: "admin", workshop_languages: ["python"] } as Profile;
 const student = { ...admin, id: "student-b", role: "student" } as Profile;
 afterEach(() => { cleanup(); route.path = "/admin/accounts"; route.search = ""; });
 
@@ -76,7 +76,7 @@ it("opens the account menu and closes it on Escape or a tap outside", () => {
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
   const panel = screen.getByRole("region", { name: "Account" });
   expect(within(panel).getByRole("link", { name: "Profile" }).getAttribute("href")).toBe("/profile");
-  expect(within(panel).getByText("PYTHON")).toBeTruthy();
+  expect(within(panel).getByText("Python")).toBeTruthy();
   fireEvent.keyDown(document, { key: "Escape" });
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
   expect(document.activeElement).toBe(trigger);

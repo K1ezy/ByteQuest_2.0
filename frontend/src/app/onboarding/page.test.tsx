@@ -95,7 +95,7 @@ it("requires both policy acknowledgments and opens Dashboard after a single sign
   auth.signUp.mockImplementation(() => new Promise((resolve) => {
     completeSignUp = () => resolve({ data: { session: { user: { email: "learner@example.test" } } }, error: null });
   }));
-  auth.apiRequest.mockResolvedValue({ role: "student", enrolled_language: null, needs_track_setup: false });
+  auth.apiRequest.mockResolvedValue({ role: "student", workshop_languages: [], needs_track_setup: false });
   await openAuth();
   fireEvent.click(screen.getByRole("button", { name: "Sign up" }));
   expect(screen.queryByLabelText("School ID")).toBeNull();

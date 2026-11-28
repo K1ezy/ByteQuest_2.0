@@ -4,11 +4,11 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #8
 
-- [ ] A student already in a Python Workshop joins a Java Workshop with only its code (API test)
-- [ ] The onboarding endpoint and screen no longer ask for or store a language
-- [ ] Provisioned students have no default language
-- [ ] Profile and instructor API responses expose workshop_languages; the frontend shows it
-- [ ] A student with no Workshop sees the join prompt on the Quest Map (component test)
+- [x] A student already in a Python Workshop joins a Java Workshop with only its code (API test)
+- [x] The onboarding endpoint and screen no longer ask for or store a language
+- [x] Provisioned students have no default language
+- [x] Profile and instructor API responses expose workshop_languages; the frontend shows it
+- [x] A student with no Workshop sees the join prompt on the Quest Map (component test)

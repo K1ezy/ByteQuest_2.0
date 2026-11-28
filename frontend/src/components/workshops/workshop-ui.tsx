@@ -7,6 +7,9 @@ import { getErrorMessage } from "@/lib/api";
 import type { ProgrammingLanguage, Workshop } from "@/lib/types";
 
 export const workshopLanguages = { python: "Python", cpp: "C++", java: "Java" } as const;
+/** "Python · Java": the languages of an account's Workshops (ADR 0001). */
+export const languageList = (languages: readonly string[]) =>
+  languages.map((language) => workshopLanguages[language as ProgrammingLanguage] ?? language).join(" · ");
 const languageMarks = { python: ">>>", cpp: "::", java: "{ }" } as const;
 const dialogControls = "button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)";
 

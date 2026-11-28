@@ -112,7 +112,7 @@ function useApiReturning(data = dashboard(), error = "") {
   mocks.useApi.mockImplementation((path:string) => ({
     loading:false, error,reload:vi.fn(),data:path.includes("/faculty/ml?") ? data : {
       summary:{active_learners:data.students.length,published_activities:2,average_score:80,need_follow_up:0,average_completion_percent:50},
-      activities:[],students:data.students.map(r => ({...r,pseudonym:r.student_id,enrolled_language:"python",attempt_count:1,completed_count:1,total_activities:2}))
+      activities:[],students:data.students.map(r => ({...r,pseudonym:r.student_id,workshop_languages:["python"],attempt_count:1,completed_count:1,total_activities:2}))
     }
   }));
 }

@@ -5,7 +5,7 @@ import QuizView from "./quiz-view";
 const { api } = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/lib/api", () => ({ apiRequest: api, getErrorMessage: String }));
 vi.mock("@/components/app-shell", () => ({
-  useShellProfile: () => ({ role: "student", enrolled_language: "python" }),
+  useShellProfile: () => ({ role: "student", workshop_languages: ["python"] }),
 }));
 
 afterEach(() => {

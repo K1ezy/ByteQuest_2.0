@@ -8,7 +8,7 @@ vi.mock("@/lib/api", async (original) => ({
   ...await original<typeof import("@/lib/api")>(), apiRequest: mocks.api,
 }));
 vi.mock("@/components/app-shell", () => ({
-  useShellProfile: () => ({ role: mocks.role, username: "learner", enrolled_language: mocks.language }),
+  useShellProfile: () => ({ role: mocks.role, username: "learner", workshop_languages: mocks.language ? [mocks.language] : [] }),
 }));
 
 import { JoinWorkshopForm, WorkshopHome } from "./workshop-home";
@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-it("shows the signed-in track and joins with the entered code", async () => {
+it("shows the signed-in Workshop languages and joins with the entered code", async () => {
   mocks.api.mockImplementation(async (path: string) => path === "/workshops/join" ? item : []);
   render(<WorkshopHome />);
   await screen.findByRole("heading", { name: "No workshops yet" });
@@ -38,7 +38,7 @@ it("shows the signed-in track and joins with the entered code", async () => {
   fireEvent.click(trigger);
   expect(screen.getByText("Signed in as")).toBeTruthy();
   expect(screen.getByText("@learner")).toBeTruthy();
-  expect(screen.getByText("Python track")).toBeTruthy();
+  expect(screen.getByText("Python")).toBeTruthy();
   expect(document.activeElement).toBe(screen.getByLabelText("Workshop code"));
   fireEvent.change(screen.getByLabelText("Workshop code"), { target: { value: "abcd-2345" } });
   fireEvent.submit(screen.getByLabelText("Workshop code").closest("form")!);
@@ -104,15 +104,12 @@ it("switches an instructor between active and archived lists", async () => {
   expect(screen.queryByRole("link", { name: /Python practice/ })).toBeNull();
 });
 
-it("lets an unassigned student choose a first language at workshop join", async () => {
+it("joins a student with no Workshop yet using only the code, in any language", async () => {
   mocks.language = null;
-  mocks.api.mockResolvedValueOnce(item);
+  mocks.api.mockResolvedValueOnce({ ...item, language: "java" });
   render(<JoinWorkshopForm code="ABCD2345" />);
-  expect(screen.getAllByRole<HTMLInputElement>("radio").every((radio) => !radio.checked)).toBe(true);
-  fireEvent.click(screen.getByRole("radio", { name: "Python" }));
+  expect(screen.queryByRole("radio")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Join Workshop" }));
   await vi.waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/workshops/workshop-1"));
-  expect(mocks.api).toHaveBeenCalledWith("/workshops/join", {
-    method: "POST", body: '{"code":"ABCD2345","language":"python"}',
-  });
+  expect(mocks.api).toHaveBeenCalledWith("/workshops/join", { method: "POST", body: '{"code":"ABCD2345"}' });
 });

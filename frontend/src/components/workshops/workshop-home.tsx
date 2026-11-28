@@ -8,13 +8,13 @@ import { useShellProfile } from "@/components/app-shell";
 import { InstructorIcon, PageHeader } from "@/components/instructor/course-ui";
 import { UserAvatar } from "@/components/user-avatar";
 import { Button, useApi } from "@/components/workspace/ui";
-import { ApiError, apiRequest } from "@/lib/api";
+import { apiRequest } from "@/lib/api";
 import { reachableServiceUrl } from "@/lib/network";
 import { publishProfileUpdate } from "@/lib/profile-events";
 import { roleLabels } from "@/lib/navigation";
 import type { Workshop } from "@/lib/types";
 import { classroomSummary, readClassroomDetails, WorkshopClassroomFields } from "./workshop-classroom-details";
-import { WorkshopBanner, WorkshopDialog, WorkshopError, WorkshopForm, workshopDateTime, workshopLanguages } from "./workshop-ui";
+import { languageList, WorkshopBanner, WorkshopDialog, WorkshopError, WorkshopForm, workshopDateTime, workshopLanguages } from "./workshop-ui";
 
 function WorkshopGrid({ archived }: { archived: boolean }) {
   const { role } = useShellProfile();
@@ -90,12 +90,11 @@ function CreateWorkshop({ close }: { close: () => void }) {
         <legend>Programming language</legend>
         <div>
           {Object.entries(workshopLanguages).map(([id, label]) => <label key={id}>
-            <input type="radio" name="language" value={id} required
-              defaultChecked={profile.role === "student" && id === profile.enrolled_language} />
+            <input type="radio" name="language" value={id} required />
             {label}
           </label>)}
         </div>
-        <small id="workshop-create-track-help">Students on this track can join and open the shared activities.</small>
+        <small id="workshop-create-track-help">Students who join with the code can open the shared activities.</small>
       </fieldset>
       <WorkshopClassroomFields />
     </WorkshopForm>
@@ -106,9 +105,7 @@ export function JoinWorkshopForm({ code = "", cancel }: { code?: string; cancel?
   const profile = useShellProfile();
   const router = useRouter();
   const codeId = useId();
-  const chooseLanguage = profile.role === "student" && !profile.enrolled_language;
   const [invalidCode, setInvalidCode] = useState(false);
-  const [trackMismatch, setTrackMismatch] = useState(false);
   const displayName = profile.display_name?.trim();
   const handle = `@${profile.username}`;
   const close = cancel ?? (code ? () => router.push("/workshops") : undefined);
@@ -119,16 +116,11 @@ export function JoinWorkshopForm({ code = "", cancel }: { code?: string; cancel?
       setInvalidCode(true);
       throw new Error("Check the code your instructor shared. It should contain 8 letters or numbers.");
     }
-    setTrackMismatch(false);
-    const item = await apiRequest<Workshop>("/workshops/join", {
-      method: "POST",
-      body: JSON.stringify({ code: entered, ...(chooseLanguage ? { language: fields.get("language") } : {}) }),
-    }).catch((cause: unknown) => {
-      // The API's 409 for this case names the track; offer the one action that resolves it.
-      if (cause instanceof ApiError && cause.status === 409 && /language track/i.test(cause.message)) setTrackMismatch(true);
-      throw cause;
-    });
-    if (chooseLanguage) publishProfileUpdate({ ...profile, enrolled_language: item.language });
+    // Joining needs only the code; the Workshop brings its own language (ADR 0001).
+    const item = await apiRequest<Workshop>("/workshops/join", { method: "POST", body: JSON.stringify({ code: entered }) });
+    if (!profile.workshop_languages.includes(item.language)) {
+      publishProfileUpdate({ ...profile, workshop_languages: [...profile.workshop_languages, item.language].sort() });
+    }
     cancel?.();
     if (code) router.replace(`/workshops/${item.id}`);
     else router.push(`/workshops/${item.id}`);
@@ -141,8 +133,8 @@ export function JoinWorkshopForm({ code = "", cancel }: { code?: string; cancel?
           <strong>{displayName || handle}</strong>
           {displayName && <span>{handle}</span>}
         </div>
-        <span className="workshop-account-track">{profile.role === "student" && profile.enrolled_language
-          ? `${workshopLanguages[profile.enrolled_language]} track` : roleLabels[profile.role]}</span>
+        <span className="workshop-account-track">{profile.role === "student" && profile.workshop_languages.length
+          ? languageList(profile.workshop_languages) : roleLabels[profile.role]}</span>
       </div>
     </div>
     <div className="workshop-field">
@@ -153,18 +145,6 @@ export function JoinWorkshopForm({ code = "", cancel }: { code?: string; cancel?
         defaultValue={code} placeholder="ABCD-2345" onChange={() => setInvalidCode(false)} />
       <small id={`${codeId}-help`}>{code ? "Your invite filled in the code. Confirm below to join." : "Enter or paste the 8-character code from your instructor."}</small>
     </div>
-    {chooseLanguage && <fieldset className="workshop-track-picker" aria-describedby={`${codeId}-language-help`}>
-      <legend>Programming language</legend>
-      <div>
-        {Object.entries(workshopLanguages).map(([id, label]) => <label key={id}>
-          <input type="radio" name="language" value={id} required />
-          {label}
-        </label>)}
-      </div>
-      <small id={`${codeId}-language-help`}>Choose the language your instructor uses in this workshop.</small>
-    </fieldset>}
-    {profile.role === "student" && !chooseLanguage && <p className="workshop-join-note">The workshop must use the same programming track as your account.
-      {trackMismatch && <> <Link href="/profile?edit=track">Change learning track</Link></>}</p>}
   </WorkshopForm>;
 }
 

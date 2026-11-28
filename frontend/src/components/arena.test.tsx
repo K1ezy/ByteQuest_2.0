@@ -7,7 +7,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("next/dynamic", () => ({ default: () => () => null }));
 vi.mock("@monaco-editor/react", () => ({ loader: { config: vi.fn() } }));
 vi.mock("@/components/app-shell", () => ({
-  useShellProfile: () => ({ id: "student", role: "student", enrolled_language: "python" }),
+  useShellProfile: () => ({ id: "student", role: "student", workshop_languages: ["python"] }),
 }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/api")>(),

@@ -3,7 +3,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import Page from "./page";
 
 vi.mock("next/navigation", () => ({useRouter:()=>({replace:vi.fn()}),useSearchParams:()=>new URLSearchParams("sort=attention")}));
-vi.mock("@/components/workspace/workspace-provider", () => ({useWorkspace:()=>({courseId:"c",courseHref:(path:string)=>path,profile:{enrolled_language:"python"}})}));
+vi.mock("@/components/workspace/workspace-provider", () => ({useWorkspace:()=>({courseId:"c",courseHref:(path:string)=>path,profile:{workshop_languages:["python"]}})}));
 const mock=vi.hoisted(()=>vi.fn());
 vi.mock("@/components/workspace/ui", async orig => ({...await orig<typeof import("@/components/workspace/ui")>(),useApi:mock}));
 afterEach(cleanup);

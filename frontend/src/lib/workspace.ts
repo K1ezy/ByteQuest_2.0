@@ -414,7 +414,7 @@ export interface PerformanceRow {
   pseudonym: string;
   username: string;
   display_name: string | null;
-  enrolled_language: string | null;
+  workshop_languages: string[];
   completed_count: number;
   total_activities: number;
   attempt_count: number;
@@ -446,7 +446,7 @@ export interface StudentPerformance {
     pseudonym: string;
     username: string;
     display_name: string | null;
-    enrolled_language: string | null;
+    workshop_languages: string[];
     xp_points: number;
     current_level: number;
   };
@@ -1151,7 +1151,7 @@ export function updateMyProfile(body: { display_name?: string | null; bio?: stri
   return apiRequest<Profile>("/profile/me", { method: "PATCH", body: JSON.stringify(body) });
 }
 
-export function updateMyTrack(body: { enrolled_language: ProgrammingLanguage; year_level: number; semester: number }) {
+export function updateMyAcademicDetails(body: { year_level: number; semester: number }) {
   return apiRequest<Profile>("/profile/onboarding", { method: "PUT", body: JSON.stringify(body) });
 }
 

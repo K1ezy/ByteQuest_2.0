@@ -276,7 +276,7 @@ function ProfilePageContent() {
   const student = profile?.role === "student";
   const activeTab = tabParam === "account" || (student && (tabParam === "mastery" || tabParam === "rankings"))
     ? tabParam : "activity";
-  const progressKey = profile ? `${profile.id}:${profile.enrolled_language}` : null;
+  const progressKey = profile ? `${profile.id}:${profile.workshop_languages.join(",")}` : null;
 
   const loadAnalytics = useCallback(async () => {
     const request = ++analyticsRequest.current;

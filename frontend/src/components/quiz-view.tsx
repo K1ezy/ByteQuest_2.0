@@ -30,7 +30,7 @@ function getActivityHref(quest: Quest): string {
 export default function QuizView({ activityId }: { activityId: string }) {
   const [quest, setQuest] = useState<Quest | null>(null);
   const [trackActivities, setTrackActivities] = useState<Quest[]>([]);
-  const { role, enrolled_language: language } = useShellProfile();
+  const { role } = useShellProfile();
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [isReviewing, setIsReviewing] = useState(false);
@@ -48,7 +48,6 @@ export default function QuizView({ activityId }: { activityId: string }) {
         if (role !== "student") {
           throw new Error("Concept check quizzes are available to student accounts.");
         }
-        if (!language) throw new Error("Join a workshop to choose your language before opening a quiz.");
         const activities = await apiRequest<Quest[]>(`/quests?details_for=${encodeURIComponent(activityId)}`);
         if (!active) return;
         setTrackActivities(activities);
@@ -56,7 +55,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
           (item) => item.id === activityId && item.activity_type === "quiz"
         );
         if (!target) {
-          throw new Error("This published quiz is not available on your selected language track.");
+          throw new Error("This quiz isn’t shared in any of your workshops.");
         }
         setQuest(target);
 
@@ -82,7 +81,7 @@ export default function QuizView({ activityId }: { activityId: string }) {
     return () => {
       active = false;
     };
-  }, [activityId, language, role]);
+  }, [activityId, role]);
 
   function handleSelectOption(questionId: string, optionKey: string) {
     setAnswers((prev) => {

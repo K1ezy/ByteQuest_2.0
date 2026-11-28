@@ -17,7 +17,7 @@ from app.models.entities import ActivityAttempt, ActivityKind, CourseMember, Hin
 from app.services.course_access import resolve_workspace_course
 from app.services.workspace_common import activity_state, as_aware, iso
 from app.services.attempt_visibility import practice_attempt_clause
-from app.services.workspace_queries import SCORE_BANDS, STUCK_ATTEMPTS, activity_health, practice_cells, score_band_index, class_snapshot, enrolled_students, practice_attempts_by_student, published_activity_ids, scoped_activities
+from app.services.workspace_queries import SCORE_BANDS, STUCK_ATTEMPTS, activity_health, practice_cells, score_band_index, class_snapshot, enrolled_students, practice_attempts_by_student, published_activity_ids, scoped_activities, workshop_languages_by_profile
 from app.services.gamification.insights import GamificationInsights, course_insights
 from app.services.gamification.quiz_content import parse_quiz_questions
 from app.services.gamification.sequencer import QUIZ_MASTERY_SCORE
@@ -69,6 +69,7 @@ def performance(
         activity_ids = [item.id for item in course_activities]
     students = enrolled_students(db, course.id)
     stats = practice_attempts_by_student(db, activity_ids, [student.id for student in students])
+    languages = workshop_languages_by_profile(db, [student.id for student in students])
 
     as_of = datetime.now(timezone.utc)
     latest_course_stats = stats
@@ -94,7 +95,7 @@ def performance(
                 "pseudonym": student.pseudonym_id,
                 "username": student.username,
                 "display_name": student.display_name,
-                "enrolled_language": getattr(student.enrolled_language, "value", student.enrolled_language),
+                "workshop_languages": [language.value for language in languages[student.id]],
                 "completed_count": entry["completed"],
                 "total_activities": len(activity_ids),
                 "attempt_count": entry["attempts"],
@@ -184,7 +185,7 @@ def student_performance(
             "pseudonym": student.pseudonym_id,
             "username": student.username,
             "display_name": student.display_name,
-            "enrolled_language": getattr(student.enrolled_language, "value", student.enrolled_language),
+            "workshop_languages": [language.value for language in student.workshop_languages],
             "xp_points": student.xp_points,
             "current_level": student.current_level,
         },

@@ -4,9 +4,10 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } fr
 import { ApiError, getErrorMessage } from "@/lib/api";
 import { StatusChip } from "@/components/workspace/ui";
 import { useToast } from "@/components/toast";
-import { formatDate, updateMyProfile, updateMyTrack } from "@/lib/workspace";
+import { formatDate, updateMyAcademicDetails, updateMyProfile } from "@/lib/workspace";
+import { languageList } from "@/components/workshops/workshop-ui";
 import { isValidHandle, suggestHandle } from "@/lib/username";
-import type { Profile, ProgrammingLanguage } from "@/lib/types";
+import type { Profile } from "@/lib/types";
 
 export const ROLE_LABEL: Record<Profile["role"], string> = {
   student: "Student",
@@ -14,18 +15,12 @@ export const ROLE_LABEL: Record<Profile["role"], string> = {
   admin: "Administrator",
 };
 
-const LANGUAGES: { value: ProgrammingLanguage; label: string }[] = [
-  { value: "python", label: "Python" },
-  { value: "cpp", label: "C++" },
-  { value: "java", label: "Java" },
-];
 const BIO_MAX = 500;
 
 interface Draft {
   name: string;
   handle: string;
   bio: string;
-  language: ProgrammingLanguage | null;
   yearLevel: number;
   semester: number;
 }
@@ -36,7 +31,6 @@ function draftFrom(profile: Profile): Draft {
     // A generated starter handle is never shown or re-saved; the field starts empty.
     handle: profile.handle_chosen === false ? "" : profile.username,
     bio: profile.bio ?? "",
-    language: profile.enrolled_language,
     yearLevel: profile.year_level || 1,
     semester: profile.semester || 1,
   };
@@ -49,9 +43,8 @@ function pendingChanges(profile: Profile, draft: Draft) {
   if (draft.bio.trim() !== base.bio.trim()) identity.bio = draft.bio.trim();
   const handle = draft.handle.trim().toLowerCase();
   if (handle && handle !== base.handle) identity.username = handle;
-  const track = profile.role === "student" && base.language !== null && (
-    draft.language !== base.language || draft.yearLevel !== base.yearLevel || draft.semester !== base.semester);
-  return { identity, track };
+  const academicChanged = profile.role === "student" && (draft.yearLevel !== base.yearLevel || draft.semester !== base.semester);
+  return { identity, academicChanged };
 }
 
 function handleProblem(profile: Profile, value: string): string {
@@ -79,7 +72,7 @@ export function ProfileHeader({ profile, avatar, onUpdated, editOnOpen }: {
   const editButton = useRef<HTMLButtonElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const handleInput = useRef<HTMLInputElement>(null);
-  const languageInput = useRef<HTMLSelectElement>(null);
+  const firstFieldInput = useRef<HTMLSelectElement>(null);
   const restoreFocus = useRef(false);
 
   if (lastEditRequest !== editOnOpen) {
@@ -99,14 +92,14 @@ export function ProfileHeader({ profile, avatar, onUpdated, editOnOpen }: {
   const name = profile.display_name?.trim() ?? "";
   const bio = profile.bio?.trim() ?? "";
   const memberSince = profile.created_at ? formatDate(profile.created_at) : null;
-  const trackLabel = LANGUAGES.find((option) => option.value === profile.enrolled_language)?.label ?? profile.enrolled_language;
+  const languages = languageList(profile.workshop_languages);
 
-  const { identity, track } = pendingChanges(profile, draft);
-  const dirty = Object.keys(identity).length > 0 || track;
+  const { identity, academicChanged } = pendingChanges(profile, draft);
+  const dirty = Object.keys(identity).length > 0 || academicChanged;
   const handleError = serverHandleError || (handleTouched ? handleProblem(profile, draft.handle) : "");
 
   useEffect(() => {
-    if (editing) (editing === "track" ? languageInput : editing === "handle" ? handleInput : nameInput).current?.focus();
+    if (editing) (editing === "track" ? firstFieldInput : editing === "handle" ? handleInput : nameInput).current?.focus();
     else if (restoreFocus.current) {
       restoreFocus.current = false;
       editButton.current?.focus();
@@ -158,12 +151,12 @@ export function ProfileHeader({ profile, avatar, onUpdated, editOnOpen }: {
         }
         onUpdated(latest);
       }
-      if (track && draft.language) {
+      if (academicChanged) {
         try {
-          latest = await updateMyTrack({ enrolled_language: draft.language, year_level: draft.yearLevel, semester: draft.semester });
+          latest = await updateMyAcademicDetails({ year_level: draft.yearLevel, semester: draft.semester });
         } catch (caught) {
-          // The identity request above is already committed, so only the track is left pending here.
-          setFormError(`${Object.keys(identity).length ? "Your details were saved, but the learning track was not" : "The learning track was not saved"}: ${getErrorMessage(caught)}`);
+          // The identity request above is already committed, so only the academic details are left pending here.
+          setFormError(`${Object.keys(identity).length ? "Your details were saved, but your year and semester were not" : "Your year and semester were not saved"}: ${getErrorMessage(caught)}`);
           return;
         }
         onUpdated(latest);
@@ -261,24 +254,13 @@ export function ProfileHeader({ profile, avatar, onUpdated, editOnOpen }: {
                 <p id={`${id}-bio-count`} className="ws-muted profile-bio-count">{draft.bio.length}/{BIO_MAX}</p>
               </div>
 
-              {student && profile.enrolled_language ? (
+              {student ? (
                 <fieldset className="ws-field full profile-track-fieldset">
-                  <legend>Learning track</legend>
+                  <legend>Academic details</legend>
                   <div className="profile-track-grid">
                     <label className="ws-field">
-                      <span>Language</span>
-                      <select
-                        ref={languageInput}
-                        value={draft.language ?? ""}
-                        disabled={saving}
-                        onChange={(event) => update("language", event.target.value as ProgrammingLanguage)}
-                      >
-                        {LANGUAGES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                      </select>
-                    </label>
-                    <label className="ws-field">
                       <span>Year level</span>
-                      <select value={draft.yearLevel} disabled={saving} onChange={(event) => update("yearLevel", Number(event.target.value))}>
+                      <select ref={firstFieldInput} value={draft.yearLevel} disabled={saving} onChange={(event) => update("yearLevel", Number(event.target.value))}>
                         {[1, 2, 3, 4].map((value) => <option key={value} value={value}>Year {value}</option>)}
                       </select>
                     </label>
@@ -289,7 +271,7 @@ export function ProfileHeader({ profile, avatar, onUpdated, editOnOpen }: {
                       </select>
                     </label>
                   </div>
-                  <p className="ws-muted">Changing your track changes which quests you see.</p>
+                  <p className="ws-muted">Your languages come from the workshops you join.</p>
                 </fieldset>
               ) : null}
             </div>
@@ -326,7 +308,7 @@ export function ProfileHeader({ profile, avatar, onUpdated, editOnOpen }: {
             {bio ? <p className="profile-bio">{bio}</p> : null}
             {student ? (
               <p className="profile-header-meta">
-                {trackLabel ? `${trackLabel} track · ` : ""}Year {profile.year_level} · Semester {profile.semester}
+                {languages ? `${languages} · ` : ""}Year {profile.year_level} · Semester {profile.semester}
               </p>
             ) : null}
           </>

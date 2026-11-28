@@ -23,7 +23,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import object_session, relationship
 from pgvector.sqlalchemy import Vector
 
 from app.core.database import Base
@@ -136,6 +136,16 @@ class Profile(Base):
         from app.services.usernames import is_starter_username  # lazy: avoids the services↔models cycle
 
         return bool(self.username) and not (self.id is not None and is_starter_username(self.id, self.username))
+
+    @property
+    def workshop_languages(self) -> list["ProgrammingLang"]:
+        """The Workshop languages of the active Workshops this account belongs to (ADR 0001)."""
+        from app.services.workspace_queries import workshop_languages_by_profile  # lazy: avoids the services↔models cycle
+
+        session = object_session(self)
+        if session is None or self.id is None:
+            return []
+        return workshop_languages_by_profile(session, [self.id])[self.id]
 
 
 # ============================================================================

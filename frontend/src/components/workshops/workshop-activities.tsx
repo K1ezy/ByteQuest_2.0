@@ -92,7 +92,7 @@ function ActivityEditor({ dialog, quests, topics, base, close, update }: {
 
 export function WorkshopActivities() {
   const { workshop, setWorkshop } = useWorkshop();
-  const { role, enrolled_language: language } = useShellProfile();
+  const { role } = useShellProfile();
   const base = `/workshops/${workshop.id}/activities`;
   const { data, error, loading, reload } = useApi<WorkshopQuest[]>(base, true);
   const [dialog, setDialog] = useState<ActivityDialog | null>(null);
@@ -180,8 +180,7 @@ export function WorkshopActivities() {
         const title = quest.title || quest.topic_concept;
         let availability = quest.is_closed ? "Closed for submissions" : undefined;
         if (role === "student" && !quest.can_open) {
-          if (language !== workshop.language) availability = "Switch to this workshop’s language track to open.";
-          else if (quest.opens_at) availability = `Opens ${workshopDateTime(quest.opens_at)}`;
+          if (quest.opens_at) availability = `Opens ${workshopDateTime(quest.opens_at)}`;
         }
         return <div className="workshop-activity-row" key={link.activity_id}>
           <QuestCard quest={quest} learner={quest.can_open} workshop availability={availability} />

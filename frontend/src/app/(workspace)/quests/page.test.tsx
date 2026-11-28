@@ -8,7 +8,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.push, replace: mocks.push }),
   useSearchParams: () => mocks.params,
 }));
-vi.mock("@/components/app-shell", () => ({ useShellProfile: () => ({ role: "student", enrolled_language: mocks.language }) }));
+vi.mock("@/components/app-shell", () => ({ useShellProfile: () => ({ role: "student", workshop_languages: mocks.language ? [mocks.language] : [] }) }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/api")>(), apiRequest: mocks.api,
 }));
@@ -77,6 +77,15 @@ it("labels each card with its Workshop above the title and finds activities by W
   fireEvent.change(screen.getByRole("searchbox"), { target: { value: workshop.name.toUpperCase() } });
   expect(screen.getByRole("heading", { name: quest.title! })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Track quiz" })).toBeNull();
+});
+
+it("asks a student in no Workshop to join one instead of choosing a language", async () => {
+  mocks.language = null;
+  render(<QuestsPage />);
+  expect(await screen.findByRole("heading", { name: "Join a workshop to see its activities" })).toBeTruthy();
+  expect(screen.queryByText(/Choose your programming language/)).toBeNull();
+  expect(screen.getByRole("link", { name: "Go to Workshops" }).getAttribute("href")).toBe("/workshops");
+  expect(mocks.api).not.toHaveBeenCalled();
 });
 
 it("offers Workshops and track practice when the learner has no shared activities", async () => {

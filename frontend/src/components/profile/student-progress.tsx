@@ -1,5 +1,6 @@
 "use client";
 
+import { languageList } from "@/components/workshops/workshop-ui";
 import Link from "next/link";
 import { useState } from "react";
 import { InsightLineChart } from "@/components/insights/line-chart";
@@ -12,7 +13,6 @@ import type { Profile } from "@/lib/types";
 import { formatDate, formatDateTime, type HelpPattern, type StudentAnalytics } from "@/lib/workspace";
 import { formatManilaDateTime } from "@/lib/activity-date";
 
-const LANGUAGES = { cpp: "C++", python: "Python", java: "Java" };
 const RECENT_LIMIT = 5;
 
 function duration(seconds: number) {
@@ -22,18 +22,19 @@ function duration(seconds: number) {
   return hours ? `${hours} hr ${minutes % 60} min` : `${minutes} min`;
 }
 
-function ProgressOverview({ a, language }: { a: StudentAnalytics; language: Profile["enrolled_language"] }) {
+function ProgressOverview({ a, languages }: { a: StudentAnalytics; languages: Profile["workshop_languages"] }) {
+  const language = languageList(languages);
   const { quests_completed: done, quests_total: total } = a;
   const completion = done !== undefined && total ? Math.round(done / total * 100) : 0;
   return (
     <div className="profile-progress-overview">
       {done !== undefined && total !== undefined ? <section className="ws-panel" aria-labelledby="quest-completion-title">
         <h2 id="quest-completion-title">Quest completion</h2>
-        <p><strong>{done} of {total} complete</strong>{language ? ` · ${LANGUAGES[language]}` : ""} · {completion}%</p>
+        <p><strong>{done} of {total} complete</strong>{language ? ` · ${language}` : ""} · {completion}%</p>
         <progress aria-labelledby="quest-completion-title" value={completion} max={100} />
-        {language && total === 0 ? <p className="ws-muted">No published quests for this language yet.</p> : null}
+        {language && total === 0 ? <p className="ws-muted">No workshop activities have been shared yet.</p> : null}
         {language ? <Link className="insight-practice" href="/quests">Open Quest Map</Link>
-          : <Link className="insight-practice" href="/workshops">Join a workshop to choose your language</Link>}
+          : <Link className="insight-practice" href="/workshops">Join a workshop to see its activities</Link>}
       </section> : null}
       <section className="ws-panel" aria-labelledby="xp-progress-title">
         <h2 id="xp-progress-title">Level {a.current_level}</h2>
@@ -121,7 +122,7 @@ export function StudentProgress({ a, profile }: { a: StudentAnalytics; profile: 
   const typeLabel = (t: string) => (t === "quiz" ? "Quizzes" : t === "challenge" ? "Coding challenges" : t);
   return (
     <>
-      <ProgressOverview a={a} language={profile.enrolled_language} />
+      <ProgressOverview a={a} languages={profile.workshop_languages} />
       <ProgressRecap userId={profile.id} />
       <div className="ws-stat-grid">
         <StatCard label={metrics.attempts_passed.label} value={a.total_attempts ? Math.round(a.pass_rate) + "%" : "—"} hint={a.successful_attempts + " of " + a.total_attempts + " passed"} />

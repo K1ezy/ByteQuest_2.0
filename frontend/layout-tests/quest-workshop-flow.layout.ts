@@ -36,7 +36,7 @@ test("a learner can find a shared quest, open it from its Workshop and return", 
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/profile/me")) return route.fulfill({ json: {
       id: studentId, role: "student", username: "layout-test", pseudonym_id: "layout-student",
-      enrolled_language: "python", xp_points: 0, current_level: 1,
+      workshop_languages: ["python"], xp_points: 0, current_level: 1,
     } });
     if (path.endsWith("/quests")) return route.fulfill({ json: [quiz, challenge, trackQuest] });
     if (path.endsWith(`/workshops/${workshopId}/activities`)) return route.fulfill({ json: [quiz, challenge] });

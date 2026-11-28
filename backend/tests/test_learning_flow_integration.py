@@ -596,7 +596,7 @@ def test_quest_join_quiz_and_progress_survive_new_client(flow):
     assert client.post("/api/v1/workshops", headers=student, json={
         "name": "Student group", "language": "python",
     }).status_code == 403
-    assert client.post("/api/v1/workshops/join", headers=other_track, json={"code": code}).status_code == 409
+    assert client.post("/api/v1/workshops/join", headers=other_track, json={"code": code}).status_code == 200  # any language joins (ADR 0001)
     joined = client.post("/api/v1/workshops/join", headers=student, json={"code": code})
     assert joined.status_code == 200, joined.text
     assert joined.json()["join_code"] is None
@@ -2875,50 +2875,39 @@ def test_ai_failures_leave_drafts_and_hint_allowance_intact(flow, monkeypatch, c
 
 
 
-def test_first_language_is_selected_only_on_successful_workshop_join(flow):
+def test_a_student_joins_workshops_in_any_language_with_only_a_code(flow):
     client, new_session, users = flow
     student, instructor = _token(users["student"]), _token(users["instructor"])
 
-    with new_session() as db:
-        profile = db.get(Profile, users["student"])
-        profile.enrolled_language = None
-        profile.track_selected_at = None
-        db.commit()
-
     profile = client.get("/api/v1/profile/me", headers=student).json()
-    assert profile["enrolled_language"] is None and not profile["needs_track_setup"]
+    assert profile["workshop_languages"] == [] and "enrolled_language" not in profile
+    assert not profile["needs_track_setup"]
     dashboard = client.get("/api/v1/pilot/dashboard", headers=student).json()
     assert dashboard["recommendation"]["recommended_action"] == "join_workshop"
     assert dashboard["next_activity"] is None
     assert client.get("/api/v1/quests", headers=student).json() == []
-    assert client.get("/api/v1/quests/leaderboard", headers=student).json()["track"] is None
     assert client.get("/api/v1/quests/mastery-map", headers=student).json()["concepts"] == []
-    progress = client.get("/api/v1/profile/me/analytics", headers=student).json()["student"]
-    assert progress["quests_total"] == 0
+    assert client.get("/api/v1/profile/me/analytics", headers=student).json()["student"]["quests_total"] == 0
 
-    update = {"enrolled_language": "java", "year_level": 3, "semester": 1}
-    assert client.put("/api/v1/profile/onboarding", headers=student, json=update).status_code == 409
-    workshop = client.post("/api/v1/workshops", headers=instructor, json={
-        "name": "Choose Python", "language": "python",
-    })
-    assert workshop.status_code == 201, workshop.text
-    code = workshop.json()["join_code"]
-    join = "/api/v1/workshops/join"
-    assert client.post(join, headers=student, json={"code": code}).status_code == 422
-    mismatch = client.post(join, headers=student, json={"code": code, "language": "java"})
-    assert (mismatch.status_code, mismatch.json()["detail"]) == (409, "This workshop uses Python. Choose Python to join.")
-    assert client.get("/api/v1/profile/me", headers=student).json()["enrolled_language"] is None
-    assert client.get("/api/v1/workshops", headers=student).json() == []
-
-    joined = client.post(join, headers=student, json={"code": code, "language": "python"})
-    assert joined.status_code == 200, joined.text
-    assert client.get("/api/v1/profile/me", headers=student).json()["enrolled_language"] == "python"
-    with new_session() as db:
-        assert db.get(Profile, users["student"]).track_selected_at is not None
-    assert client.post(join, headers=student, json={"code": code}).status_code == 200
-    saved = client.put("/api/v1/profile/onboarding", headers=student, json=update)
+    # Onboarding keeps the academic context and never asks for a language.
+    assert client.put("/api/v1/profile/onboarding", headers=student,
+                      json={"enrolled_language": "java", "year_level": 3, "semester": 1}).status_code == 422
+    saved = client.put("/api/v1/profile/onboarding", headers=student, json={"year_level": 3, "semester": 1})
     assert saved.status_code == 200, saved.text
-    assert saved.json()["enrolled_language"] == "java" and saved.json()["year_level"] == 3
+    assert saved.json()["year_level"] == 3
+
+    join = "/api/v1/workshops/join"
+    codes = {}
+    for language in ("python", "java"):
+        created = client.post("/api/v1/workshops", headers=instructor, json={"name": f"{language} class", "language": language})
+        assert created.status_code == 201, created.text
+        codes[language] = created.json()["join_code"]
+    assert client.post(join, headers=student, json={"code": codes["python"], "language": "java"}).status_code == 422
+    for language in ("python", "java"):
+        joined = client.post(join, headers=student, json={"code": codes[language]})
+        assert joined.status_code == 200, joined.text
+    assert client.post(join, headers=student, json={"code": codes["java"]}).status_code == 200
+    assert client.get("/api/v1/profile/me", headers=student).json()["workshop_languages"] == ["java", "python"]
 
 
 def test_progress_recap_compares_manila_periods_and_usual_pace(flow, monkeypatch):

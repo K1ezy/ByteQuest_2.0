@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   getMyProfile: vi.fn(),
   getMyAnalytics: vi.fn(),
   updateMyProfile: vi.fn(),
-  updateMyTrack: vi.fn(),
+  updateMyAcademicDetails: vi.fn(),
   uploadMyAvatar: vi.fn(),
   deleteMyAvatar: vi.fn(),
   requestResetLink: vi.fn(),
@@ -47,7 +47,7 @@ vi.mock("@/lib/workspace", async (importOriginal) => {
     getMyProfile: mocks.getMyProfile,
     getMyAnalytics: mocks.getMyAnalytics,
     updateMyProfile: mocks.updateMyProfile,
-    updateMyTrack: mocks.updateMyTrack,
+    updateMyAcademicDetails: mocks.updateMyAcademicDetails,
     uploadMyAvatar: mocks.uploadMyAvatar,
     deleteMyAvatar: mocks.deleteMyAvatar,
   };
@@ -62,7 +62,7 @@ const profile = {
   pseudonym_id: "student_verify",
   username: "studentverify",
   role: "student" as const,
-  enrolled_language: "python" as const,
+  workshop_languages: ["python" as const],
   year_level: 2,
   semester: 1,
   xp_points: 125,
@@ -163,7 +163,7 @@ it("edits identity from one form, sends only changed fields and publishes the sa
 
   await waitFor(() => expect(mocks.updateMyProfile).toHaveBeenCalledOnce());
   expect(mocks.updateMyProfile).toHaveBeenCalledWith({ display_name: "Student Updated", bio: "Learning loops" });
-  expect(mocks.updateMyTrack).not.toHaveBeenCalled();
+  expect(mocks.updateMyAcademicDetails).not.toHaveBeenCalled();
   expect(await screen.findByRole("heading", { name: "Student Updated" })).toBeTruthy();
   expect(screen.getByText("Learning loops")).toBeTruthy();
   expect(updatedEvents).toHaveLength(1);
@@ -218,23 +218,24 @@ it("hides a generated starter handle, never re-saves it, and blocks an invalid h
   await waitFor(() => expect(mocks.updateMyProfile).toHaveBeenCalledWith({ bio: "Hi" }));
 });
 
-it("saves the learning track from the same form and keeps it open when only the track fails", async () => {
-  mocks.updateMyTrack.mockRejectedValueOnce(new Error("Track service offline"));
+it("saves year and semester from the same form and keeps it open when only they fail", async () => {
+  mocks.updateMyAcademicDetails.mockRejectedValueOnce(new Error("Profile service offline"));
   render(<ProfilePage />);
-  expect(await screen.findByText(/Python track · Year 2 · Semester 1/)).toBeTruthy();
+  expect(await screen.findByText(/Python · Year 2 · Semester 1/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /Edit profile/ }));
+  expect(screen.queryByLabelText("Language")).toBeNull();
   fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Student Updated" } });
-  fireEvent.change(screen.getByLabelText("Language"), { target: { value: "java" } });
+  fireEvent.change(screen.getByLabelText("Year level"), { target: { value: "3" } });
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
-  expect(await screen.findByText(/Your details were saved, but the learning track was not: Track service offline/)).toBeTruthy();
+  expect(await screen.findByText(/Your details were saved, but your year and semester were not: Profile service offline/)).toBeTruthy();
   expect(mocks.updateMyProfile).toHaveBeenCalledWith({ display_name: "Student Updated" });
-  mocks.updateMyTrack.mockImplementation(async (body: { enrolled_language: string; year_level: number; semester: number }) =>
-    ({ ...profile, display_name: "Student Updated", enrolled_language: body.enrolled_language }));
+  mocks.updateMyAcademicDetails.mockImplementation(async (body: { year_level: number; semester: number }) =>
+    ({ ...profile, display_name: "Student Updated", year_level: body.year_level }));
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-  await waitFor(() => expect(mocks.updateMyTrack).toHaveBeenLastCalledWith({ enrolled_language: "java", year_level: 2, semester: 1 }));
+  await waitFor(() => expect(mocks.updateMyAcademicDetails).toHaveBeenLastCalledWith({ year_level: 3, semester: 1 }));
   expect(mocks.updateMyProfile).toHaveBeenCalledOnce();
-  expect(await screen.findByText(/Java track · Year 2 · Semester 1/)).toBeTruthy();
+  expect(await screen.findByText(/Python · Year 3 · Semester 1/)).toBeTruthy();
 });
 
 it("opens straight into handle editing from the leaderboard deep link and then clears it", async () => {
@@ -295,11 +296,11 @@ it("opens Mastery inside Profile with links to filtered quests", async () => {
   expect(mocks.getMyAnalytics).not.toHaveBeenCalled();
 });
 
-it("opens the track editor from a bookmarked change-track link", async () => {
+it("opens the academic details from a bookmarked edit link", async () => {
   mocks.searchParams = new URLSearchParams("edit=track");
   render(<ProfilePage />);
-  const language = await screen.findByRole("combobox", { name: "Language" });
-  await waitFor(() => expect(document.activeElement).toBe(language));
+  const yearLevel = await screen.findByRole("combobox", { name: "Year level" });
+  await waitFor(() => expect(document.activeElement).toBe(yearLevel));
   expect(mocks.router.replace).toHaveBeenCalledWith("/profile", { scroll: false });
 });
 it("opens Progress for the old overview link and exposes role-aware navigation", async () => {

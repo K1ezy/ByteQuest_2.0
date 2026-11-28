@@ -26,7 +26,7 @@ test("student PDF attached in the floating chat stays available on the full page
     const request = route.request();
     switch (new URL(request.url()).pathname) {
       case "/api/v1/profile/me":
-        return route.fulfill({ json: { id: studentId, role: "student", username: "layout-student", enrolled_language: "python" } });
+        return route.fulfill({ json: { id: studentId, role: "student", username: "layout-student", workshop_languages: ["python"] } });
       case `/api/v1/workshops/${workshopId}`:
         return route.fulfill({ json: {
           id: workshopId, name: "Python Workshop", language: "python", owner_name: "Instructor",
