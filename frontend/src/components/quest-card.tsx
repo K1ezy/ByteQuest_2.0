@@ -4,7 +4,9 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { SolveStars } from "@/components/solve-stars";
 import { formatActivityDate, formatManilaDateTime } from "@/lib/activity-date";
-import type { Quest } from "@/lib/types";
+import type { Quest, Workshop } from "@/lib/types";
+
+export type QuestWorkshopSource = Pick<Workshop, "id" | "name"> & { sharedAt: string };
 
 export function questHref(quest: Pick<Quest, "id" | "activity_type">) {
   return `/${quest.activity_type === "challenge" ? "arena" : "quiz"}/${quest.id}`;
@@ -21,12 +23,14 @@ function briefDescription(quest: Quest): string {
     const text = firstParagraph.replace(/[#*`_~]/g, "").replace(/\s+/g, " ").trim();
     return text.length > 150 ? `${text.slice(0, 147)}…` : text;
   }
+  const questionCount = quest.quiz_questions?.length;
+  if (questionCount) return `${questionCount} concept ${questionCount === 1 ? "question" : "questions"} on ${quest.topic_concept}.`;
   return quest.activity_type === "quiz"
     ? `Practice and test your understanding of ${quest.topic_concept} with focused concept questions.`
     : `Implement a solution for ${quest.topic_concept} and verify your code with automated test cases.`;
 }
 
-export function QuestCard({ quest, learner, next = false, selected = false, onSelect, onOpen, workshop = false, availability, preview }: {
+export function QuestCard({ quest, learner, next = false, selected = false, onSelect, onOpen, workshop = false, availability, preview, sourceWorkshops }: {
   quest: Quest;
   learner: boolean;
   next?: boolean;
@@ -36,17 +40,22 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
   workshop?: boolean;
   availability?: string;
   preview?: ReactNode;
+  sourceWorkshops?: QuestWorkshopSource[];
 }) {
   const Heading = workshop ? "h4" : "h2";
   const concept = quest.topic_concept;
   const topic = concept.includes(":") ? concept.split(":")[0].trim()
     : concept.length > 28 ? `${concept.slice(0, 26)}…` : concept;
   const challenge = quest.activity_type === "challenge";
+  const completedAt = quest.completed_at ? Date.parse(quest.completed_at) : NaN;
+  const completedBeforeSharing = workshop ? completedAt < Date.parse(quest.added_at)
+    : !!sourceWorkshops?.length && sourceWorkshops.every(({ sharedAt }) => completedAt < Date.parse(sharedAt));
   const label = challenge
     ? quest.is_completed ? "Practice again" : next ? "Start next challenge →" : "Start challenge →"
     : quest.is_completed ? "Review quiz" : next ? "Start next quiz →" : "Start quiz →";
   return <article className={`quest-card ${selected ? "is-selected-card" : ""}`}
-    id={`quest-${quest.id}`} tabIndex={onSelect ? 0 : undefined} role={onSelect ? "region" : undefined}
+    id={`quest-${quest.id}`} tabIndex={onSelect ? 0 : workshop ? -1 : undefined} role={onSelect ? "region" : undefined}
+    aria-labelledby={`quest-title-${quest.id}`}
     onClick={onSelect ? (event) => {
       if (!(event.target as Element).closest("a, button, .activity-performance-preview")) onSelect();
     } : undefined} onKeyDown={onSelect ? (event) => {
@@ -64,7 +73,7 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
           {next && <span className="next-badge" aria-label="Next recommended quest">
             <span className="status-dot pulsing" aria-hidden="true" /> NEXT UP
           </span>}
-          {quest.is_completed && <span className="completion">✓ Complete</span>}
+          {quest.is_completed && <span className="completion">{completedBeforeSharing ? "✓ Completed before sharing" : "✓ Complete"}</span>}
           {quest.stars ? <SolveStars stars={quest.stars} /> : null}
         </div>
         <div className="quest-meta">
@@ -73,7 +82,17 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
           <span className="tag xp">✦ {quest.xp_reward} XP</span>
         </div>
       </div>
-      <Heading>{quest.title || concept}</Heading>
+      {sourceWorkshops && <div className="quest-workshop-sources">
+        {sourceWorkshops.length ? <>
+          <span>From</span>
+          <ul>
+            {sourceWorkshops.map(({ id, name }) => <li key={id}>
+              <Link href={`/workshops/${id}/activities#quest-${quest.id}`}>{name}</Link>
+            </li>)}
+          </ul>
+        </> : <span>Track practice</span>}
+      </div>}
+      <Heading id={`quest-title-${quest.id}`}>{quest.title || concept}</Heading>
       {quest.added_at && <p className="activity-added-date">
         {quest.added_at_estimated ? "Added around " : "Added "}
         <time dateTime={quest.added_at}>{formatActivityDate(quest.added_at)}</time>

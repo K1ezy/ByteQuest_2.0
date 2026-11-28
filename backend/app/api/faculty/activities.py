@@ -12,7 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.entities import ActivityAttempt, ActivityKind, LearningActivity, Profile, ProgrammingLang, ReviewState, TestCase, Workshop
+from app.models.entities import ActivityAttempt, ActivityKind, LearningActivity, Profile, ProgrammingLang, ReviewState, TestCase
 from app.services.audit import record_audit
 from app.services.activity_publishing import activity_destination, apply_publish_rules
 from app.services.challenge_verification import verify_saved_challenge
@@ -188,7 +188,7 @@ def create_activity(
     db.commit()
     activity = _load_activity(db, activity.id)
     return {
-        "activity": _activity_response(activity, course, attempt_count=0),
+        "activity": _activity_response(db, activity, course, attempt_count=0),
         "message": "Activity draft saved. Complete content and scheduling, then preview before publishing.",
     }
 
@@ -222,11 +222,9 @@ def get_activity(activity_id: uuid.UUID, user: Profile = Depends(faculty_user), 
     activity = _load_activity(db, activity_id)
     course = _course_for_activity(db, user, activity)
     attempts = db.query(func.count(ActivityAttempt.id)).filter(ActivityAttempt.activity_id == activity.id).scalar() or 0
-    detail = _activity_response(activity, course, attempt_count=attempts)
-    workshop = db.get(Workshop, activity.destination_workshop_id) if activity.destination_workshop_id else None
+    detail = _activity_response(db, activity, course, attempt_count=attempts)
     detail.update(
         {
-            "destination_workshop": {"id": str(workshop.id), "name": workshop.name} if workshop else None,
             "course": _course_brief(course),
             "attempt_count": int(attempts),
             "grading_locked": attempts > 0,
@@ -332,7 +330,7 @@ def update_activity(
     db.commit()
     activity = _load_activity(db, activity_id)
     return {
-        "activity": _activity_response(activity, course, attempt_count=int(attempts)),
+        "activity": _activity_response(db, activity, course, attempt_count=int(attempts)),
         "message": "Activity saved. Preview the student view before publishing.",
     }
 
@@ -384,7 +382,7 @@ async def verify_activity(activity_id: uuid.UUID, user: Profile = Depends(facult
     db.commit()
     activity = _load_activity(db, activity_id)
     return {
-        "activity": _activity_response(activity, course),
+        "activity": _activity_response(db, activity, course),
         "message": (
             "Judge0 verification passed. The activity can be published."
             if verified
@@ -421,7 +419,7 @@ def schedule_activity(
     )
     db.commit()
     return {
-        "activity": _activity_response(activity, course),
+        "activity": _activity_response(db, activity, course),
         "message": "Schedule saved. Times are shown in Asia/Manila.",
     }
 
@@ -462,7 +460,7 @@ def publish_activity(
     db.commit()
     db.refresh(activity)
     return {
-        "activity": _activity_response(activity, course),
+        "activity": _activity_response(db, activity, course),
         "message": f"Published. Students see it {('from ' + iso(activity.opens_at)) if activity.opens_at else 'immediately'}.",
     }
 
@@ -563,6 +561,6 @@ def create_activity_version(
     db.commit()
     clone = _load_activity(db, clone.id)
     return {
-        "activity": _activity_response(clone, course, attempt_count=0),
+        "activity": _activity_response(db, clone, course, attempt_count=0),
         "message": f"Version {next_version} drafted. Grading content is editable here; the published version stays live until you publish.",
     }

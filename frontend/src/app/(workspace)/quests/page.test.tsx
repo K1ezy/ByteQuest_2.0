@@ -20,17 +20,95 @@ const quest: Quest = {
   topic_concept: "Loops", difficulty_level: 1, sequence_order: 1, added_at: "",
   added_at_estimated: false, xp_reward: 20, problem_statement: null, starter_code: null, is_completed: true,
 };
+const workshop = {
+  id: "python-workshop", name: "Python class", language: "python", archived: false,
+  activities: [{ activity_id: quest.id, added_at: "2026-11-25T10:00:00Z" }],
+};
+
+function mockQuests(quests: Quest[]) {
+  mocks.api.mockImplementation(async (path: string) => path === "/workshops" ? [] : quests);
+}
+
 beforeEach(() => {
-  mocks.params = new URLSearchParams();
+  mocks.params = new URLSearchParams("source=all");
   mocks.language = "python";
   mocks.push.mockReset();
   mocks.api.mockReset();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.history.replaceState(null, "", "/");
+});
+
+it("starts with active Workshop activities and keeps broader track practice one step away", async () => {
+  mocks.params = new URLSearchParams();
+  const trackQuiz = { ...quest, id: "track", title: "Track quiz", activity_type: "quiz" as const };
+  mocks.api.mockImplementation(async (path: string) => path === "/workshops" ? [workshop, {
+    ...workshop, id: "archived", name: "Previous Workshop", archived: true, activities: [{ activity_id: trackQuiz.id }],
+  }] : [{ ...quest, completed_at: "2026-11-24T10:00:00Z" }, trackQuiz]);
+  const { rerender } = render(<QuestsPage />);
+  const card = (await screen.findByRole("heading", { name: quest.title! })).closest("article")!;
+  expect(within(card).getByRole("link", { name: workshop.name }).getAttribute("href"))
+    .toBe("/workshops/python-workshop/activities#quest-one");
+  expect(within(card).getByText("✓ Completed before sharing")).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: trackQuiz.title })).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "All track practice" }));
+  expect(window.location.search).toBe("?source=all");
+  mocks.params = new URLSearchParams(window.location.search);
+  rerender(<QuestsPage />);
+  expect(screen.getByRole("heading", { name: trackQuiz.title })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Previous Workshop" })).toBeNull();
+});
+
+it("labels each card with its Workshop above the title and finds activities by Workshop name", async () => {
+  mocks.params = new URLSearchParams("source=all");
+  const trackQuiz = { ...quest, id: "track", title: "Track quiz", activity_type: "quiz" as const,
+    quiz_questions: [{}, {}] as Quest["quiz_questions"] };
+  mocks.api.mockImplementation(async (path: string) => path === "/workshops" ? [workshop] : [quest, trackQuiz]);
+  render(<QuestsPage />);
+  const heading = await screen.findByRole("heading", { name: quest.title! });
+  const source = within(heading.closest("article")!).getByText("From").parentElement!;
+  expect(source.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const trackCard = screen.getByRole("heading", { name: "Track quiz" }).closest("article")!;
+  expect(within(trackCard).getByText("Track practice")).toBeTruthy();
+  expect(within(trackCard).getByText(`2 concept questions on ${quest.topic_concept}.`)).toBeTruthy();
+
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: workshop.name.toUpperCase() } });
+  expect(screen.getByRole("heading", { name: quest.title! })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Track quiz" })).toBeNull();
+});
+
+it("offers Workshops and track practice when the learner has no shared activities", async () => {
+  mocks.params = new URLSearchParams();
+  mockQuests([quest]);
+  render(<QuestsPage />);
+  expect(await screen.findByRole("heading", { name: "No Workshop activities yet" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Go to Workshops" }).getAttribute("href")).toBe("/workshops");
+  expect(screen.getByRole("button", { name: "All track practice" })).toBeTruthy();
+});
+
+it("can browse all track practice when Workshop activities fail to load", async () => {
+  mocks.params = new URLSearchParams();
+  mocks.api.mockImplementation(async (path: string) => {
+    if (path === "/workshops") throw new Error("Workshops are temporarily unavailable");
+    return [quest];
+  });
+  const { rerender } = render(<QuestsPage />);
+  expect((await screen.findByRole("alert")).textContent).toBe("Workshops are temporarily unavailable");
+  fireEvent.click(screen.getByRole("button", { name: "All track practice" }));
+  mocks.params = new URLSearchParams(window.location.search);
+  rerender(<QuestsPage />);
+  expect(await screen.findByRole("heading", { name: quest.title! })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Workshop activities" }));
+  mocks.params = new URLSearchParams(window.location.search);
+  rerender(<QuestsPage />);
+  expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+});
 
 it("opens a concept from Profile as an exact Quest Map filter", async () => {
   mocks.params = new URLSearchParams("concept=Loops");
-  mocks.api.mockResolvedValue([quest, { ...quest, id: "two", title: "Loops in a different concept", topic_concept: "Strings" }]);
+  mockQuests([quest, { ...quest, id: "two", title: "Loops in a different concept", topic_concept: "Strings" }]);
   const { rerender } = render(<QuestsPage />);
 
   expect(await screen.findByRole("heading", { name: "Repeat a step" })).toBeTruthy();
@@ -41,9 +119,9 @@ it("opens a concept from Profile as an exact Quest Map filter", async () => {
   // Keep the typed text while the router removes the exact concept filter.
   fireEvent.change(search, { target: { value: "Loopsx" } });
   expect(search.value).toBe("Loopsx");
-  expect(mocks.push).toHaveBeenLastCalledWith("/quests", { scroll: false });
+  expect(mocks.push).toHaveBeenLastCalledWith("/quests?source=all", { scroll: false });
   fireEvent.change(search, { target: { value: "" } });
-  mocks.params = new URLSearchParams();
+  mocks.params = new URLSearchParams("source=all");
   rerender(<QuestsPage />);
   expect(screen.getByRole("heading", { name: "Loops in a different concept" })).toBeTruthy();
 });
@@ -53,7 +131,7 @@ it("finds a quest by its # number, not by digits inside other titles", async () 
     ...quest, id: `q${index + 1}`, position: index + 1, sequence_order: index + 20,
     title: index === 8 ? "Print 4 squares" : `Quest title ${String.fromCharCode(65 + index)}`,
   }));
-  mocks.api.mockResolvedValue(list);
+  mockQuests(list);
   render(<QuestsPage />);
   await screen.findByRole("heading", { name: "Print 4 squares" });
   const search = screen.getByRole("searchbox");
@@ -72,7 +150,7 @@ it("finds a quest by its # number, not by digits inside other titles", async () 
 });
 
 it("shows each quest's deadline date and time, and says Closed once it has passed", async () => {
-  mocks.api.mockResolvedValue([
+  mockQuests([
     { ...quest, closes_at: "2026-11-25T11:30:00Z" },
     { ...quest, id: "two", title: "Past deadline", closes_at: "2026-11-01T01:00:00Z", is_closed: true },
     { ...quest, id: "three", title: "No deadline" },
@@ -88,13 +166,13 @@ it("shows each quest's deadline date and time, and says Closed once it has passe
 });
 
 it("treats an old Exams filter as practice and only shows the practice categories", async () => {
-  mocks.params = new URLSearchParams("category=exams");
-  mocks.api.mockResolvedValue([]);
+  mocks.params = new URLSearchParams("source=all&category=exams");
+  mockQuests([]);
   render(<QuestsPage />);
   expect(await screen.findByRole("heading", { name: "No published activities yet" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Concept check quiz" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Exams" })).toBeNull();
-  expect(mocks.api.mock.calls.map(([path]) => path)).toEqual(["/quests"]);
+  expect(mocks.api.mock.calls.map(([path]) => path)).toEqual(["/workshops", "/quests"]);
 });
 
 it("shows the selected activity's history, ignores a late response, and closes on Escape or filtering", async () => {
@@ -103,6 +181,7 @@ it("shows the selected activity's history, ignores a late response, and closes o
   let aborted: AbortSignal | undefined;
   mocks.api.mockImplementation((path: string, init?: RequestInit) => {
     if (path === "/quests") return Promise.resolve([quest, quiz]);
+    if (path === "/workshops") return Promise.resolve([]);
     if (path === "/quests/one/performance-preview") {
       aborted = init?.signal ?? undefined;
       return new Promise((resolve) => { resolveChallenge = resolve; });
@@ -138,7 +217,7 @@ it("shows the selected activity's history, ignores a late response, and closes o
 });
 
 it("keeps the activity tip available and dismisses the preview when focus leaves the card", async () => {
-  mocks.api.mockImplementation(async (path: string) => path === "/quests" ? [quest] : {
+  mocks.api.mockImplementation(async (path: string) => path === "/quests" ? [quest] : path === "/workshops" ? [] : {
     scope: "workshop", total: 0, pass_marked: 0, passed: 0,
   });
   render(<QuestsPage />);
@@ -157,7 +236,7 @@ it("keeps the activity tip available and dismisses the preview when focus leaves
 });
 
 it("shows zero passes as real practice history", async () => {
-  mocks.api.mockImplementation(async (path: string) => path === "/quests" ? [quest] : {
+  mocks.api.mockImplementation(async (path: string) => path === "/quests" ? [quest] : path === "/workshops" ? [] : {
     scope: "workshop", total: 2, pass_marked: 2, passed: 0,
   });
   render(<QuestsPage />);

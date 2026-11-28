@@ -96,6 +96,7 @@ class QuestCard(BaseModel):
     problem_statement: Optional[str] = None
     starter_code: Optional[str] = None
     is_completed: bool
+    completed_at: datetime | None = None
     # Best solve-quality stars (1-3) on a solved code challenge; None otherwise.
     stars: Optional[int] = None
     is_closed: bool = False
@@ -278,12 +279,12 @@ def list_published_quests(
     )
     activity_ids = [activity.id for activity in activities]
     if activity_ids and current_user.role == UserRole.student:
-        completed_activity_ids = first_visible_completions(db, current_user.id, activity_ids)
+        completions = first_visible_completions(db, current_user.id, activity_ids)
         challenge_stars = best_challenge_stars(db, current_user.id, [
             activity.id for activity in activities if activity.activity_type == ActivityKind.challenge
         ])
     else:
-        completed_activity_ids = set()
+        completions = {}
         challenge_stars = {}
 
     detail_challenge_ids = [
@@ -337,7 +338,8 @@ def list_published_quests(
                 xp_reward=activity.xp_reward,
                 problem_statement=activity.problem_statement if include_detail else None,
                 starter_code=activity.starter_code if include_detail else None,
-                is_completed=activity.id in completed_activity_ids,
+                is_completed=activity.id in completions,
+                completed_at=as_aware(completions.get(activity.id)),
                 stars=challenge_stars.get(activity.id),
                 is_closed=activity_is_closed(activity, now),
                 pass_mark_percent=(activity.pass_mark_percent or 100) if activity.activity_type == ActivityKind.challenge else None,

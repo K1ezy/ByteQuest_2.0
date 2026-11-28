@@ -546,7 +546,11 @@ if (-not $judge0PortOpen) {
 }
 
 if ($judge0PortOpen -and -not $PrepareOnly) {
-    if (-not (Test-TcpPort -ComputerName '172.30.95.2' -Port 2358)) {
+    # The guest brings its host-only address up after boot, sometimes after 2358 answers on the Wi-Fi IP.
+    $hostOnlyReady = Wait-Until -TimeoutSeconds 60 -PollMilliseconds 1000 -Condition {
+        Test-TcpPort -ComputerName '172.30.95.2' -Port 2358 -TimeoutMilliseconds 800
+    }
+    if (-not $hostOnlyReady) {
         throw 'Judge0 is running, but its Wi-Fi-independent host-only link is unavailable. Run PREPARE-BYTEQUEST-OFFLINE.bat while connected.'
     }
     $guestIPv4 = '172.30.95.2'

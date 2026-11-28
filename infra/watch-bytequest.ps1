@@ -12,9 +12,7 @@
     A Windows message appears only when the result changes, so a failure that lasts an hour is
     announced once, not every minute.
 
-    If the Docker engine is down and Docker Desktop isn't open, the watchdog starts Docker Desktop;
-    the containers restart themselves once Docker runs. It never restarts the API, the worker or a
-    container. If those stay down, rerun START-BYTEQUEST.bat.
+    The watchdog reports downtime. Use START-BYTEQUEST.bat when you want to start the stack again.
 
 .EXAMPLE
     Run one check by hand, including Judge0:
@@ -49,17 +47,7 @@ if ($docker) {
 }
 
 if (-not $dockerUp) {
-    $desktop = Get-DockerDesktopFile -RelativePath 'Docker Desktop.exe'
-    if (Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue) {
-        $problems.Add('Docker engine is not answering. Docker Desktop is open, so it is probably still starting.')
-    }
-    elseif ($desktop) {
-        Start-Process -FilePath $desktop | Out-Null
-        $problems.Add('Docker was stopped, so the watchdog started Docker Desktop.')
-    }
-    else {
-        $problems.Add('Docker engine is down and Docker Desktop was not found.')
-    }
+    $problems.Add('Docker engine is unavailable. Run START-BYTEQUEST.bat when you want to start ByteQuest.')
 }
 else {
     $apiUrl = Read-EnvValue -Path (Join-Path $repoRoot 'frontend\.env.local') -Name 'NEXT_PUBLIC_API_URL'

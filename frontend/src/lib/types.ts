@@ -51,6 +51,7 @@ export interface Quest {
   problem_statement: string | null;
   starter_code: string | null;
   is_completed: boolean;
+  completed_at?: string | null;
   is_closed?: boolean;
   pass_mark_percent?: number | null;
   quiz_questions?: QuizQuestion[] | null;

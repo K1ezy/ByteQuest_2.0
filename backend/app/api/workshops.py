@@ -37,6 +37,7 @@ from app.services.gamification.mastery_map import first_visible_completions
 from app.services.gamification.solve_quality import best_challenge_stars
 from app.services.materials import get_workshop_lesson, workshop_lessons
 from app.services.storage.supabase_storage import StorageError, pdf_storage
+from app.services.workspace_common import as_aware
 
 router = APIRouter(prefix="/api/v1/workshops", tags=["Workshops"])
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -116,6 +117,7 @@ class WorkshopQuest(BaseModel):
     problem_statement: str | None
     starter_code: None = None
     is_completed: bool
+    completed_at: datetime | None = None
     stars: int | None
     is_closed: bool
     can_open: bool
@@ -665,7 +667,7 @@ def workshop_activity_details(
     rows = _activity_links(db, [workshop.id]).add_entity(LearningActivity).all()
     is_student = current_user.role == UserRole.student
     on_track = current_user.enrolled_language == workshop.language
-    completed = set()
+    completed = {}
     stars = {}
     if is_student and on_track and rows:
         completed = first_visible_completions(db, current_user.id, [activity.id for _, activity in rows])
@@ -681,7 +683,8 @@ def workshop_activity_details(
             topic_concept=activity.topic_concept, difficulty_level=activity.difficulty_level,
             sequence_order=activity.sequence_order, added_at=link.added_at, xp_reward=activity.xp_reward,
             problem_statement=activity.problem_statement if not is_student or can_open else None,
-            is_completed=activity.id in completed, stars=stars.get(activity.id), is_closed=activity_is_closed(activity, now),
+            is_completed=activity.id in completed, completed_at=as_aware(completed.get(activity.id)),
+            stars=stars.get(activity.id), is_closed=activity_is_closed(activity, now),
             can_open=can_open, opens_at=activity.opens_at,
         ))
     return items

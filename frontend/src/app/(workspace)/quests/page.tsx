@@ -7,9 +7,9 @@ import { apiRequest, getErrorMessage } from "@/lib/api";
 import { useShellProfile } from "@/components/app-shell";
 import { ActivityDateFilter } from "@/components/activity-date-filter";
 import { activityDateMatches } from "@/lib/activity-date";
-import { QuestCard, questHref, questNumber } from "@/components/quest-card";
+import { QuestCard, questHref, questNumber, type QuestWorkshopSource } from "@/components/quest-card";
 import { ActivityPerformancePreview } from "@/components/activity-performance-preview";
-import type { Quest } from "@/lib/types";
+import type { Quest, Workshop } from "@/lib/types";
 
 type QuestStatusFilter = "all" | "next" | "completed";
 
@@ -22,16 +22,20 @@ const categories = [
 type PracticeCategory = (typeof categories)[number][0];
 
 function QuestsPageContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
+  const { role } = useShellProfile();
+  const isStudent = role === "student";
+  const source = searchParams.get("source");
+  // Profile links can open a concept from any practice the learner has access to.
+  const allPractice = !isStudent || source === "all" || (source !== "workshops" && searchParams.has("concept"));
   const requestedCategory = searchParams.get("category");
   const category = categories.find(([value]) => value === requestedCategory)?.[0] ?? "";
 
-  function handleCategorySelect(value: string) {
+  function selectFilter(key: "source" | "category", value: string) {
     const query = new URLSearchParams(searchParams);
-    if (value) query.set("category", value);
-    else query.delete("category");
-    router.push(query.size ? "/quests?" + query : "/quests", { scroll: false });
+    if (value) query.set(key, value);
+    else query.delete(key);
+    window.history.pushState(null, "", query.size ? "/quests?" + query : "/quests");
   }
 
   return (
@@ -40,26 +44,36 @@ function QuestsPageContent() {
         <div className="qm-panel-heading">
           <div>
             <h1>Quest Map</h1>
-            <p>Find coding challenges and practice quizzes.</p>
+            <p>{isStudent ? "Find coding challenges and concept checks shared in your Workshops." : "Find coding challenges and practice quizzes."}</p>
           </div>
         </div>
         <div className="quest-map-toolbar">
+          {isStudent && <div className="quest-filters" role="group" aria-label="Activity source">
+            <button type="button" className="filter-button" aria-pressed={!allPractice}
+              onClick={() => { if (allPractice) selectFilter("source", searchParams.has("concept") ? "workshops" : ""); }}>
+              Workshop activities
+            </button>
+            <button type="button" className="filter-button" aria-pressed={allPractice}
+              onClick={() => { if (!allPractice) selectFilter("source", "all"); }}>
+              All track practice
+            </button>
+          </div>}
           <div className="quest-filters" role="group" aria-label="Activity type">
             {categories.map(([value, label, description]) => (
               <button type="button" key={value} className="filter-button" data-tooltip={description}
-                aria-pressed={category === value} onClick={() => { if (category !== value) handleCategorySelect(value); }}>
+                aria-pressed={category === value} onClick={() => { if (category !== value) selectFilter("category", value); }}>
                 {label}
               </button>
             ))}
           </div>
         </div>
-        <PracticeQuestList category={category} />
+        <PracticeQuestList category={category} allPractice={allPractice} />
       </div>
     </div>
   );
 }
 
-function PracticeQuestList({ category }: { category: PracticeCategory }) {
+function PracticeQuestList({ category, allPractice }: { category: PracticeCategory; allPractice: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -67,6 +81,8 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
   const language = profile.enrolled_language;
   const isStudent = profile.role === "student";
   const [quests, setQuests] = useState<Quest[]>([]);
+  const [workshops, setWorkshops] = useState<Workshop[] | null>(null);
+  const [workshopError, setWorkshopError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [isError, setIsError] = useState(false);
@@ -81,29 +97,59 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
   }
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
   const searchInput = useRef<HTMLInputElement>(null);
+  const request = useRef<AbortController>(null);
 
   const loadData = useCallback(async () => {
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    const { signal } = controller;
     setLoading(true);
     setIsError(false);
     setMessage("");
+    if (isStudent) {
+      setWorkshops(null);
+      setWorkshopError(null);
+      void apiRequest<Workshop[]>("/workshops", { signal }).then(
+        (activeWorkshops) => { if (!signal.aborted) setWorkshops(activeWorkshops); },
+        (error) => { if (!signal.aborted) setWorkshopError(getErrorMessage(error)); },
+      );
+    }
     try {
-      setQuests(await apiRequest<Quest[]>("/quests"));
+      const activities = await apiRequest<Quest[]>("/quests", { signal });
+      if (!signal.aborted) setQuests(activities);
     } catch (error) {
+      if (signal.aborted) return;
       setIsError(true);
       setMessage(getErrorMessage(error));
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
-  }, []);
+  }, [isStudent]);
 
   useEffect(() => {
     if (language) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       void loadData();
     }
+    return () => request.current?.abort();
   }, [language, loadData]);
 
-  const nextQuest = quests.find((quest) => !quest.is_completed);
+  const workshopsByQuest = useMemo(() => {
+    const sources = new Map<string, QuestWorkshopSource[]>();
+    for (const workshop of workshops ?? []) {
+      if (workshop.archived || workshop.language !== language) continue;
+      for (const activity of workshop.activities) {
+        const activityWorkshops = sources.get(activity.activity_id) ?? [];
+        activityWorkshops.push({ id: workshop.id, name: workshop.name, sharedAt: activity.added_at });
+        sources.set(activity.activity_id, activityWorkshops);
+      }
+    }
+    return sources;
+  }, [language, workshops]);
+  const scopedQuests = useMemo(() => allPractice ? quests : quests.filter((quest) => workshopsByQuest.has(quest.id)),
+    [allPractice, quests, workshopsByQuest]);
+  const nextQuest = scopedQuests.find((quest) => !quest.is_completed);
   // Interactive selection state (Von Restorff + Direct Manipulation)
   const [selectedQuestId, setSelectedQuestId] = useState<string | null>(null);
 
@@ -127,7 +173,7 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
     const normalizedSearch = search.trim().toLocaleLowerCase();
     // "4" or "#4" finds quest #4 exactly, rather than every title that contains a 4.
     const searchedNumber = /^#?\d+$/.test(normalizedSearch) ? Number(normalizedSearch.replace("#", "")) : null;
-    return quests.filter((quest) => {
+    return scopedQuests.filter((quest) => {
       // Status filter
       const matchesStatus =
         questFilter === "all" ||
@@ -138,13 +184,13 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
       const matchesSearch = selectedConcept !== null
         ? quest.topic_concept === selectedConcept
         : searchedNumber !== null ? questNumber(quest) === searchedNumber
-        : !normalizedSearch || `${quest.title ?? ""} ${quest.topic_concept} ${quest.activity_type}`
+        : !normalizedSearch || `${quest.title ?? ""} ${quest.topic_concept} ${quest.activity_type} ${workshopsByQuest.get(quest.id)?.map(({ name }) => name).join(" ") ?? ""}`
           .toLocaleLowerCase()
           .includes(normalizedSearch);
 
       return matchesStatus && matchesSearch && activityDateMatches(quest.added_at, dateRange.from, dateRange.to);
     });
-  }, [quests, questFilter, search, selectedConcept, dateRange]);
+  }, [scopedQuests, questFilter, search, selectedConcept, dateRange, workshopsByQuest]);
 
   const visibleQuests = filteredQuests.filter((quest) => category === "code-challenge"
     ? quest.activity_type === "challenge" : category === "lessons-review"
@@ -220,8 +266,13 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
     setDateRange({ from: "", to: "" });
     const query = new URLSearchParams(searchParams);
     query.delete("category");
-    query.delete("concept");
+    clearConcept(query);
     router.push(query.size ? pathname + "?" + query : pathname, { scroll: false });
+  }
+
+  function clearConcept(query: URLSearchParams) {
+    if (query.has("concept") && !query.has("source") && isStudent) query.set("source", "all");
+    query.delete("concept");
   }
 
   if (!profile.enrolled_language) {
@@ -231,11 +282,20 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
       <Link className="button button-primary" href="/workshops">Go to Workshops</Link>
     </section>;
   }
-  if (loading) return <section className="panel" role="status">Loading quest map…</section>;
-  if (isError) {
+  if (isError || (!allPractice && workshopError !== null)) {
     return <section className="panel">
-      <p role="alert">{message}</p>
+      <p role="alert">{isError ? message : workshopError}</p>
       <button type="button" className="button button-outline" onClick={() => void loadData()}>Retry</button>
+    </section>;
+  }
+  if (loading || (!allPractice && workshops === null)) {
+    return <section className="panel" role="status">Loading quest map…</section>;
+  }
+  if (!allPractice && !scopedQuests.length) {
+    return <section className="empty-state quest-filter-empty">
+      <h2>No Workshop activities yet</h2>
+      <p>When your instructor shares an activity in a Workshop you’ve joined, it appears here once it opens.</p>
+      <Link className="button button-primary" href="/workshops">Go to Workshops</Link>
     </section>;
   }
   if (!quests.length) {
@@ -259,7 +319,7 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
                   setSearch(event.target.value);
                   if (selectedConcept) {
                     const query = new URLSearchParams(searchParams);
-                    query.delete("concept");
+                    clearConcept(query);
                     router.replace(query.size ? pathname + "?" + query : pathname, { scroll: false });
                   }
                 }}
@@ -303,6 +363,7 @@ function PracticeQuestList({ category }: { category: PracticeCategory }) {
           {visibleQuests.map((quest) => <QuestCard
             key={quest.id}
             quest={quest}
+            sourceWorkshops={isStudent ? workshopsByQuest.get(quest.id) ?? [] : undefined}
             learner={isStudent}
             next={isStudent && quest.id === nextQuest?.id && !quest.is_completed}
             selected={quest.id === selectedQuestId}

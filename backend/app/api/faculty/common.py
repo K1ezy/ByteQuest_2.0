@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.security import get_current_user
-from app.models.entities import Course, InstructionalDocument, LearningActivity, Profile
+from app.models.entities import Course, InstructionalDocument, LearningActivity, Profile, Workshop
 from app.services.activity_publishing import publication_issues
 from app.services.challenge_verification import verification_status
 from app.services.course_access import require_course_instructor, resolve_workspace_course
@@ -102,15 +102,17 @@ def _draft_item(activity: LearningActivity, course: Course, document: Instructio
     }
 
 
-def _activity_response(activity: LearningActivity, course: Course, *, attempt_count: int | None = None) -> dict:
+def _activity_response(db: Session, activity: LearningActivity, course: Course, *, attempt_count: int | None = None) -> dict:
     detail = activity_detail(activity, include_grading=True, attempt_count=attempt_count)
+    workshop = db.get(Workshop, activity.destination_workshop_id) if activity.destination_workshop_id else None
+    detail["destination_workshop"] = {"id": str(workshop.id), "name": workshop.name} if workshop else None
     detail["course"] = _course_brief(course)
     detail["publication_issues"] = _publication_codes(activity)
     return detail
 
 
 def _draft_response(db: Session, activity: LearningActivity, course: Course, attempts: int) -> dict:
-    detail = _activity_response(activity, course, attempt_count=attempts)
+    detail = _activity_response(db, activity, course, attempt_count=attempts)
     material = (
         db.query(InstructionalDocument).filter(InstructionalDocument.id == activity.source_document_id).first()
         if activity.source_document_id

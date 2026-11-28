@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useShellProfile } from "@/components/app-shell";
 import { QuestCard } from "@/components/quest-card";
 import { Button, useApi } from "@/components/workspace/ui";
@@ -114,6 +114,14 @@ export function WorkshopActivities() {
     indexes.set(link.activity_id, index);
   });
   const topics = [...groups.keys()].filter((topic) => topic !== null);
+
+  useEffect(() => {
+    if (!data || !window.location.hash.startsWith("#quest-")) return;
+    // The deep-linked card arrives after the Workshop and activity requests complete.
+    const card = document.getElementById(window.location.hash.slice(1));
+    card?.focus({ preventScroll: true });
+    card?.scrollIntoView({ block: "nearest" });
+  }, [data]);
 
   function closeMenu() {
     if (!addMenu.current) return;

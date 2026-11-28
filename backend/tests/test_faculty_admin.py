@@ -677,6 +677,15 @@ def test_workshop_publication_captures_assignment_prediction_and_limits_access(w
     })
     assert created.status_code == 201, created.text
     activity_id = created.json()["activity"]["activity_id"]
+    activity_route = f"/api/v1/faculty/activities/{activity_id}"
+    opened = client.get(activity_route, headers=instructor).json()
+    destination = {"id": workshop["id"], "name": workshop["name"]}
+    assert opened["destination_workshop"] == destination
+    saved = client.patch(activity_route, headers=instructor, json={
+        "content_version": opened["content_version"], "title": "Sum three integers",
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["activity"]["destination_workshop"] == destination
     from app.services.challenge_verification import challenge_validation_fingerprint, record_challenge_verification
     with sessions() as db:
         saved = db.get(LearningActivity, uuid.UUID(activity_id))

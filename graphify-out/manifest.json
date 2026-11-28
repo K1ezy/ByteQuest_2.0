@@ -42,9 +42,9 @@
     "semantic_hash": ""
   },
   "backend/app/api/quests_gamification.py": {
-    "mtime": 1795529353.0713613,
-    "seen": 1795545913.9461555,
-    "ast_hash": "ae424af5a43ae82cb93a82c1437f5379",
+    "mtime": 1795647961.1612957,
+    "seen": 1795648205.5107126,
+    "ast_hash": "35974c6de05755d982245a838c1a92d9",
     "semantic_hash": ""
   },
   "backend/app/api/rag_instructor.py": {
@@ -420,9 +420,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_faculty_admin.py": {
-    "mtime": 1795619368.3374796,
-    "seen": 1795619450.619846,
-    "ast_hash": "bd891cd6e91974ef3b0ccb9bcc03eabd",
+    "mtime": 1795657815.9496868,
+    "seen": 1795658107.2750294,
+    "ast_hash": "2e097618a9348c259b3c7895cad5721b",
     "semantic_hash": ""
   },
   "backend/tests/test_judge0_privacy.py": {
@@ -432,9 +432,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_learning_flow_integration.py": {
-    "mtime": 1795587324.3147886,
-    "seen": 1795587865.3840191,
-    "ast_hash": "803136c65790a6894c3df087a14e8b54",
+    "mtime": 1795647989.6514711,
+    "seen": 1795648205.578225,
+    "ast_hash": "8db54e8cfc170e762fe4239596a4826d",
     "semantic_hash": ""
   },
   "backend/tests/test_ml_exam_features.py": {
@@ -756,9 +756,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/quests/page.tsx": {
-    "mtime": 1795586887.3518734,
-    "seen": 1795587865.4070165,
-    "ast_hash": "eee21407cf0c0d523740f62d263452c2",
+    "mtime": 1795830271.0222502,
+    "seen": 1795830467.7780302,
+    "ast_hash": "77e11460ca509a9d699b0665f10ee203",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/quiz/[id]/page.tsx": {
@@ -1104,9 +1104,9 @@
     "semantic_hash": ""
   },
   "frontend/src/lib/types.ts": {
-    "mtime": 1795616030.485776,
-    "seen": 1795616159.9912202,
-    "ast_hash": "cb131b63afa08473e9d4410da2350239",
+    "mtime": 1795647961.164226,
+    "seen": 1795648205.7426174,
+    "ast_hash": "2ad3160a8f4a03b52dae2986cda7b2cd",
     "semantic_hash": ""
   },
   "frontend/src/lib/useSafeWindowNavigation.ts": {
@@ -1194,9 +1194,9 @@
     "semantic_hash": ""
   },
   "infra/start-bytequest.ps1": {
-    "mtime": 1795338407.941558,
-    "seen": 1795545913.947662,
-    "ast_hash": "60b2f2d54ea5556897d42942bf8a4da3",
+    "mtime": 1795829113.748045,
+    "seen": 1795830467.8352194,
+    "ast_hash": "e18a029d8a2ecda1855e4041652ed5f9",
     "semantic_hash": ""
   },
   "infra/start-local.ps1": {
@@ -1818,9 +1818,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/quests/page.test.tsx": {
-    "mtime": 1795587554.8071177,
-    "seen": 1795587865.4070165,
-    "ast_hash": "553a9701ad71564170f8298e96f28553",
+    "mtime": 1795830289.7260468,
+    "seen": 1795830467.7780302,
+    "ast_hash": "c31a39420dd0ca543986c5616ad98838",
     "semantic_hash": ""
   },
   "frontend/src/components/mastery-map.tsx": {
@@ -1986,15 +1986,15 @@
     "semantic_hash": ""
   },
   "backend/app/api/faculty/activities.py": {
-    "mtime": 1795587481.8523793,
-    "seen": 1795587865.3490186,
-    "ast_hash": "8bc103f858cd0095f2c77dc79cccb063",
+    "mtime": 1795657855.7998784,
+    "seen": 1795658107.1389353,
+    "ast_hash": "9af453a1afa4211c36c03aaad74f4fd6",
     "semantic_hash": ""
   },
   "backend/app/api/faculty/common.py": {
-    "mtime": 1795543895.6421347,
-    "seen": 1795545913.9461555,
-    "ast_hash": "02418dfd1910a5d31724cb6bd99c8527",
+    "mtime": 1795657855.7978697,
+    "seen": 1795658107.1425128,
+    "ast_hash": "bd641fedaa8254b973315a55b589f0f4",
     "semantic_hash": ""
   },
   "backend/app/api/faculty/drafts.py": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795618615.1792486,
-    "seen": 1795619450.7555218,
-    "ast_hash": "966989545a9b9a8e196407080040ddc6",
+    "mtime": 1795832948.4217558,
+    "seen": 1795832977.0841646,
+    "ast_hash": "88ed6f151c2309c018f1fede7a118d2f",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -2604,9 +2604,9 @@
     "semantic_hash": ""
   },
   "backend/app/api/workshops.py": {
-    "mtime": 1795617239.9580681,
-    "seen": 1795617438.6817758,
-    "ast_hash": "62b111cbdf7939c5f89c7d9e7a6b0099",
+    "mtime": 1795647989.6444714,
+    "seen": 1795648205.5141528,
+    "ast_hash": "7acfabb6dca4a722e577081355ec70e5",
     "semantic_hash": ""
   },
   "docs/prompts/chatgpt-workshop-classroom.md": {
@@ -2664,9 +2664,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/quest-card.tsx": {
-    "mtime": 1795529432.2108665,
-    "seen": 1795545913.947662,
-    "ast_hash": "445e785931883e53f8c86f96c19ad0a6",
+    "mtime": 1795830271.0212574,
+    "seen": 1795830467.8082025,
+    "ast_hash": "bfe8c93a0ff058d7936ec4caf947679b",
     "semantic_hash": ""
   },
   "frontend/src/components/workshops/workshop-activities.test.tsx": {
@@ -2676,9 +2676,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/workshops/workshop-activities.tsx": {
-    "mtime": 1795587637.0139558,
-    "seen": 1795587865.440018,
-    "ast_hash": "b00592c9f4de3d99d5f2255d34249403",
+    "mtime": 1795647699.733502,
+    "seen": 1795647930.3041549,
+    "ast_hash": "d263a22335de3215e41d29e0151e41aa",
     "semantic_hash": ""
   },
   "frontend/src/components/workshops/workshop-board.test.tsx": {
@@ -2796,9 +2796,9 @@
     "semantic_hash": ""
   },
   "docs/verification/ui-ux-harmonization-2026-11-21.md": {
-    "mtime": 1795575820.9588203,
-    "seen": 1795587865.490275,
-    "ast_hash": "88a1da312d2501f7e2f144139e84a481",
+    "mtime": 1795621250.2272944,
+    "seen": 1795647930.3631086,
+    "ast_hash": "8f2fd604af8a87c542761263ac591409",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/admin/configuration/page.test.tsx": {
@@ -2856,9 +2856,9 @@
     "semantic_hash": ""
   },
   "infra/watch-bytequest.ps1": {
-    "mtime": 1795338427.4491794,
-    "seen": 1795545913.947662,
-    "ast_hash": "8f963dac9795627a465f177c4b1ad202",
+    "mtime": 1795701779.4227798,
+    "seen": 1795701833.2495146,
+    "ast_hash": "df793f4ee0fabdb8aaa1cf3631ecda4b",
     "semantic_hash": ""
   },
   "docs/ML_AND_OPERATIONS_READINESS_PLAN.md": {
@@ -3081,6 +3081,18 @@
     "mtime": 1795619183.509456,
     "seen": 1795619450.5981655,
     "ast_hash": "499b5d51adaf3d3ebfc56e1d0925fd09",
+    "semantic_hash": ""
+  },
+  "frontend/layout-tests/quest-workshop-flow.layout.ts": {
+    "mtime": 1795668127.402853,
+    "seen": 1795668299.203648,
+    "ast_hash": "8d4eab91212fd2f78ec39b1102a47aab",
+    "semantic_hash": ""
+  },
+  "backend/scripts/seed_local_fundamentals_bank.py": {
+    "mtime": 1795832898.5793533,
+    "seen": 1795832976.978442,
+    "ast_hash": "3df6db16920fa00a01e89d964cd62ac1",
     "semantic_hash": ""
   }
 }

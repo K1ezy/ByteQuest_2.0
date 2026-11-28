@@ -597,6 +597,7 @@ def test_quest_join_quiz_and_progress_survive_new_client(flow):
     public_quests = client.get("/api/v1/quests", headers=student)
     quiz = next(row for row in public_quests.json() if row["id"] == str(activity_id))
     assert "correct_answer" not in str(quiz)
+    assert quiz["completed_at"] is None
     submitted = client.post("/api/v1/quests/submit-quiz", headers=student, json={
         "activity_id": str(activity_id), "answers": {"q1": "A", "q2": "A", "q3": "A"},
     })
@@ -625,11 +626,14 @@ def test_quest_join_quiz_and_progress_survive_new_client(flow):
         groups = reloaded.get("/api/v1/workshops", headers=student)
         progress = reloaded.get("/api/v1/quests/progress", headers=student)
         quests = reloaded.get("/api/v1/quests", headers=student)
+        shared = reloaded.get(f"/api/v1/workshops/{group['id']}/activities", headers=student)
         dashboard = reloaded.get("/api/v1/pilot/dashboard", headers=student)
-    assert groups.status_code == progress.status_code == quests.status_code == dashboard.status_code == 200
+    assert groups.status_code == progress.status_code == quests.status_code == shared.status_code == dashboard.status_code == 200
     assert [item["id"] for item in groups.json()].count(group["id"]) == 1
     assert any(item["activity_id"] == str(activity_id) for item in progress.json()["attempts"])
-    assert next(item for item in quests.json() if item["id"] == str(activity_id))["is_completed"] is True
+    completed = next(item for item in quests.json() if item["id"] == str(activity_id))
+    assert completed["is_completed"] is True
+    assert completed["completed_at"] and completed["completed_at"] == shared.json()[0]["completed_at"]
     assert dashboard.json()["completed"] == 1
     assert dashboard.json()["total"] == initial_dashboard.json()["total"] + 1
 
