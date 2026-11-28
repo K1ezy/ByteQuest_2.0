@@ -1,30 +1,30 @@
 # Graph Report - ByteQuest_2.0  (2026-11-29)
 
 ## Corpus Check
-- 550 files · ~579,444 words
+- 550 files · ~579,769 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 38 file(s) not represented in the graph (top: (none) 19, .bat 5, .example 5)
 
 ## Summary
-- 4826 nodes · 16186 edges · 216 communities (174 shown, 42 thin omitted)
+- 4826 nodes · 16195 edges · 216 communities (172 shown, 44 thin omitted)
 - Extraction: 87% EXTRACTED · 13% INFERRED · 0% AMBIGUOUS · INFERRED: 2090 edges (avg confidence: 0.93)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `36fe5aac`
+- Built from commit: `2307828e`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - getErrorMessage
 - ByteQuest 2.0: instructor activity analysis and class announcements
-- submission-comparison.tsx
+- instructor-exams.tsx
 - workspace.ts
 - uuid
 - chat-provider.tsx
 - activities/[id]/page.tsx
 - test_faculty_admin.py
-- react
+- performance/page.tsx
 - start-bytequest.ps1
 - course_access.py
 - 4. Read these before writing any code
@@ -33,7 +33,6 @@
 - LearningActivity
 - ReviewState
 - monitoring.py
-- test_ml_exam_features.py
 - ML evidence, operations and ML methodology: readiness plan
 - instructor-authoring.layout.ts
 - predictor.py
@@ -53,15 +52,15 @@
 - Session
 - chat-shell.tsx
 - 5. Slices
-- quiz-view.tsx
-- predictions/page.tsx
+- dashboard/page.tsx
+- app/layout.tsx
 - ProgrammingLang
 - train_compare.py
 - Make ByteQuest fit every phone and tablet
 - 4. Findings and implementation blueprint
 - package.json
 - compilerOptions
-- prepare-monaco.mjs
+- qa-responsive.mjs
 - test_learning_flow_integration.py
 - Faculty and administrator workspace — implementation log and continued work
 - profile/page.tsx
@@ -78,13 +77,13 @@
 - chat.py
 - workshops.py
 - exams.py
-- quests/page.tsx
+- HistoryPanel
 - ByteQuest chatbot: implementation plan for DeepSeek V4.1 Flash
 - ByteQuest machine-learning improvement plan
-- ByteQuest 2.0 engineering and UX review
+- review-report.md
 - ByteQuest 2.0: close the manuscript gaps, tidy the structure, then review and rate the system
 - ByteQuest 2.0 Classroom Pilot Operator Runbook
-- workspace/ui.tsx
+- api.ts
 - entities.py
 - ByteQuest local end-to-end flow
 - accessibility-provider.tsx
@@ -96,6 +95,7 @@
 - db
 - rag_instructor.py
 - Profile
+- SYSTEM_STATUS_AND_RELEASE_PLAN.md
 - qa_live_multi_role.py
 - exams/[id]/page.test.tsx
 - ByteQuest 2.0: Master Architecture Plan & Execution Roadmap
@@ -113,7 +113,7 @@
 - dockable-navigation.tsx
 - pilot_foundations.py
 - ML pipeline synthetic verification — 2026-10-25
-- use-exam-answer-sync.ts
+- quest-workshop-flow.layout.ts
 - preflight-host.sh
 - 4.3 New services
 - ml_predictor/feature_engineering.py
@@ -137,7 +137,7 @@
 - smoke-vps.sh
 - ByteQuest pilot remediation checklist
 - preflight-vps.sh
-- qa-responsive.mjs
+- components/student-preview.tsx
 - ByteQuest 2.0 system critique — 21 November 2026
 - AGENTS.md
 - ByteQuest — Security & AI-Abuse Hardening (implementation brief)
@@ -153,13 +153,13 @@
 - resolve_workspace_course
 - config.py
 - Local API security contract
-- accessibility-settings.tsx
+- app-tooltips.tsx
 - dependencies
 - llm.py
 - argparse
 - backup-supabase.sh
 - submissions.py
-- getSupabase
+- supabase.ts
 - quests_gamification.py
 - complete_student_onboarding
 - restore-supabase-backup.sh
@@ -168,7 +168,7 @@
 - test_profile_analytics.py
 - test_memory_rules.py
 - image.ts
-- ByteQuest backend runtime review
+- ChatLessonPractice
 - UserRole
 - Prioritized defects
 - get
@@ -184,6 +184,7 @@
 - Checkpoint for ChatGPT Codex: work of 28 November 2026
 - Workshops: Create, Join and the Workshop page
 - race
+- quest-nav-icon.tsx
 - Phase 7 synthetic deployment preflight — 2026-10-26
 - Domain Docs
 - Spec: Charts and metrics a student or instructor understands at a glance
@@ -212,7 +213,6 @@
 - 07-outlook-legend.md
 - 08-activity-and-gamification-insights.md
 - 09-layout-tests-and-wrap-up.md
-- ByteQuest system status
 - ML feature engineering and training
 
 ## God Nodes (most connected - your core abstractions)
@@ -242,23 +242,23 @@
 ## Import Cycles
 - None detected.
 
-## Communities (216 total, 42 thin omitted)
+## Communities (216 total, 44 thin omitted)
 
 ### Community 0 - "getErrorMessage"
 Cohesion: 0.04
-Nodes (130): Design system and data flow, Frontend, Stack and layout, Medium, 5.1 Shared library and components, AdminAccounts(), confirmDeactivate(), confirmReactivate() (+122 more)
+Nodes (154): Design system and data flow, Frontend, Stack and layout, 5.1 Shared library and components, AdminAccounts(), confirmDeactivate(), confirmReactivate(), openImpact() (+146 more)
 
 ### Community 1 - "ByteQuest 2.0: instructor activity analysis and class announcements"
 Cohesion: 0.15
 Nodes (12): Backend, ByteQuest 2.0: instructor activity analysis and class announcements, Database, Double-check before you report, Final report, Frontend, Hard rules, Part 1: Activity analysis (+4 more)
 
-### Community 2 - "submission-comparison.tsx"
-Cohesion: 0.20
-Nodes (14): Editor, AttemptSummary(), CodeDiff(), loadEditor(), ComparedAttempt, ComparisonResult(), isDesktop(), PanelState (+6 more)
+### Community 2 - "instructor-exams.tsx"
+Cohesion: 0.11
+Nodes (25): ExamsPage(), ExamsPage(), AttemptResult, Catalog, Exam, ExamDetail, ExamMode, examStage() (+17 more)
 
 ### Community 3 - "workspace.ts"
 Cohesion: 0.03
-Nodes (123): Step A checkpoint and caller verification, 4.5 Administrator API (`backend/app/api/admin.py`, prefix `/api/v1/admin`), ExamsPage(), ExamPage(), handleRunSample(), handleStartExam(), hydrateAndReconcileOnce(), hasAnswer() (+115 more)
+Nodes (98): Step A checkpoint and caller verification, 4.5 Administrator API (`backend/app/api/admin.py`, prefix `/api/v1/admin`), ExamPage(), handleRunSample(), handleStartExam(), hydrateAndReconcileOnce(), hasAnswer(), AnnouncementsPage() (+90 more)
 
 ### Community 4 - "uuid"
 Cohesion: 0.18
@@ -269,16 +269,16 @@ Cohesion: 0.09
 Nodes (34): chatHistory, ChatMode, ConversationPage, ConversationSummary, SavedReply, SavedTurn, Transcript, TurnStatus (+26 more)
 
 ### Community 6 - "activities/[id]/page.tsx"
-Cohesion: 0.06
-Nodes (58): ActivityEditor(), confirmPublish(), focusSection(), newVersion(), requestChanges(), reviewPreview(), runVerification(), ActivitySources() (+50 more)
+Cohesion: 0.05
+Nodes (68): ActivityEditor(), confirmPublish(), focusSection(), newVersion(), requestChanges(), reviewPreview(), runVerification(), ActivitySources() (+60 more)
 
 ### Community 7 - "test_faculty_admin.py"
 Cohesion: 0.06
 Nodes (63): AuditEvent, GradingWorkerHeartbeat, MLPrediction, ResearchConsent, PredictionResult, record_grading_worker_heartbeat(), _consent(), _set_school_ids() (+55 more)
 
-### Community 8 - "react"
-Cohesion: 0.03
-Nodes (142): What changed, Course health on System Overview, Already in place: extend, do not rebuild, Shared insight widgets, Verification and rollout, Already in place: extend, do not rebuild, One kit: course-ui, Student Progress: the only roster and learner drawer (+134 more)
+### Community 8 - "performance/page.tsx"
+Cohesion: 0.04
+Nodes (98): Student Progress: the only roster and learner drawer, CourseRef, Curve, Dashboard, Detail, Evaluation, Forecast, FORECAST_REASONS (+90 more)
 
 ### Community 9 - "start-bytequest.ps1"
 Cohesion: 0.07
@@ -293,8 +293,8 @@ Cohesion: 0.08
 Nodes (21): HintUse, PlatformSetting, _qualifies(), flow(), cleanup(), override_db(), test_progress_recap_compares_manila_periods_and_usual_pace(), attempt() (+13 more)
 
 ### Community 12 - "supabase.ts"
-Cohesion: 0.13
-Nodes (24): Durability Boundary & Concurrency Guarantees, Interrupted Exam Autosave & Browser Recovery (Checklist Item #3), cleared, localMap, mockLocalStorage, mockSessionStorage, remaining, storageMap (+16 more)
+Cohesion: 0.11
+Nodes (28): Interrupted Exam Autosave & Browser Recovery (Checklist Item #3), cleared, localMap, mockLocalStorage, mockSessionStorage, remaining, storageMap, Attempt (+20 more)
 
 ### Community 13 - "faculty_ml.py"
 Cohesion: 0.14
@@ -312,21 +312,17 @@ Nodes (55): ActivityCreate, ActivityUpdate, create_activity(), create_activity_v
 Cohesion: 0.18
 Nodes (18): _check_judge0(), _grading_worker_health(), _minutes(), overall_health(), _prediction_health(), _rag_health(), _runner_health(), runner_status() (+10 more)
 
-### Community 17 - "test_ml_exam_features.py"
-Cohesion: 0.09
-Nodes (25): _forecast(), _attempt(), test_adequacy_flags_a_small_test_partition(), test_bootstrap_intervals_are_reproducible_and_resample_learners(), test_faculty_forecast_uses_the_recorded_winner_and_hides_legacy_probability(), test_hint_exports_reject_identifying_columns(), test_older_feature_schema_artifacts_are_rejected(), test_rows_are_first_submissions_on_challenges_with_strictly_prior_history() (+17 more)
-
 ### Community 18 - "ML evidence, operations and ML methodology: readiness plan"
 Cohesion: 0.08
 Nodes (25): 1. Where things stand, 2. Decisions you need to make, 3. Workstream A: operations and reliability, 4. Workstream B: ML evidence and readiness, 5. Workstream C: ML methodology (all supplementary), 6. Order and timeline, 7. Which skill flow to use for each piece, 8. Done means (+17 more)
 
 ### Community 19 - "instructor-authoring.layout.ts"
 Cohesion: 0.12
-Nodes (16): course, dashboard, defaultCourse, draft, gradingCase, identifier, listItem(), material (+8 more)
+Nodes (15): course, dashboard, defaultCourse, draft, gradingCase, identifier, listItem(), material (+7 more)
 
 ### Community 20 - "predictor.py"
-Cohesion: 0.09
-Nodes (20): lifespan(), load_ml_models(), ModelArtifactError, ModelArtifactsUnavailable, ModelBundle, _partition_report(), _positive_probability(), predict_student_success() (+12 more)
+Cohesion: 0.07
+Nodes (25): _forecast(), lifespan(), _retry_after(), load_ml_models(), ModelArtifactError, ModelArtifactsUnavailable, ModelBundle, _partition_report() (+17 more)
 
 ### Community 21 - "test_api_security.py"
 Cohesion: 0.05
@@ -334,7 +330,7 @@ Nodes (24): Settings, Rule, window_bounds(), RequestSizeLimitMiddleware, limited
 
 ### Community 22 - "react"
 Cohesion: 0.05
-Nodes (58): AdminLayout(), ExamInfo, HydrationState, FacultyLayout(), AttentionRow(), WorkspaceLayout(), WorkshopsLayout(), AccountMenu() (+50 more)
+Nodes (58): AccessibilityPage(), AdminLayout(), ExamInfo, HydrationState, FacultyLayout(), WorkspaceLayout(), WorkshopsLayout(), AccessibilitySettings() (+50 more)
 
 ### Community 23 - "test_schema_integrity.py"
 Cohesion: 0.06
@@ -357,12 +353,12 @@ Cohesion: 0.17
 Nodes (9): Repo map: exact files to inspect and change, ChatProvider(), auth, bodies(), openChat(), ready, routeApi(), savedChat (+1 more)
 
 ### Community 28 - "chat_history.py"
-Cohesion: 0.18
-Nodes (24): _check_revision(), Conversation, ConversationPage, create_conversation(), CreateConversation, delete_conversation(), _find_conversation(), get_conversation() (+16 more)
+Cohesion: 0.17
+Nodes (25): ChatTurn, _check_revision(), Conversation, ConversationPage, create_conversation(), CreateConversation, delete_conversation(), _find_conversation() (+17 more)
 
 ### Community 29 - "re"
-Cohesion: 0.16
-Nodes (11): _generate_chat_reply(), _system_instruction(), validate_tutor_citations(), choose_tutor_turn(), _is_follow_up(), TutorTurn, test_chat_excerpt_can_pick_information_near_the_end_of_a_long_pdf_chunk(), test_course_follow_up_uses_the_recent_topic_and_a_new_question_drops_it() (+3 more)
+Cohesion: 0.13
+Nodes (13): _generate_chat_reply(), _system_instruction(), cited_sources(), validate_tutor_citations(), choose_tutor_turn(), _is_follow_up(), TutorTurn, test_chat_excerpt_can_pick_information_near_the_end_of_a_long_pdf_chunk() (+5 more)
 
 ### Community 30 - "_enroll_chat_students"
 Cohesion: 0.07
@@ -370,43 +366,43 @@ Nodes (31): DocumentChunk, _chat_failure(), GeminiAPIError, test_chat_requires_a
 
 ### Community 31 - "api.ts"
 Cohesion: 0.03
-Nodes (133): ReviewPage(), WorkshopDetailLayout(), WorkshopInvitePage(), WorkshopsPage(), useShellProfile(), ChatLessonPractice(), send(), submit() (+125 more)
+Nodes (121): RFC-4122, categories, PracticeCategory, PracticeQuestList(), clearConcept(), clearFilters(), handleKeyDown(), QuestsPage() (+113 more)
 
 ### Community 32 - "mastery_map.py"
 Cohesion: 0.15
 Nodes (14): _ensure_student(), get_codex(), get_gamification_state(), get_reviews(), _utcnow(), CodexResponse, first_visible_completions(), mastery_map() (+6 more)
 
 ### Community 33 - "qa_mixed_exam_load.py"
-Cohesion: 0.14
-Nodes (14): require_local(), summary(), main(), measure_exam_samples(), prepare_exam(), report_exam_grading(), run(), restart_worker() (+6 more)
+Cohesion: 0.15
+Nodes (9): require_local(), main(), report_exam_grading(), restart_worker(), start_process(), stop_process(), utcnow(), wait_for_api() (+1 more)
 
 ### Community 34 - "Session"
 Cohesion: 0.08
 Nodes (49): admin_dashboard(), admin_download_material(), audit_events(), course_archive_impact(), course_health(), get_settings(), list_accounts(), monitoring() (+41 more)
 
 ### Community 35 - "chat-shell.tsx"
-Cohesion: 0.15
-Nodes (19): ChatPage(), ChatPageContent(), useChat(), ChatConversation, ChatIcon(), ChatPanel(), ChatShell(), close() (+11 more)
+Cohesion: 0.18
+Nodes (17): ChatPage(), ChatPageContent(), useChat(), activityFromPath(), ChatConversation, ChatIcon(), ChatPanel(), ChatShell() (+9 more)
 
 ### Community 36 - "5. Slices"
 Cohesion: 0.12
 Nodes (15): 1. Read these first, in this order, 3. Hard rules, 4. Decided behaviour (W1–W12, all accepted by the user), 5. Slices, 6. How to verify each slice, 7. Report after each slice, ChatGPT 6.2 prompt: finish the ByteQuest Workshop classroom (slices 1–8), Slice 1: data and API (start here) (+7 more)
 
-### Community 37 - "quiz-view.tsx"
-Cohesion: 0.18
-Nodes (7): QuizPage(), getActivityHref(), QuizResult, QuizView(), handleSubmitQuiz(), load(), QuizQuestion
+### Community 37 - "dashboard/page.tsx"
+Cohesion: 0.15
+Nodes (19): CHOICE_LABEL, ResearchConsentSettingsPage(), choose(), Dashboard, DashboardContent(), DashboardPage(), kindLabel(), ConsentFacts() (+11 more)
 
-### Community 38 - "predictions/page.tsx"
-Cohesion: 0.19
-Nodes (14): Findings by severity, Low, bands, columns, displayMetric(), exportPredictions(), label(), metrics (+6 more)
+### Community 38 - "app/layout.tsx"
+Cohesion: 0.20
+Nodes (9): byteBounce, metadata, RootLayout(), viewport, ToastApi, ToastContext, ToastItem, ToastProvider() (+1 more)
 
 ### Community 39 - "ProgrammingLang"
 Cohesion: 0.07
 Nodes (22): ProgrammingLang, _grade_item(), _b64_decode(), _b64_encode(), BatchEvaluationSummary, CircuitBreaker, classify_judge0_status(), Judge0CircuitOpenError (+14 more)
 
 ### Community 40 - "train_compare.py"
-Cohesion: 0.08
-Nodes (18): _adequacy(), _as_binary_label(), _atomic_joblib_dump(), _atomic_json_write(), _atomic_write(), _bootstrap_intervals(), _build_pipeline(), _evaluate_partition() (+10 more)
+Cohesion: 0.06
+Nodes (39): _attempt(), test_adequacy_flags_a_small_test_partition(), test_bootstrap_intervals_are_reproducible_and_resample_learners(), test_hint_exports_reject_identifying_columns(), test_rows_are_first_submissions_on_challenges_with_strictly_prior_history(), test_ten_model_input_table_is_what_training_uses(), test_training_rejects_ids_that_encode_an_account(), Export an attempt dataset (+31 more)
 
 ### Community 41 - "Make ByteQuest fit every phone and tablet"
 Cohesion: 0.22
@@ -424,33 +420,33 @@ Nodes (17): engines, node, name, overrides, dompurify, private, version, eslint 
 Cohesion: 0.11
 Nodes (18): compilerOptions, allowJs, esModuleInterop, incremental, isolatedModules, jsx, lib, module (+10 more)
 
-### Community 45 - "prepare-monaco.mjs"
-Cohesion: 0.17
-Nodes (6): frontend, marker, packageDir, source, target, fixture
+### Community 45 - "qa-responsive.mjs"
+Cohesion: 0.13
+Nodes (17): frontend, marker, packageDir, source, target, fixture, assertRail(), capture() (+9 more)
 
 ### Community 46 - "test_learning_flow_integration.py"
 Cohesion: 0.08
 Nodes (38): _add_member(), _class_workshop(), _graded_job(), _letters(), _quest_ids(), _ranked_student(), _reveal_reviewed_hint(), _review_and_publish() (+30 more)
 
 ### Community 47 - "Faculty and administrator workspace — implementation log and continued work"
-Cohesion: 0.11
-Nodes (17): 10. Files created or modified (this work), 11. Quick current-state checklist, 1. Status at handoff, 6. Tests added, 7. Verification evidence (live app), 8. How to continue (commands, accounts, cleanup), 9. Remaining work, Additional navigation fix (+9 more)
+Cohesion: 0.09
+Nodes (21): 10. Files created or modified (this work), 11. Quick current-state checklist, 1. Status at handoff, 5.2 Faculty routes, 5.3 Administrator routes, 5.4 Navigation and shell integration, 5. Frontend changes, 6. Tests added (+13 more)
 
 ### Community 48 - "profile/page.tsx"
-Cohesion: 0.07
-Nodes (45): AccountPanel(), AdminSections(), ConsentStatus, InstructorSections(), PersonalTimeline(), ProfilePage(), ProfilePageContent(), CHOOSE_HANDLE_HREF (+37 more)
+Cohesion: 0.05
+Nodes (60): AccountPanel(), AdminSections(), ConsentStatus, InstructorSections(), PersonalTimeline(), ProfilePage(), ProfilePageContent(), PracticeLink() (+52 more)
 
 ### Community 49 - "LearningActivity"
 Cohesion: 0.13
 Nodes (39): create_exam(), put_hint(), ActivityAttempt, LearningActivity, ReviewState, test_class_snapshot_reports_last_weeks_counts(), test_gamification_insights_are_course_scoped_class_aggregates(), attempt() (+31 more)
 
 ### Community 50 - "useChatController"
-Cohesion: 0.15
-Nodes (22): RFC-4122, requestAiHint(), turnMessages(), mapChatError(), useChatController(), applySavedReply(), canSend(), checkReply() (+14 more)
+Cohesion: 0.35
+Nodes (13): requestAiHint(), turnMessages(), mapChatError(), useChatController(), applySavedReply(), canSend(), checkReply(), handleFailure() (+5 more)
 
 ### Community 51 - "asyncio"
-Cohesion: 0.17
-Nodes (10): cleanup(), main(), one_student(), require_local(), run_load(), main(), student(), ask() (+2 more)
+Cohesion: 0.16
+Nodes (12): challenge_specs(), main(), cleanup(), main(), one_student(), require_local(), run_load(), main() (+4 more)
 
 ### Community 52 - "chat-conversation.tsx"
 Cohesion: 0.16
@@ -481,8 +477,8 @@ Cohesion: 0.24
 Nodes (9): metadata, Page(), metadata, Page(), LegalDocument(), LegalKind, LegalModal(), PolicyPanel() (+1 more)
 
 ### Community 59 - "chat.py"
-Cohesion: 0.08
-Nodes (31): _attached_pdf_instruction(), _belongs_to_open_workshop(), _chat_activity(), ChatLimits, ChatMessageRequest, ChatMessageResponse, ChatSource, ChatStatus (+23 more)
+Cohesion: 0.09
+Nodes (28): _attached_pdf_instruction(), _belongs_to_open_workshop(), _chat_activity(), ChatLimits, ChatMessageRequest, ChatMessageResponse, ChatSource, ChatStatus (+20 more)
 
 ### Community 60 - "workshops.py"
 Cohesion: 0.11
@@ -492,21 +488,21 @@ Nodes (54): _activity_links(), _announcement_for_update(), AnnouncementView, arc
 Cohesion: 0.07
 Nodes (51): assigned(), assigned_exam_numbers(), _assigned_exams_with_state(), DraftExam, DraftItem, _exam_access(), exam_sample_run(), ExamPassMark (+43 more)
 
-### Community 62 - "quests/page.tsx"
-Cohesion: 0.07
-Nodes (39): 1. Current architecture, Existing API contracts, categories, PracticeCategory, PracticeQuestList(), clearConcept(), clearFilters(), handleKeyDown() (+31 more)
+### Community 62 - "HistoryPanel"
+Cohesion: 0.22
+Nodes (9): openConversation(), startChat(), updateHistory(), uploadPdf(), removeAll(), select(), start(), HistoryPanel() (+1 more)
 
 ### Community 63 - "ByteQuest chatbot: implementation plan for DeepSeek V4.1 Flash"
 Cohesion: 0.06
-Nodes (25): GeneratedChallengeSchema, GeneratedHintsSchema, GeneratedQuizOptionSchema, GeneratedQuizQuestionSchema, GeneratedQuizSchema, _serialize_challenge(), TestCaseSchema, Behavior and scope of the assistant (+17 more)
+Nodes (27): GeneratedChallengeSchema, GeneratedHintsSchema, GeneratedQuizOptionSchema, GeneratedQuizQuestionSchema, GeneratedQuizSchema, _serialize_challenge(), TestCaseSchema, Behavior and scope of the assistant (+19 more)
 
 ### Community 64 - "ByteQuest machine-learning improvement plan"
 Cohesion: 0.09
 Nodes (20): record_prediction_outcome(), test_prediction_outcome_links_only_earlier_snapshots(), 1. Goal, 2. Where things stand, 3. Decisions, 4.1 Prediction unit and label, 4.2 History, 4.3 The ten features, in this order (+12 more)
 
-### Community 65 - "ByteQuest 2.0 engineering and UX review"
-Cohesion: 0.40
-Nodes (5): ByteQuest 2.0 engineering and UX review, Findings, Performance evidence, Recommended sequence, Verification and limits
+### Community 65 - "review-report.md"
+Cohesion: 0.18
+Nodes (9): ByteQuest 2.0 engineering and UX review, Findings, Performance evidence, Recommended sequence, Verification and limits, ByteQuest backend runtime review, Mixed local workload, Pending measurements and review (+1 more)
 
 ### Community 66 - "ByteQuest 2.0: close the manuscript gaps, tidy the structure, then review and rate the system"
 Cohesion: 0.22
@@ -516,29 +512,29 @@ Nodes (8): ByteQuest 2.0: close the manuscript gaps, tidy the structure, then re
 Cohesion: 0.17
 Nodes (12): 1. Hard Safety Gates (Enforced by Configuration), 2. Lab Station & Shared-Computer Protocol, 3. Network Resilience & Live Draft Sync, 4. Timed Exam Operations, 5. Verification Commands, 6. Incident Troubleshooting, ByteQuest 2.0 Classroom Pilot Operator Runbook, Classroom Wi-Fi Reconnect Banner (+4 more)
 
-### Community 68 - "workspace/ui.tsx"
-Cohesion: 0.04
-Nodes (48): nextConfig, CHOICE_LABEL, ResearchConsentSettingsPage(), choose(), mocks, active, archived, mocks (+40 more)
+### Community 68 - "api.ts"
+Cohesion: 0.03
+Nodes (60): nextConfig, mocks, active, archived, mocks, mocks, monitoring, mocks (+52 more)
 
 ### Community 69 - "entities.py"
 Cohesion: 0.07
 Nodes (27): ConsentChoice, DraftPayload, _expired_hint_reservation(), InstructorHint, RevealHint, _visible_failure_diagnostics(), ActivityDraft, activity_accepts_submissions_clause() (+19 more)
 
 ### Community 70 - "ByteQuest local end-to-end flow"
-Cohesion: 0.12
-Nodes (16): 8 Required Acceptance Checks, Account-synced progression check, Before deployment, ByteQuest local end-to-end flow, Exam Autosave & Conflict-Safe Recovery Verification, Instructor account, Local Quest Map demos, Manual startup (+8 more)
+Cohesion: 0.14
+Nodes (14): Account-synced progression check, Before deployment, ByteQuest local end-to-end flow, Instructor account, Local Quest Map demos, Manual startup, One-click Windows startup, Open ByteQuest on a phone over ZeroTier (+6 more)
 
 ### Community 71 - "accessibility-provider.tsx"
-Cohesion: 0.11
-Nodes (24): byteBounce, metadata, RootLayout(), viewport, ACCESSIBILITY_STORAGE_KEYS, AccessibilityContext, AccessibilityContextValue, AccessibilityPreferences (+16 more)
+Cohesion: 0.20
+Nodes (15): ACCESSIBILITY_STORAGE_KEYS, AccessibilityContext, AccessibilityContextValue, AccessibilityPreferences, AccessibilityProvider(), applyPreferences(), commitPreferences(), DEFAULT_PREFERENCES (+7 more)
 
 ### Community 72 - "ByteQuest 2.0"
 Cohesion: 0.22
 Nodes (9): Architecture, ByteQuest 2.0, Configuration and security, Documentation, Repository layout, Stack and deployment, Start locally on Windows, Test and verify (+1 more)
 
 ### Community 73 - "qa_starter_tutoring.py"
-Cohesion: 0.20
-Nodes (12): _evaluate(), _failed_sample(), main(), _request(), TutorCase, challenge_specs(), main(), require_local() (+4 more)
+Cohesion: 0.23
+Nodes (8): _evaluate(), _failed_sample(), main(), _request(), TutorCase, password_token(), evaluate(), reader()
 
 ### Community 74 - "ByteQuest 2.0 — Full system review"
 Cohesion: 0.12
@@ -564,9 +560,13 @@ Nodes (20): _challenge_prompt(), _gemini_unavailable_http_exception(), generate_
 Cohesion: 0.08
 Nodes (58): account_emails_for_email(), account_impact(), _account_needs_action(), AccountCreate, activity_impact(), _admin_activity(), _admin_activity_item(), admin_archive_activity() (+50 more)
 
+### Community 80 - "SYSTEM_STATUS_AND_RELEASE_PLAN.md"
+Cohesion: 0.20
+Nodes (3): ByteQuest repository guidance, Text and layout containment, This is NOT the Next.js you know
+
 ### Community 81 - "qa_live_multi_role.py"
-Cohesion: 0.16
-Nodes (14): api_base(), cleanup(), create_accounts(), instructor_builds_course(), letters(), password_token(), print_report(), run() (+6 more)
+Cohesion: 0.14
+Nodes (22): api_base(), cleanup(), create_accounts(), instructor_builds_course(), letters(), main(), print_report(), require_local() (+14 more)
 
 ### Community 82 - "exams/[id]/page.test.tsx"
 Cohesion: 0.25
@@ -585,8 +585,8 @@ Cohesion: 0.22
 Nodes (14): Cell, CourseGradebook(), download(), Gradebook(), gradebookCsv(), GradebookProps, GradebookResponse, quote() (+6 more)
 
 ### Community 86 - "onboarding/page.tsx"
-Cohesion: 0.12
-Nodes (28): AuthMode, OnboardingContent(), authenticate(), changeAuthMode(), checkExistingAuth(), continueToAgreement(), finishPasswordSetup(), OnboardingPage() (+20 more)
+Cohesion: 0.13
+Nodes (27): AuthMode, OnboardingContent(), authenticate(), changeAuthMode(), checkExistingAuth(), continueToAgreement(), finishPasswordSetup(), OnboardingPage() (+19 more)
 
 ### Community 87 - "Step C — Instructor visual verification"
 Cohesion: 0.33
@@ -597,8 +597,8 @@ Cohesion: 0.13
 Nodes (24): Badge, Exam, ExamAssignment, StudentBadge, WorkshopMember, award_badges(), evaluate_and_award_badges(), _requirement_for() (+16 more)
 
 ### Community 89 - "arena.tsx"
-Cohesion: 0.09
-Nodes (34): ArenaPage(), Arena(), checkStatus(), confirmResetCode(), endSegment(), handleCodeChange(), handleCopyOutput(), load() (+26 more)
+Cohesion: 0.07
+Nodes (43): ArenaPage(), Arena(), checkStatus(), confirmResetCode(), endSegment(), handleCodeChange(), handleCopyOutput(), load() (+35 more)
 
 ### Community 90 - "submission_jobs.py"
 Cohesion: 0.26
@@ -621,8 +621,8 @@ Cohesion: 0.33
 Nodes (5): Findings and changes, Phase 7 dependency security review (2026-10-26), Remaining checks and limits, Scope, Verification performed
 
 ### Community 95 - "dockable-navigation.tsx"
-Cohesion: 0.20
-Nodes (12): Already in place: extend, do not rebuild, choose(), DockableNavigation(), finish(), MenuPositionSetting(), readMenuSide(), setMenuSide(), Side (+4 more)
+Cohesion: 0.18
+Nodes (14): Already in place: extend, do not rebuild, AccessibilityPreferenceKey, ACCESSIBILITY_SETTINGS, AccessibilitySettingDefinition, choose(), finish(), MenuPositionSetting(), readMenuSide() (+6 more)
 
 ### Community 96 - "pilot_foundations.py"
 Cohesion: 0.23
@@ -632,9 +632,9 @@ Nodes (7): lock_activity_for_publication(), challenge_validation_fingerprint(), 
 Cohesion: 0.29
 Nodes (6): Artifact and activation checks, Execution, ML pipeline synthetic verification — 2026-10-25, Observed grouped metrics, Remaining Phase 5 work, Scope
 
-### Community 98 - "use-exam-answer-sync.ts"
-Cohesion: 0.22
-Nodes (12): Attempt, AttemptResult, AttemptResultItem, ExamAnswers, ExamItem, ExamSyncBannerState, formatClockTime(), QuizQuestion (+4 more)
+### Community 98 - "quest-workshop-flow.layout.ts"
+Cohesion: 0.29
+Nodes (6): challenge, javaQuiz, javaWorkshop, quiz, ADR-0001, workshop
 
 ### Community 99 - "preflight-host.sh"
 Cohesion: 0.38
@@ -645,8 +645,8 @@ Cohesion: 0.23
 Nodes (10): courses_for_user(), is_admin(), require_administrator(), require_course_access(), scoped_course_ids(), 4.1 Migration, 4.3 New services, 4.4 Faculty API (`backend/app/api/faculty.py`, prefix `/api/v1/faculty`) (+2 more)
 
 ### Community 101 - "ml_predictor/feature_engineering.py"
-Cohesion: 0.18
-Nodes (8): _retry_after(), _as_bool(), _before(), _enum_value(), extract_features_from_dataframe(), _frame(), _mean(), _rate()
+Cohesion: 0.24
+Nodes (7): _as_bool(), _before(), _enum_value(), extract_features_from_dataframe(), _frame(), _mean(), _rate()
 
 ### Community 102 - "progress_recap"
 Cohesion: 0.24
@@ -701,8 +701,8 @@ Cohesion: 0.50
 Nodes (3): Change, Checks performed, Phase 7 database pool budget hardening
 
 ### Community 116 - "ByteQuest system review: 22 November 2026"
-Cohesion: 0.18
-Nodes (11): ByteQuest system review: 22 November 2026, Findings, High, How to run this (skill flows), Low, Medium, Recommended order, Scorecard (+3 more)
+Cohesion: 0.20
+Nodes (10): ByteQuest system review: 22 November 2026, Findings, How to run this (skill flows), Low, Medium, Recommended order, Scorecard, Verdict (+2 more)
 
 ### Community 117 - "scripts"
 Cohesion: 0.17
@@ -720,17 +720,13 @@ Nodes (3): check_health(), smoke-vps.sh script, usage()
 Cohesion: 0.29
 Nodes (7): 1. Fix release blockers, 2. Correct grading, dashboard, and accessibility behavior, 3. Restore live grading and fill the content gaps, 4. Verify feature availability and role workflows, 5. Decide whether the pilot can start, ByteQuest pilot remediation checklist, Resume the Judge0 checks
 
-### Community 123 - "qa-responsive.mjs"
-Cohesion: 0.31
-Nodes (11): assertRail(), capture(), checkDocking(), examViewports(), failures, fixture, inspectProfile(), measure() (+3 more)
-
 ### Community 124 - "ByteQuest 2.0 system critique — 21 November 2026"
 Cohesion: 0.33
 Nodes (6): ByteQuest 2.0 system critique — 21 November 2026, Not verified in this review, Scorecard, Top 5 things to do next, Verdict, What is working well (keep)
 
 ### Community 126 - "AGENTS.md"
-Cohesion: 0.06
-Nodes (27): ByteQuest repository guidance, Consequences, Considered Options, Workshops, not a language track, decide what a student sees, GitHub mirror (when `gh` is available), Issue tracker: local markdown, mirrored to GitHub Issues, Local markdown (always), Wayfinding operations (+19 more)
+Cohesion: 0.07
+Nodes (24): Consequences, Considered Options, Workshops, not a language track, decide what a student sees, GitHub mirror (when `gh` is available), Issue tracker: local markdown, mirrored to GitHub Issues, Local markdown (always), Wayfinding operations, When a skill says "fetch the relevant ticket" (+16 more)
 
 ### Community 127 - "ByteQuest — Security & AI-Abuse Hardening (implementation brief)"
 Cohesion: 0.11
@@ -745,8 +741,8 @@ Cohesion: 0.40
 Nodes (5): Before the 30-student session, ByteQuest 2.0 live deployment stack, PHP budget, What ByteQuest runs, What to pay for
 
 ### Community 134 - "next"
-Cohesion: 0.24
-Nodes (9): HomePage(), FEATURED_SLIDES, FeaturedQuestWindow(), FeaturedSlide, destinationFor(), HomeRedirect(), consumeInviteCallback(), SafeNavigationOptions (+1 more)
+Cohesion: 0.27
+Nodes (8): HomePage(), FEATURED_SLIDES, FeaturedQuestWindow(), FeaturedSlide, HomeRedirect(), consumeInviteCallback(), SafeNavigationOptions, useSafeWindowNavigation()
 
 ### Community 135 - "ML features and prediction unit: manuscript vs. code"
 Cohesion: 0.40
@@ -761,8 +757,8 @@ Cohesion: 0.13
 Nodes (33): admin_retry_material(), retry_job(), _material_for_user(), archive_material(), create_material(), download_material(), list_materials(), _material_rows() (+25 more)
 
 ### Community 138 - "AppTooltips"
-Cohesion: 0.20
-Nodes (21): AppTooltips(), clearTimers(), findTarget(), hide(), onClick(), onContextMenu(), onFocusIn(), onFocusOut() (+13 more)
+Cohesion: 0.28
+Nodes (17): AppTooltips(), clearTimers(), findTarget(), hide(), onClick(), onContextMenu(), onFocusIn(), onFocusOut() (+9 more)
 
 ### Community 139 - "ProfileResponse"
 Cohesion: 0.18
@@ -780,9 +776,9 @@ Nodes (19): get_current_user(), get_current_user_payload(), TokenPayload, DemoSn
 Cohesion: 0.40
 Nodes (5): Access matrix, Local API security contract, Local verification and future deployment, Quotas and validation, School-issued IDs for student sign-up
 
-### Community 143 - "accessibility-settings.tsx"
-Cohesion: 0.25
-Nodes (9): 5.2 Faculty routes, 5.3 Administrator routes, 5.4 Navigation and shell integration, 5. Frontend changes, AccessibilityPage(), AccessibilityPreferenceKey, ACCESSIBILITY_SETTINGS, AccessibilitySettingDefinition (+1 more)
+### Community 143 - "app-tooltips.tsx"
+Cohesion: 0.50
+Nodes (4): hasVisibleText(), tooltipFor(), TooltipState, react-dom
 
 ### Community 146 - "dependencies"
 Cohesion: 0.22
@@ -793,8 +789,8 @@ Cohesion: 0.09
 Nodes (16): get_settings(), ErrorExplanationSchema, explain_code_error(), _client_for_key(), get_gemini_client(), GeminiLLMService, _thinking_config(), test_concurrent_first_use_shares_the_gemini_transport() (+8 more)
 
 ### Community 149 - "argparse"
-Cohesion: 0.27
-Nodes (4): SandboxHealth, check(), main(), main()
+Cohesion: 0.31
+Nodes (3): SandboxHealth, check(), main()
 
 ### Community 150 - "backup-supabase.sh"
 Cohesion: 0.40
@@ -804,9 +800,9 @@ Nodes (8): die(), env_value(), log(), pg(), psql_value(), backup-supabase.sh scr
 Cohesion: 0.08
 Nodes (18): CodeSubmissionRequest, run_code_submission(), _shadow_scoring_ready(), NotificationOutbox, deliver_one(), recovery_news(), grant_xp(), determine_next_task_rule_based() (+10 more)
 
-### Community 152 - "getSupabase"
-Cohesion: 0.46
-Nodes (7): usePasswordReset(), requestResetLink(), updatePassword(), clearSharedComputerData(), getSupabase(), signOutSharedComputer(), supabaseUrlForThisPage()
+### Community 152 - "supabase.ts"
+Cohesion: 0.18
+Nodes (17): 8 Required Acceptance Checks, Durability Boundary & Concurrency Guarantees, Exam Autosave & Conflict-Safe Recovery Verification, usePasswordReset(), requestResetLink(), updatePassword(), clearSharedComputerData(), getSupabase() (+9 more)
 
 ### Community 153 - "quests_gamification.py"
 Cohesion: 0.09
@@ -822,11 +818,11 @@ Nodes (6): die(), env_value(), log(), pg(), psql_value(), restore-supabase-backu
 
 ### Community 157 - "mastery-map.tsx"
 Cohesion: 0.13
-Nodes (16): Job, nextStarTip(), SubmissionStatusPage(), refresh(), retryGrading(), currentAttempt, mocks, oldSubmission (+8 more)
+Nodes (19): Job, nextStarTip(), SubmissionStatusPage(), refresh(), retryGrading(), MAX_STARS, SolveStars(), STAR_GUIDE (+11 more)
 
 ### Community 158 - "expectContentToFit"
-Cohesion: 0.16
-Nodes (12): pdf, expectContentToFit(), challenge, javaQuiz, javaWorkshop, quiz, ADR-0001, workshop (+4 more)
+Cohesion: 0.28
+Nodes (6): pdf, expectContentToFit(), identifier, quest, identifier, @playwright/test
 
 ### Community 159 - "test_profile_analytics.py"
 Cohesion: 0.26
@@ -840,9 +836,9 @@ Nodes (4): review_passed(), review_size(), test_review_passes_at_two_thirds(), t
 Cohesion: 0.60
 Nodes (4): canvasToBlob(), cropCompressImage(), CropCompressOptions, loadImage()
 
-### Community 162 - "ByteQuest backend runtime review"
-Cohesion: 0.40
-Nodes (4): ByteQuest backend runtime review, Mixed local workload, Pending measurements and review, Ranked findings
+### Community 162 - "ChatLessonPractice"
+Cohesion: 0.83
+Nodes (4): ChatLessonPractice(), send(), submit(), contextMessages()
 
 ### Community 163 - "UserRole"
 Cohesion: 0.12
@@ -877,16 +873,16 @@ Cohesion: 0.29
 Nodes (6): Agent skills, Current system status, Domain docs, graphify, Issue tracker, Triage labels
 
 ### Community 172 - "instructor/page.tsx"
-Cohesion: 0.08
-Nodes (47): Dashboard(), loadQueue(), retry(), Page(), AnnounceButton(), changeText(), dayFormat, formatDay() (+39 more)
+Cohesion: 0.05
+Nodes (84): Course health on System Overview, Already in place: extend, do not rebuild, Shared insight widgets, Verification and rollout, Already in place: extend, do not rebuild, One kit: course-ui, Already in place: extend, do not rebuild, Findings by severity (+76 more)
 
 ### Community 174 - "reviews.py"
 Cohesion: 0.13
 Nodes (31): get_review(), _locked_student(), _public_review(), _question_id(), _require_memory(), ReviewOverviewResponse, ReviewResponse, ReviewResult (+23 more)
 
 ### Community 175 - "Checkpoint for ChatGPT Codex: work of 28 November 2026"
-Cohesion: 0.25
-Nodes (8): next_up(), Checkpoint for ChatGPT Codex: work of 28 November 2026, Open items, Other work earlier the same day, Read in this order, Students have no language track (ADR 0001), Verification at the end of the day, What changed
+Cohesion: 0.15
+Nodes (13): next_up(), ByteQuest system status, Checkout, runtime and release, Machine learning — status on 11/21/26, Verification and remaining checks, What changed, Checkpoint for ChatGPT Codex: work of 28 November 2026, Open items (+5 more)
 
 ### Community 176 - "Workshops: Create, Join and the Workshop page"
 Cohesion: 0.20
@@ -929,12 +925,8 @@ Cohesion: 0.40
 Nodes (5): Implemented, Phase 6 shadow rollout implementation record, Phase 7 handoff, Safety and current state, Verification still required
 
 ### Community 214 - "Production instructor access"
-Cohesion: 0.67
-Nodes (3): Grant access to one account, Production instructor access, Safety boundaries
-
-### Community 225 - "ByteQuest system status"
 Cohesion: 0.50
-Nodes (4): ByteQuest system status, Checkout, runtime and release, Machine learning — status on 11/21/26, Verification and remaining checks
+Nodes (3): Grant access to one account, Production instructor access, Safety boundaries
 
 ### Community 228 - "ML feature engineering and training"
 Cohesion: 0.50
@@ -943,22 +935,22 @@ Nodes (4): Comparison protocol, ML feature engineering and training, Prepare an 
 ## Knowledge Gaps
 - **24 isolated node(s):** `ADR-0001`, `monaco-editor`, `react-is`, `@types/node`, `@types/react` (+19 more)
   These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 1617 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **42 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **44 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `4. Read these before writing any code` connect `4. Read these before writing any code` to `mastery_map.py`, `getErrorMessage`, `quests_gamification.py`, `entities.py`, `ProgrammingLang`, `services/materials.py`, `db`, `test_learning_flow_integration.py`, `LearningActivity`, `submissions.py`, `seed_local_showcase_activity.py`, `profiles.py`, `api.ts`?**
+- **Why does `4. Read these before writing any code` connect `4. Read these before writing any code` to `mastery_map.py`, `getErrorMessage`, `quests_gamification.py`, `entities.py`, `ProgrammingLang`, `services/materials.py`, `db`, `test_learning_flow_integration.py`, `profile/page.tsx`, `LearningActivity`, `submissions.py`, `seed_local_showcase_activity.py`, `profiles.py`?**
   _High betweenness centrality (0.177) - this node is a cross-community bridge._
 - **Are the 5 inferred relationships involving `Session` (e.g. with `smoke_demo_quest()` and `test_two_concurrent_saves_cannot_commit_the_same_activity_version()`) actually correct?**
   _`Session` has 5 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `ADR-0001`, `monaco-editor`, `react-is` to the rest of the system?**
   _24 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `getErrorMessage` be split into smaller, more focused modules?**
-  _Cohesion score 0.044747238571313394 - nodes in this community are weakly interconnected._
-- **Why does `LearningActivity` connect `LearningActivity` to `test_faculty_admin.py`, `services/materials.py`, `course_access.py`, `4. Read these before writing any code`, `faculty_ml.py`, `LearningActivity`, `ReviewState`, `config.py`, `test_ml_exam_features.py`, `monitoring.py`, `predictor.py`, `submissions.py`, `retrieval.py`, `quests_gamification.py`, `insights.py`, `_enroll_chat_students`, `mastery_map.py`, `Session`, `UserRole`, `get`, `workspace`, `reviews.py`, `test_learning_flow_integration.py`, `profiles.py`, `chat.py`, `workshops.py`, `exams.py`, `quests/page.tsx`, `ByteQuest chatbot: implementation plan for DeepSeek V4.1 Flash`, `entities.py`, `qa_starter_tutoring.py`, `db`, `rag_instructor.py`, `Profile`, `seed_local_showcase_activity.py`, `submission_jobs.py`, `sqlalchemy`, `pilot_foundations.py`?**
-  _High betweenness centrality (0.129) - this node is a cross-community bridge._
+  _Cohesion score 0.0399529964747356 - nodes in this community are weakly interconnected._
+- **Why does `LearningActivity` connect `LearningActivity` to `test_faculty_admin.py`, `services/materials.py`, `course_access.py`, `4. Read these before writing any code`, `faculty_ml.py`, `LearningActivity`, `ReviewState`, `config.py`, `monitoring.py`, `predictor.py`, `submissions.py`, `retrieval.py`, `quests_gamification.py`, `insights.py`, `_enroll_chat_students`, `mastery_map.py`, `Session`, `UserRole`, `get`, `workspace`, `reviews.py`, `test_learning_flow_integration.py`, `profiles.py`, `chat.py`, `workshops.py`, `exams.py`, `ByteQuest chatbot: implementation plan for DeepSeek V4.1 Flash`, `entities.py`, `qa_starter_tutoring.py`, `db`, `rag_instructor.py`, `Profile`, `qa_live_multi_role.py`, `seed_local_showcase_activity.py`, `submission_jobs.py`, `sqlalchemy`, `pilot_foundations.py`?**
+  _High betweenness centrality (0.130) - this node is a cross-community bridge._
 - **Are the 321 inferred relationships involving `Profile` (e.g. with `account_impact()` and `_account_needs_action()`) actually correct?**
   _`Profile` has 321 INFERRED edges - model-reasoned connections that need verification._
-- **Should `workspace.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.02509673852957435 - nodes in this community are weakly interconnected._
+- **Should `instructor-exams.tsx` be split into smaller, more focused modules?**
+  _Cohesion score 0.10804597701149425 - nodes in this community are weakly interconnected._

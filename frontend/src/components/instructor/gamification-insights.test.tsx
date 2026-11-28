@@ -29,13 +29,13 @@ const data: GamificationInsightsData = {
 
 afterEach(cleanup);
 
-it("uses one stat strip and suppresses rates and charts with small samples", () => {
+it("leads with sentences and suppresses rates and charts with small samples", () => {
   render(<GamificationInsightsView data={data} />);
-  expect(screen.getByText("of 12 enrolled")).toBeTruthy();
-  expect(screen.getByText("80%")).toBeTruthy();
-  expect(screen.queryByText("67%")).toBeNull();
-  expect(screen.getByText("3 hinted challenges")).toBeTruthy();
-  expect(screen.getByText("0 recalls")).toBeTruthy();
+  expect(screen.getByText("9 of 12 learners have practised.")).toBeTruthy();
+  expect(screen.getByText("80% of 10 solved challenges were passed without opening a hint.")).toBeTruthy();
+  expect(screen.queryByText(/67%/)).toBeNull();
+  expect(screen.getByText("Not enough data yet — based on 3.")).toBeTruthy();
+  expect(screen.getByText("Not enough data yet — based on 0.")).toBeTruthy();
   expect(screen.getByText("Unlocks after day 35.")).toBeTruthy();
   expect(screen.getByText("Not enough data yet")).toBeTruthy();
   expect(screen.queryByText(/documented novelty effect/)).toBeNull();

@@ -4,8 +4,8 @@
 
 **Blocked by:** 02, 03
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #23
 
-- [ ] Component tests for the new sentences, attempts-to-pass and the Stuck link
-- [ ] Existing activity-analysis and gamification tests updated and passing
+- [x] Component tests for the new sentences, attempts-to-pass and the Stuck link
+- [x] Existing activity-analysis and gamification tests updated and passing

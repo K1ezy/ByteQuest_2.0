@@ -1,7 +1,8 @@
 "use client";
 
-import { metrics } from "@/lib/insight-metrics";
-import { PageHeader, Section, StatStrip, RowSkeleton, InlineError, InlineEmpty } from "./course-ui";
+import { plural } from "@/lib/takeaway";
+import { MetricCard } from "@/components/insights/metric-card";
+import { PageHeader, Section, RowSkeleton, InlineError, InlineEmpty } from "./course-ui";
 import { MeasureDefinitions, MeterList, UpdatedAt } from "@/components/insights/ui";
 import Link from "next/link";
 import { Button, useApi } from "@/components/workspace/ui";
@@ -72,12 +73,19 @@ export function ActivityAnalysisView({ activityId }: { activityId: string }) {
             {data.attempted} of {data.class_size} enrolled learners attempted this activity. {data.not_started} have yet to start.
             {data.excludes_exam_attempts ? " Figures cover graded practice only." : ""}
           </p>
-          <StatStrip label="Activity statistics" items={[
-            {label:metrics.pass_rate.label,value:percentOrDash(data.pass_rate),note:data.passed+" of "+data.attempted+" who attempted"},
-            {label:metrics.first_try_pass_rate.label,value:percentOrDash(data.first_try_pass_rate)},
-            {label:metrics.median_attempts_to_pass.label,value:data.median_attempts_to_pass ?? "—"},
-            {label:metrics.stuck.label,value:data.stuck,note:data.stuck_after_attempts+"+ attempts without a pass"}
-          ]}/><MeasureDefinitions names={["pass_rate","first_try_pass_rate","median_attempts_to_pass","stuck"]}/>
+          <div className="ws-stat-grid" role="group" aria-label="Activity statistics">
+            <MetricCard metric="pass_rate" value={percentOrDash(data.pass_rate)}
+              sentence={data.attempted ? `${data.passed} of ${plural(data.attempted, "learner", "learners")} who tried ${data.passed === 1 ? "has" : "have"} passed.` : "No learner has tried this activity yet."} />
+            <MetricCard metric="first_try_pass_rate" value={percentOrDash(data.first_try_pass_rate)}
+              sentence={data.first_try_pass_rate == null ? "No learner has tried this activity yet."
+                : `${percentOrDash(data.first_try_pass_rate)} of learners who tried passed on their first attempt.`} />
+            <MetricCard metric="median_attempts_to_pass" value={data.median_attempts_to_pass ?? "—"}
+              sentence={data.median_attempts_to_pass == null ? "No learner has passed yet." : `Learners usually pass on attempt ${data.median_attempts_to_pass}.`} />
+            <MetricCard metric="stuck" value={data.stuck}
+              sentence={data.stuck ? `${plural(data.stuck, "learner has", "learners have")} tried ${data.stuck_after_attempts} or more times without passing.` : "No learner is stuck on this activity."}>
+              {data.stuck ? <Link className="insight-practice" href={stuckHref}>Show them →</Link> : null}
+            </MetricCard>
+          </div><MeasureDefinitions names={["pass_rate","first_try_pass_rate","median_attempts_to_pass","stuck"]}/>
           {data.attempted ? (
             <>
               <div className="analysis-charts">

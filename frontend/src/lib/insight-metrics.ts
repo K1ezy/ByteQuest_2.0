@@ -1,4 +1,8 @@
 export const metrics = {
+  "practised": {
+    "label": "Practised",
+    "definition": "Enrolled learners with at least one practice attempt on a published activity"
+  },
   "enrolled": {
     "label": "Enrolled",
     "definition": "Learners with an active enrollment in this course"

@@ -37,6 +37,10 @@ describe("activity analysis", () => {
     expect(screen.getByText("50%")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Stuck learners" }).getAttribute("href"))
       .toBe("/instructor/performance?course=course&activity=activity&stuck=1");
+    expect(screen.getByText("Learners usually pass on attempt 2.")).toBeTruthy();
+    expect(screen.getByText("1 learner has tried 3 or more times without passing.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Show them →" }).getAttribute("href"))
+      .toBe("/instructor/performance?course=course&activity=activity&stuck=1");
     const disclosure = screen.getAllByText("Show as table")[0];
     fireEvent.click(disclosure);
     expect(disclosure.closest("details")?.open).toBe(true);

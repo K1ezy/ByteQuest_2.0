@@ -1914,15 +1914,15 @@
     "semantic_hash": ""
   },
   "frontend/src/components/instructor/gamification-insights.test.tsx": {
-    "mtime": 1794805330.948198,
-    "seen": 1795545913.947662,
-    "ast_hash": "fa52d9f84c34e0b9d2253d559ea13597",
+    "mtime": 1795882719.3075483,
+    "seen": 1795882898.1713943,
+    "ast_hash": "ba754a6749484326c70ea7f939a7fd9c",
     "semantic_hash": ""
   },
   "frontend/src/components/instructor/gamification-insights.tsx": {
-    "mtime": 1795197162.5111187,
-    "seen": 1795545913.947662,
-    "ast_hash": "6766a1195792f4826652447f83cb10f7",
+    "mtime": 1795882776.631235,
+    "seen": 1795882898.1713943,
+    "ast_hash": "702324c7f5a74b032c65056429d64cc8",
     "semantic_hash": ""
   },
   "backend/app/services/gamification/progress_recap.py": {
@@ -2118,15 +2118,15 @@
     "semantic_hash": ""
   },
   "frontend/src/components/instructor/activity-analysis.test.tsx": {
-    "mtime": 1794765423.4891663,
-    "seen": 1795545913.947662,
-    "ast_hash": "11850b75c3124662d1b27dbebd82cedd",
+    "mtime": 1795882821.127479,
+    "seen": 1795882898.16838,
+    "ast_hash": "e6405c9e595ce4a665350ada0bcc184d",
     "semantic_hash": ""
   },
   "frontend/src/components/instructor/activity-analysis.tsx": {
-    "mtime": 1795197162.41828,
-    "seen": 1795545913.947662,
-    "ast_hash": "48a83cda7f150206814c4c179e67de2f",
+    "mtime": 1795882719.3085525,
+    "seen": 1795882898.16838,
+    "ast_hash": "816c1365c2f9b5fa8c0ba5ef8e2e4d74",
     "semantic_hash": ""
   },
   "frontend/src/components/instructor/course-announcements.test.tsx": {
@@ -2190,9 +2190,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/instructor/engagement-chart.tsx": {
-    "mtime": 1795545504.5797534,
-    "seen": 1795545913.947662,
-    "ast_hash": "b3913a695b8160a83a76d32b0f30d2ae",
+    "mtime": 1795882637.3795555,
+    "seen": 1795882898.1713943,
+    "ast_hash": "a7a65e5691a0a5079bdc5cc66598ed96",
     "semantic_hash": ""
   },
   "frontend/src/components/instructor/save-conflict.tsx": {
@@ -2544,9 +2544,9 @@
     "semantic_hash": ""
   },
   "frontend/src/lib/insight-metrics.ts": {
-    "mtime": 1795865056.21085,
-    "seen": 1795880178.3655179,
-    "ast_hash": "46454f3c6ba5690a948a2296db3dd4c4",
+    "mtime": 1795882637.261765,
+    "seen": 1795882898.194391,
+    "ast_hash": "b7f56550b535107cb376147255e7ec2a",
     "semantic_hash": ""
   },
   "docs/prompts/chatgpt-insights-admin.md": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795882205.4056785,
-    "seen": 1795882245.7913525,
-    "ast_hash": "96fae6838a96acaf66809949d45a468f",
+    "mtime": 1795882870.6396723,
+    "seen": 1795882898.22264,
+    "ast_hash": "235ee7db19414a5cb79dc8d0a889e655",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -3222,9 +3222,9 @@
     "semantic_hash": ""
   },
   ".scratch/insight-clarity/issues/07-outlook-legend.md": {
-    "mtime": 1795861958.148719,
-    "seen": 1795862611.7694468,
-    "ast_hash": "0541c7f0057bc182e4329e5aaaeb92c8",
+    "mtime": 1795882247.269069,
+    "seen": 1795882898.213698,
+    "ast_hash": "ffa9d72e2ed8ef12d686b8137d3e93f1",
     "semantic_hash": ""
   },
   ".scratch/insight-clarity/issues/08-activity-and-gamification-insights.md": {

@@ -1,10 +1,11 @@
 "use client";
 
+import { notEnoughData, plural } from "@/lib/takeaway";
+import { MetricCard } from "@/components/insights/metric-card";
 import { MeasureDefinitions, MeterList, NotEnoughData, SMALL_SAMPLE } from "@/components/insights/ui";
-import { metrics } from "@/lib/insight-metrics";
 import EngagementChart from "./engagement-chart";
 import { StatusChip } from "@/components/workspace/ui";
-import { Section, StatStrip } from "./course-ui";
+import { Section } from "./course-ui";
 
 // Mirrors backend app/services/gamification/insights.py (GamificationInsights).
 export interface WeekPoint { week: number; eligible: number; active: number; events: number }
@@ -80,12 +81,22 @@ export function GamificationInsightsView({ data, topic }: { data: GamificationIn
   const topics = topic ? data.topics.filter((row) => row.topic === topic) : data.topics;
 
   return <div className="insights-view">
-    <StatStrip label="Gamification statistics" items={[
-      { label: "Practised", value: data.active, note: "of " + data.enrolled + " enrolled" },
-      { label: metrics.self_solved.label, value: enoughLearners && quality.solved >= SMALL_SAMPLE ? percent(quality.self_solved_rate) : "—", note: quality.solved + " solved challenges" },
-      { label: metrics.tried_before_asking.label, value: enoughLearners && help.hinted >= SMALL_SAMPLE ? percent(help.rate) : "—", note: help.hinted + " hinted challenges" },
-      { label: metrics.recall_pass_rate.label, value: enoughLearners && memory.submitted >= SMALL_SAMPLE ? percent(memory.pass_rate) : "—", note: memory.submitted + " recalls" },
-    ]} />
+    <div className="ws-stat-grid" role="group" aria-label="Gamification statistics">
+      <MetricCard metric="practised" value={data.active}
+        sentence={`${data.active} of ${plural(data.enrolled, "learner", "learners")} ${data.active === 1 ? "has" : "have"} practised.`} />
+      <MetricCard metric="self_solved" value={enoughLearners && quality.solved >= SMALL_SAMPLE ? percent(quality.self_solved_rate) : "—"}
+        sentence={enoughLearners && quality.solved >= SMALL_SAMPLE
+          ? `${percent(quality.self_solved_rate)} of ${plural(quality.solved, "solved challenge was", "solved challenges were")} passed without opening a hint.`
+          : notEnoughData(quality.solved)} />
+      <MetricCard metric="tried_before_asking" value={enoughLearners && help.hinted >= SMALL_SAMPLE ? percent(help.rate) : "—"}
+        sentence={enoughLearners && help.hinted >= SMALL_SAMPLE
+          ? `${help.tried_before_hint} of ${plural(help.hinted, "hinted challenge", "hinted challenges")} had a run or attempt before the first hint.`
+          : notEnoughData(help.hinted)} />
+      <MetricCard metric="recall_pass_rate" value={enoughLearners && memory.submitted >= SMALL_SAMPLE ? percent(memory.pass_rate) : "—"}
+        sentence={enoughLearners && memory.submitted >= SMALL_SAMPLE
+          ? `${percent(memory.pass_rate)} of ${plural(memory.submitted, "recall", "recalls")} passed.`
+          : notEnoughData(memory.submitted)} />
+    </div>
 
     <Section title="Learners active each week">
       <p className="ic-note">Weeks count from each learner&apos;s first activity.{data.weekly.length >= 6 ? " A dip around weeks 4–6 is the documented novelty effect." : ""}</p>
