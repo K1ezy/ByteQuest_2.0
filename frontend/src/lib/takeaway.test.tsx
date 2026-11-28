@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { MIN_SAMPLE, activitiesPassedSentence, firstTryHeadline, firstTrySentence, notEnoughData, recapSentence, trendTakeaway } from "./takeaway";
+import { MIN_SAMPLE, activeSentence, activitiesPassedSentence, classPassedSentence, firstTryHeadline, firstTrySentence, notEnoughData,
+  notStartedSentence, recapSentence, trendTakeaway, weekChange } from "./takeaway";
 
 it("needs at least five values before describing a trend", () => {
   expect(MIN_SAMPLE).toBe(5);
@@ -46,4 +47,18 @@ it("leads each recap item with a plain sentence", () => {
   expect(recapSentence("recoveries", 0, 7)).toBe("You fixed 0 errors on your own.");
   expect(recapSentence("recalls", 1, 7)).toBe("You passed 1 recall.");
   expect(recapSentence("active_days", 4, 7)).toBe("You practised on 4 of the last 7 days.");
+});
+
+it("words the instructor headlines and the change since last week", () => {
+  expect(notStartedSentence(4, 21)).toBe("4 of 21 learners haven't started.");
+  expect(notStartedSentence(1, 21)).toBe("1 of 21 learners hasn't started.");
+  expect(notStartedSentence(0, 21)).toBe("All 21 learners have started.");
+  expect(notStartedSentence(0, 0)).toBe("No learners are enrolled yet.");
+  expect(activeSentence(15, 21)).toBe("15 of 21 learners practised in the last 7 days.");
+  expect(classPassedSentence(62, 8)).toBe("On average, learners have passed 62% of the 8 published activities.");
+  expect(classPassedSentence(0, 0)).toBe("No activities are published yet.");
+  expect(weekChange(4, 7)).toBe("↓ 3 fewer since last week");
+  expect(weekChange(15, 12)).toBe("↑ 3 more since last week");
+  expect(weekChange(5, 5)).toBe("No change since last week");
+  expect(weekChange(5, undefined)).toBe("");
 });

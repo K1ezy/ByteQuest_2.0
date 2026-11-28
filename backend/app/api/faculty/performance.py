@@ -126,6 +126,7 @@ def performance(
             "latest_activity_title": snapshot["latest_activity_title"] if activity_id is None else selected.title or selected.topic_concept,
             "average_completion_percent": snapshot["average_completion_percent"],
             "need_follow_up": snapshot["need_follow_up"],
+            "last_week": snapshot["last_week"],
             "as_of": iso(as_of),
             "selected_activity_id": str(activity_id) if activity_id else None,
         },

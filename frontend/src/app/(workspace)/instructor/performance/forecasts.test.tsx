@@ -108,10 +108,10 @@ function detail(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function useApiReturning(data = dashboard(), error = "") {
+function useApiReturning(data = dashboard(), error = "", summary: Record<string, unknown> = {}) {
   mocks.useApi.mockImplementation((path:string) => ({
     loading:false, error,reload:vi.fn(),data:path.includes("/faculty/ml?") ? data : {
-      summary:{active_learners:data.students.length,published_activities:2,average_score:80,need_follow_up:0,average_completion_percent:50},
+      summary:{active_learners:data.students.length,published_activities:2,average_score:80,need_follow_up:0,average_completion_percent:50,...summary},
       activities:[],students:data.students.map(r => ({...r,pseudonym:r.student_id,workshop_languages:["python"],attempt_count:1,completed_count:1,total_activities:2}))
     }
   }));
@@ -340,4 +340,16 @@ it("says the period never changes forecast eligibility", () => {
   expect(
     screen.getByText(/never changes model inputs, the next activity, or whether a forecast is available/),
   ).toBeTruthy();
+});
+
+it("leads each class number with a sentence, its total, the change since last week and a filter link", () => {
+  useApiReturning(dashboard(), "", { active_learners: 21, need_follow_up: 4, last_week: { need_follow_up: 7, active_7d: 12 } });
+  render(<Page />);
+  const card = screen.getByRole("region", { name: "Not started" });
+  expect(card.firstElementChild?.textContent).toBe("4 of 21 learners haven't started.");
+  expect(card.textContent).toContain("↓ 3 fewer since last week");
+  fireEvent.click(within(card).getByRole("button", { name: "Show them →" }));
+  expect(mocks.replace).toHaveBeenCalledWith(expect.stringContaining("notStarted=1"), expect.anything());
+  expect(screen.getByRole("region", { name: "Activities passed" }).firstElementChild?.textContent)
+    .toBe("On average, learners have passed 50% of the 2 published activities.");
 });

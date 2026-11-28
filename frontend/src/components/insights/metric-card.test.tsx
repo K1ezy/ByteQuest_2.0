@@ -35,3 +35,10 @@ it("stays open when a hover is followed by a click", () => {
   fireEvent.mouseLeave(info);
   expect(screen.getByRole("note").hidden).toBe(false);
 });
+
+it("shows the change since last week only when there is one", () => {
+  const { rerender } = render(<MetricCard sentence="4 of 21 learners haven't started." value={4} metric="not_started" change="↓ 3 fewer since last week" />);
+  expect(screen.getByText("↓ 3 fewer since last week")).toBeTruthy();
+  rerender(<MetricCard sentence="4 of 21 learners haven't started." value={4} metric="not_started" change="" />);
+  expect(screen.queryByText(/since last week/)).toBeNull();
+});

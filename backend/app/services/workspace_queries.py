@@ -356,6 +356,7 @@ def class_snapshot(db: Session, course_id: uuid.UUID, *, as_of: datetime | None 
             "inactive_7d": 0,
             "latest_activity_title": latest_title,
             "attempts_7d": 0,
+            "last_week": {"need_follow_up": len(students), "active_7d": 0},
         }
     # Same definitions as the Performance page: "mastered" needs a passing attempt;
     # "started" (used for follow-up) needs any attempt.
@@ -404,7 +405,19 @@ def class_snapshot(db: Session, course_id: uuid.UUID, *, as_of: datetime | None 
         )
         .one()
     )
+    # The same two counts as they stood one week earlier, so instructors see the change.
+    week_ago = (as_of or datetime.now(timezone.utc)) - timedelta(days=7)
+    student_ids = [student.id for student in students]
+    started_before = {row[0] for row in db.query(ActivityAttempt.student_id).filter(
+        ActivityAttempt.activity_id.in_(activity_ids), ActivityAttempt.student_id.in_(student_ids),
+        ActivityAttempt.created_at < week_ago, practice_attempt_clause()).distinct()}
+    active_last_week = db.query(func.count(func.distinct(ActivityAttempt.student_id))).filter(
+        ActivityAttempt.activity_id.in_(activity_ids), ActivityAttempt.student_id.in_(student_ids),
+        ActivityAttempt.created_at >= week_ago - timedelta(days=7), ActivityAttempt.created_at < week_ago,
+        practice_attempt_clause()).scalar() or 0
+    last_week = {"need_follow_up": len(students) - len(started_before), "active_7d": active_last_week}
     return {
+        "last_week": last_week,
         "active_learners": len(students),
         "published_activities": len(activity_ids),
         "average_completion_percent": average_completion,

@@ -1,5 +1,7 @@
 "use client";
 
+import { classPassedSentence, notStartedSentence, weekChange } from "@/lib/takeaway";
+import { MetricCard } from "@/components/insights/metric-card";
 import Link from "next/link";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -29,7 +31,7 @@ import {
 } from "@/lib/workspace";
 
 import { metrics } from "@/lib/insight-metrics";
-import { PageHeader, Section, StatStrip, RowSkeleton, InlineError, InlineEmpty } from "@/components/instructor/course-ui";
+import { PageHeader, Section, RowSkeleton, InlineError, InlineEmpty } from "@/components/instructor/course-ui";
 import { MeasureDefinitions, UpdatedAt } from "@/components/insights/ui";
 import { type Dashboard, type Detail, PERIODS, READINESS_MESSAGES, isPeriod } from "../ml/types";
 import { LearnerForecast, Trend, compareNumbers, outlookOf, forecastTone } from "./forecasts";
@@ -172,13 +174,22 @@ function FacultyPerformance() {
 
       {error && <InlineError onRetry={reload}/>}
       {loading && !data && <RowSkeleton />}
-      {data && <><StatStrip label="Class progress statistics" items={[
-        { label: "Enrolled", value: data.summary.active_learners },
-        { label: activityId ? "Selected activity average" : metrics.latest_activity_average.label,
-          value: data.summary.average_score == null ? "—" : data.summary.average_score + "%", note: data.summary.latest_activity_title ?? "No graded attempts yet" },
-        { label: metrics.activities_passed.label, value: data.summary.average_completion_percent == null ? "—" : data.summary.average_completion_percent + "%", note: "avg of " + data.summary.published_activities + " published activities" },
-        { label: metrics.not_started.label, value: data.summary.need_follow_up },
-      ]}/><MeasureDefinitions names={["activities_passed","latest_activity_average","not_started","inactive_7d"]}>
+      {data && <><div className="ws-stat-grid instructor-summary" aria-label="Class progress statistics" role="group">
+        <MetricCard metric="not_started" value={data.summary.need_follow_up}
+          sentence={notStartedSentence(data.summary.need_follow_up, data.summary.active_learners)}
+          change={weekChange(data.summary.need_follow_up, data.summary.last_week?.need_follow_up)}>
+          {data.summary.need_follow_up && !notStarted ? <button type="button" className="text-button insight-practice"
+            onClick={() => updateQuery({ notStarted: "1", inactive: null })}>Show them →</button> : null}
+        </MetricCard>
+        <MetricCard metric="activities_passed" value={data.summary.average_completion_percent == null ? "—" : data.summary.average_completion_percent + "%"}
+          sentence={data.summary.average_completion_percent == null ? "No learner has passed an activity yet."
+            : classPassedSentence(data.summary.average_completion_percent, data.summary.published_activities)} />
+        <MetricCard metric="latest_activity_average" value={data.summary.average_score == null ? "—" : data.summary.average_score + "%"}
+          sentence={data.summary.average_score == null ? "No graded attempts yet on the latest activity."
+            : `Learners' latest scores on ${data.summary.latest_activity_title ?? "the latest activity"} average ${data.summary.average_score}%.`} />
+        <MetricCard metric="enrolled" value={data.summary.active_learners}
+          sentence={`${data.summary.active_learners} ${data.summary.active_learners === 1 ? "learner is" : "learners are"} enrolled in this course.`} />
+      </div><MeasureDefinitions names={["activities_passed","latest_activity_average","not_started","inactive_7d"]}>
         {available ? <li><strong>Outlook</strong> · {OUTLOOK_NOTE}</li> : null}
       </MeasureDefinitions>
       {data.summary.as_of && <UpdatedAt at={data.summary.as_of}/>}</>}

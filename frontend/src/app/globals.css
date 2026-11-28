@@ -5212,3 +5212,4 @@ html[data-contrast="high"] { --chart-series: CanvasText; --chart-series-2: Canva
 .profile-activity-legend .level-3 span { background: #8b5bd2; }
 .profile-activity-legend .level-4 span { background: var(--purple); }
 .mastery-node-caption { font-size: var(--text-sm); color: var(--muted); }
+.metric-card-change { margin: 0; font-size: var(--text-sm); color: var(--ink); font-weight: 600; }

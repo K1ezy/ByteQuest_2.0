@@ -210,6 +210,7 @@ export interface FacultyDashboard {
     average_completion_percent: number;
     average_score: number | null;
     need_follow_up: number;
+    last_week?: { need_follow_up: number; active_7d: number };
     inactive_7d?: number;
     as_of?: string;
     latest_activity_title?: string | null;
@@ -431,6 +432,8 @@ export interface PerformanceResponse {
     average_score: number | null;
     average_completion_percent: number | null;
     need_follow_up: number;
+    /** The same counts one week earlier. */
+    last_week?: { need_follow_up: number; active_7d: number };
     inactive_7d?: number;
     as_of?: string;
     latest_activity_title?: string | null;

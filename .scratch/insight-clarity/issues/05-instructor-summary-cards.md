@@ -4,8 +4,8 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #20
 
-- [ ] API test: the performance summary returns last week's values for its counts
-- [ ] Component test: sentence, total, change text and filter link render; no change line without last-week data
+- [x] API test: the performance summary returns last week's values for its counts
+- [x] Component test: sentence, total, change text and filter link render; no change line without last-week data

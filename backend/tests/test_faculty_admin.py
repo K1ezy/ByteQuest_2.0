@@ -2301,3 +2301,36 @@ def test_course_edit_changes_title_and_description_with_an_audit_entry(workspace
         summary = db.query(AuditEvent.summary).filter(AuditEvent.action == "course.updated",
                                                       AuditEvent.course_id == ids["course_a"]).scalar()
         assert "renamed from Introduction to Python" in summary
+
+
+def test_class_snapshot_reports_last_weeks_counts(workspace):
+    from app.services.workspace_queries import class_snapshot
+
+    _, db_session, ids = workspace
+    now = datetime.now(timezone.utc)
+    with db_session() as db:
+        course = Course(code=uuid.uuid4().hex[:24], title="Last-week snapshot")
+        db.add(course)
+        db.flush()
+        early, recent, idle = ids["student"], ids["other_student"], ids["faculty"]
+        db.add_all(CourseMember(course_id=course.id, profile_id=p, member_role="student", status="active")
+                   for p in (early, recent, idle))
+        activity = LearningActivity(created_by=ids["faculty"], course_id=course.id, activity_type=ActivityKind.quiz,
+                                    language=ProgrammingLang.python, topic_concept="Loops", title="Loops check",
+                                    review_status=ReviewState.published, published_at=now - timedelta(days=20),
+                                    quiz_questions_json={"questions": []})
+        db.add(activity)
+        db.flush()
+        db.add_all([
+            ActivityAttempt(student_id=early, activity_id=activity.id, attempt_number=1, is_successful=False,
+                            score_percentage=10, created_at=now - timedelta(days=10)),
+            ActivityAttempt(student_id=recent, activity_id=activity.id, attempt_number=1, is_successful=False,
+                            score_percentage=10, created_at=now - timedelta(days=2)),
+        ])
+        db.flush()
+        snapshot = class_snapshot(db, course.id, as_of=now)
+        # Now: only "idle" hasn't started and only "recent" practised this week.
+        # A week ago: "recent" hadn't started yet either, and only "early" had practised that week.
+        assert (snapshot["need_follow_up"], snapshot["active_7d"]) == (1, 1)
+        assert snapshot["last_week"] == {"need_follow_up": 2, "active_7d": 1}
+        db.rollback()

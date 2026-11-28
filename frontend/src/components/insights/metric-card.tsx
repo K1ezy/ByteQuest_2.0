@@ -25,12 +25,13 @@ export function MetricInfo({ metric }: { metric: MetricKey }) {
  * Sentence first (the chosen "Variant A"): a plain sentence giving the value, its total and what is
  * left, then the number, its label and the (i) definition underneath.
  */
-export function MetricCard({ sentence, value, metric, children }: {
-  sentence: ReactNode; value: ReactNode; metric: MetricKey; children?: ReactNode;
+export function MetricCard({ sentence, value, metric, change, children }: {
+  sentence: ReactNode; value: ReactNode; metric: MetricKey; change?: string; children?: ReactNode;
 }) {
   return <section className="ws-stat-card metric-card" aria-label={metrics[metric].label}>
     <p className="metric-card-sentence">{sentence}</p>
     <p className="metric-card-figure"><strong>{value}</strong> {metrics[metric].label}<MetricInfo metric={metric} /></p>
+    {change ? <p className="metric-card-change">{change}</p> : null}
     {children}
   </section>;
 }

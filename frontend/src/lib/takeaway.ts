@@ -64,3 +64,30 @@ export function recapSentence(
     case "active_days": return `You practised on ${count} of the last ${plural(days, "day", "days")}.`;
   }
 }
+
+/** "↓ 3 fewer since last week": an arrow and words, never colour alone. Empty when there is no last week. */
+export function weekChange(now: number, lastWeek: number | null | undefined): string {
+  if (lastWeek == null) return "";
+  const diff = now - lastWeek;
+  if (diff === 0) return "No change since last week";
+  return `${diff > 0 ? "↑" : "↓"} ${Math.abs(diff)} ${diff > 0 ? "more" : "fewer"} since last week`;
+}
+
+/** Instructor headline: learners who have not attempted anything yet. */
+export function notStartedSentence(count: number, enrolled: number): string {
+  if (enrolled === 0) return "No learners are enrolled yet.";
+  if (count === 0) return `All ${plural(enrolled, "learner has", "learners have")} started.`;
+  return `${count} of ${plural(enrolled, "learner", "learners")} ${count === 1 ? "hasn't" : "haven't"} started.`;
+}
+
+/** Instructor headline: learners who practised in the last seven days. */
+export function activeSentence(active: number, enrolled: number): string {
+  if (enrolled === 0) return "No learners are enrolled yet.";
+  return `${active} of ${plural(enrolled, "learner", "learners")} practised in the last 7 days.`;
+}
+
+/** Instructor headline: the class's average share of published activities passed. */
+export function classPassedSentence(percent: number, published: number): string {
+  if (published === 0) return "No activities are published yet.";
+  return `On average, learners have passed ${percent}% of the ${plural(published, "published activity", "published activities")}.`;
+}

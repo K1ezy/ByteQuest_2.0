@@ -1,5 +1,7 @@
 "use client";
 
+import { activeSentence, classPassedSentence, notStartedSentence, weekChange } from "@/lib/takeaway";
+import { MetricCard } from "@/components/insights/metric-card";
 import { metrics } from "@/lib/insight-metrics";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -7,7 +9,7 @@ import { useState } from "react";
 import { MeasureDefinitions } from "@/components/insights/ui";
 import { AnnounceButton } from "@/components/instructor/course-announcements";
 import {
-  DataRow, InlineEmpty, InlineError, InstructorIcon, PageHeader, RowSkeleton, Section, StatSkeleton, StatStrip, StatusBadge,
+  DataRow, InlineEmpty, InlineError, InstructorIcon, PageHeader, RowSkeleton, Section, StatSkeleton, StatusBadge,
 } from "@/components/instructor/course-ui";
 import { ActivityRow } from "@/components/instructor/activity-identity";
 import { activityEditorHref } from "@/lib/instructor-activity";
@@ -96,13 +98,22 @@ function Dashboard({ courseId }: { courseId: string }) {
       <AnnounceButton courseId={courseId} manageHref={courseHref("/instructor/announcements")} />
     } />
     {overview.error ? <InlineError onRetry={overview.reload} /> : overview.data ? (
-      <StatStrip items={[
-        { label: "Enrolled", value: overview.data.counts.active_learners, note: "In this course" },
-        { label: metrics.active_7d.label, value: overview.data.class_snapshot.active_7d, note: "of " + overview.data.counts.active_learners + " enrolled" },
-        { label: metrics.activities_passed.label, value: overview.data.counts.class_progress_percent + "%",
-          note: "avg of " + overview.data.class_snapshot.published_activities + (overview.data.class_snapshot.published_activities === 1 ? " published activity" : " published activities") },
-        { label: "Submissions, 7 days", value: overview.data.class_snapshot.attempts_7d, note: "Attempts on published activities" },
-      ]} />
+      <div className="ws-stat-grid instructor-summary">
+        <MetricCard metric="not_started" value={notStarted}
+          sentence={notStartedSentence(notStarted, overview.data.counts.active_learners)}
+          change={weekChange(notStarted, overview.data.class_snapshot.last_week?.need_follow_up)}>
+          {notStarted ? <Link className="insight-practice" href={courseHref("/instructor/performance?notStarted=1#instructor-roster")}>Show them →</Link> : null}
+        </MetricCard>
+        <MetricCard metric="active_7d" value={overview.data.class_snapshot.active_7d}
+          sentence={activeSentence(overview.data.class_snapshot.active_7d, overview.data.counts.active_learners)}
+          change={weekChange(overview.data.class_snapshot.active_7d, overview.data.class_snapshot.last_week?.active_7d)}>
+          {inactive ? <Link className="insight-practice" href={courseHref("/instructor/performance?inactive=1#instructor-roster")}>Show the {inactive} inactive →</Link> : null}
+        </MetricCard>
+        <MetricCard metric="activities_passed" value={overview.data.counts.class_progress_percent + "%"}
+          sentence={classPassedSentence(overview.data.counts.class_progress_percent, overview.data.class_snapshot.published_activities)} />
+        <MetricCard metric="submissions_7d" value={overview.data.class_snapshot.attempts_7d}
+          sentence={`Learners submitted ${overview.data.class_snapshot.attempts_7d} practice ${overview.data.class_snapshot.attempts_7d === 1 ? "attempt" : "attempts"} in the last 7 days.`} />
+      </div>
     ) : <StatSkeleton />}
     {overview.data ? <MeasureDefinitions names={["active_7d", "activities_passed", "stuck"]} /> : null}
 

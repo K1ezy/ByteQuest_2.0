@@ -1,4 +1,12 @@
 export const metrics = {
+  "enrolled": {
+    "label": "Enrolled",
+    "definition": "Learners with an active enrollment in this course"
+  },
+  "submissions_7d": {
+    "label": "Submissions, 7 days",
+    "definition": "Practice attempts on published activities in the last 7 days, counting every retry"
+  },
   "student_activities_passed": {
     "label": "Activities passed",
     "definition": "Activities you have passed at least once, out of all the activities your Workshops shared with you"
