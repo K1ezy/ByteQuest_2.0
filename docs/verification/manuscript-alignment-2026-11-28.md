@@ -9,7 +9,7 @@ Compared: `ByteQuest_Manuscript_final-BaganJudNiUnta.docx` (user's Downloads fol
 | Where | Manuscript says | System now | Suggested wording |
 | --- | --- | --- | --- |
 | Algorithm 2, ACCEPT_SUBMISSION [347] | "CHECK active role, activity visibility, language and availability." | A submission is accepted when the student can see the challenge (an active Workshop they belong to shares it, or it is a course-only activity of their course) and it is open. Nothing compares the student's language with the challenge's. | "CHECK active role, activity visibility through the learner's Workshop or course, and availability." |
-| Tools table [576] | "Scikit-Learn 1.9, Pandas 2.2" | The backend runs scikit-learn 1.9.1 and **pandas 3.1.0** (`requirements.txt` allows pandas ≥ 2.2). | "Scikit-Learn 1.9, Pandas 3.1". Or pin `pandas<3` in `backend/requirements.txt` if the thesis must report 2.2. |
+| Tools table [576] | "Scikit-Learn 1.9, Pandas 2.2" | The backend runs scikit-learn 1.9.1 and **pandas 3.1.0** (`requirements.txt` allows pandas ≥ 2.2). | "Scikit-Learn 1.9, Pandas 3.1". **Decided 28 November 2026: the manuscript changes to Pandas 3.1; the system stays on 3.1.** |
 
 ## Should add: system features the manuscript does not describe
 
