@@ -11,7 +11,7 @@ from app.api.quests_gamification import _ensure_student
 from app.core.database import get_db
 from app.core.quotas import MANILA
 from app.core.security import get_current_user
-from app.models.entities import ConceptReview, Profile, _utcnow
+from app.models.entities import ConceptReview, Profile, ProgrammingLang, _utcnow
 from app.services.gamification.badges import award_badges
 from app.services.gamification.mastery_map import first_visible_completions, visible_concept_activities
 from app.services.gamification.memory import (
@@ -27,6 +27,7 @@ router = APIRouter(prefix="/api/v1/reviews", tags=["Mastery Memory"])
 
 class StartReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    language: ProgrammingLang  # the same concept is reviewed separately per language (ADR 0001)
     concept: str = Field(min_length=1, max_length=100)
 
 
@@ -52,6 +53,7 @@ class ReviewResult(BaseModel):
 
 class ReviewResponse(BaseModel):
     id: uuid.UUID
+    language: ProgrammingLang
     concept: str
     stage: int
     questions: list[PublicQuizQuestion]
@@ -82,7 +84,6 @@ def _student_review_query(db: Session, student: Profile, review_id: uuid.UUID):
     return db.query(ConceptReview).filter(
         ConceptReview.id == review_id,
         ConceptReview.student_id == student.id,
-        ConceptReview.language == student.enrolled_language,
     )
 
 
@@ -95,7 +96,7 @@ def _public_review(review: ConceptReview, questions: list[StoredQuizQuestion]) -
     if review.status == "open" and len(questions) != review.total:
         raise HTTPException(409, "The quiz content changed. Return to the dashboard to start a new review.")
     return ReviewResponse(
-        id=review.id, concept=review.concept, stage=review.stage,
+        id=review.id, language=review.language, concept=review.concept, stage=review.stage,
         questions=[public_question(question, question_id=_question_id(index)) for index, question in enumerate(questions)],
         result=ReviewResult.model_validate(review.answers_json["result"]) if review.status != "open" else None,
     )
@@ -123,14 +124,14 @@ def start_review(
     student = _locked_student(db, current_user)
     now = _utcnow()
     _require_memory(mechanic_state(db, student, now))
-    concept = payload.concept
-    activities, quizzes = visible_concept_activities(db, student, now, concept=concept)
+    concept_key = (payload.language, payload.concept)
+    activities, quizzes = visible_concept_activities(db, student, now, key=concept_key)
     completions = first_visible_completions(db, student.id, [activity.id for activity in activities])
-    first_success = eligible_concepts(activities, quizzes, completions).get(concept)
+    first_success = eligible_concepts(activities, quizzes, completions).get(concept_key)
     if first_success is None:
         raise HTTPException(404, "This concept is not available for review yet.")
-    history = review_histories(db, student, concept=concept).get(concept) or ReviewHistory()
-    item = memory_schedule(concept, first_success, history, now)
+    history = review_histories(db, student, key=concept_key).get(concept_key) or ReviewHistory()
+    item = memory_schedule(concept_key, first_success, history, now)
     if history.open:
         questions = resolve_questions(history.open.question_refs, quizzes)
         if len(questions) == history.open.total:
@@ -146,7 +147,7 @@ def start_review(
     size = review_size(sum(len(questions) for questions in quizzes.values()))
     refs = select_question_refs(review_id, quizzes, history.latest.question_refs if history.latest else None, size)
     review = ConceptReview(
-        id=review_id, student_id=student.id, language=student.enrolled_language, concept=concept,
+        id=review_id, student_id=student.id, language=payload.language, concept=payload.concept,
         stage=item.stage, status="open", total=size, question_refs=refs,
     )
     db.add(review)
@@ -166,7 +167,7 @@ def get_review(
     questions = []
     if review.status == "open":
         _require_memory(mechanic_state(db, current_user))
-        _, quizzes = visible_concept_activities(db, current_user, concept=review.concept)
+        _, quizzes = visible_concept_activities(db, current_user, key=(review.language, review.concept))
         questions = resolve_questions(review.question_refs, quizzes)
     return _public_review(review, questions)
 
@@ -185,12 +186,13 @@ def submit_review(
 
     now = _utcnow()
     _require_memory(mechanic_state(db, student, now))
-    activities, quizzes = visible_concept_activities(db, student, now, concept=review.concept)
+    concept_key = (review.language, review.concept)
+    activities, quizzes = visible_concept_activities(db, student, now, key=concept_key)
     questions = resolve_questions(review.question_refs, quizzes)
     if len(questions) != review.total:
         raise HTTPException(409, "The quiz content changed. Return to the dashboard to start a new review.")
     completions = first_visible_completions(db, student.id, [activity.id for activity in activities])
-    first_success = eligible_concepts(activities, quizzes, completions).get(review.concept)
+    first_success = eligible_concepts(activities, quizzes, completions).get(concept_key)
     if first_success is None:
         raise HTTPException(409, "This concept is no longer available for review.")
     question_ids = [_question_id(index) for index in range(review.total)]
@@ -204,7 +206,7 @@ def submit_review(
         payload.answers[key].casefold() == question.correct_answer.casefold()
         for key, question in zip(question_ids, questions)
     )
-    history = review_histories(db, student, concept=review.concept)[review.concept]
+    history = review_histories(db, student, key=concept_key)[concept_key]
     passed = review_passed(correct, review.total)
     level_before = student.current_level
     xp = REVIEW_XP if passed and review.stage not in history.earned_stages else 0
@@ -214,7 +216,7 @@ def submit_review(
     review.xp_awarded = xp
     history.open = None
     history.record(review)
-    next_check = memory_schedule(review.concept, first_success, history, now)
+    next_check = memory_schedule(concept_key, first_success, history, now)
 
     # Flush the unique stage claim and profile XP before evaluating badges.
     # The result is completed in the same transaction, including on a retry.

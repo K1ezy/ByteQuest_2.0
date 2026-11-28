@@ -280,8 +280,8 @@ it("uses the activity URL for progress details and hides retired exams", async (
 it("opens Mastery inside Profile with links to filtered quests", async () => {
   mocks.searchParams = new URLSearchParams("tab=mastery");
   mocks.apiRequest.mockImplementation(async (path: string) => {
-    if (path === "/quests/mastery-map") return { track: "python", concepts: [{
-      concept: "Loops & arrays", total: 3, completed: 2, mastery_percent: 67, state: "in_progress",
+    if (path === "/quests/mastery-map") return { languages: ["python"], concepts: [{
+      language: "python", concept: "Loops & arrays", total: 3, completed: 2, mastery_percent: 67, state: "in_progress",
       average_stars: 2.5, weak_spot: "logic_error",
     }] };
     if (path === "/reviews") return { locked: false, concepts: [], due_count: 0 };
@@ -289,8 +289,8 @@ it("opens Mastery inside Profile with links to filtered quests", async () => {
   });
   render(<ProfilePage />);
 
-  const node = await screen.findByRole("link", { name: /Loops & arrays, 2 of 3 complete, 67% mastery/ });
-  expect(node.getAttribute("href")).toBe("/quests?concept=Loops%20%26%20arrays");
+  const node = await screen.findByRole("link", { name: /Loops & arrays in Python, 2 of 3 complete, 67% mastery/ });
+  expect(node.getAttribute("href")).toBe("/quests?concept=Loops%20%26%20arrays&language=python");
   expect(screen.getByRole("link", { name: "Mastery" }).getAttribute("aria-current")).toBe("page");
   expect(screen.getByRole("heading", { name: "Debugger's Codex" })).toBeTruthy();
   expect(mocks.getMyAnalytics).not.toHaveBeenCalled();

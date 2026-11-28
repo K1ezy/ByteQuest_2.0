@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select, union_all
 from sqlalchemy.orm import Session
 
-from app.models.entities import ActivityAttempt, ActivityKind, LearningActivity, Profile, ReviewState, SubmissionJob
+from app.models.entities import ActivityAttempt, ActivityKind, LearningActivity, ReviewState, SubmissionJob
 from app.services.attempt_visibility import student_visible_activity_clause
 from app.services.gamification.rollout import MechanicUnlock
 
@@ -98,7 +98,7 @@ def recoveries_for(
     """First practice pass per (student, challenge) and the failure categories tried before it.
 
     The single source of the recovery rule. With ``visible_to`` the challenges are limited to
-    what that student can see on their track; class insights pass course activity ids instead.
+    what that student can see in their Workshops; class insights pass course activity ids instead.
     """
     students = list(student_ids)
     if not students:
@@ -121,8 +121,8 @@ def recoveries_for(
         )
     )
     if visible_to is not None:
-        track = select(Profile.enrolled_language).where(Profile.id == visible_to).scalar_subquery()
-        practice = practice.filter(LearningActivity.language == track, student_visible_activity_clause(visible_to))
+        # Error categories are language-neutral, so the Codex counts every Workshop language (ADR 0001).
+        practice = practice.filter(student_visible_activity_clause(visible_to))
     if activity_ids is not None:
         practice = practice.filter(ActivityAttempt.activity_id.in_(list(activity_ids)))
     # Attempt number breaks timestamp ties, while recovery comparisons remain strict.

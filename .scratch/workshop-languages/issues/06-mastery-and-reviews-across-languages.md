@@ -4,9 +4,9 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #12
 
-- [ ] Responses include items from two languages, each labelled (API tests)
-- [ ] A review in Python doesn't satisfy the same concept in Java
-- [ ] Pages label items by language and offer a language filter (component tests)
+- [x] Responses include items from two languages, each labelled (API tests)
+- [x] A review in Python doesn't satisfy the same concept in Java
+- [x] Pages label items by language and offer a language filter (component tests)

@@ -1,5 +1,6 @@
 "use client";
 
+import { workshopLanguages } from "@/components/workshops/workshop-ui";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { Button, Notice, useApi } from "@/components/workspace/ui";
@@ -41,7 +42,7 @@ export function ReviewRunner({ id }: { id: string }) {
         <Link href="/profile?tab=mastery" className="button button-quiet small">← Back to Mastery</Link>
       </nav>
       <div className="page-heading">
-        <div><p className="eyebrow-label">Recall quest</p><h1>{review?.concept ?? "Memory check"}</h1></div>
+        <div><p className="eyebrow-label">Recall quest{review ? ` · ${workshopLanguages[review.language]}` : ""}</p><h1>{review?.concept ?? "Memory check"}</h1></div>
       </div>
       {loading ? <div className="ws-skeleton gamification-skeleton" role="status" aria-label="Loading recall quest" /> : null}
       {error ? (

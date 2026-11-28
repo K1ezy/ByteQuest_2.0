@@ -10,7 +10,7 @@ vi.mock("@/lib/api", async (importOriginal) => ({
 import { ReviewRunner } from "./review-runner";
 
 const review: RecallReview = {
-  id: "review", concept: "Loops", stage: 0, result: null,
+  id: "review", language: "java", concept: "Loops", stage: 0, result: null,
   questions: Array.from({ length: 4 }, (_, index) => ({
     id: `q${index + 1}`, prompt: `Prompt ${index + 1}`, options: [{ key: "A", text: "Option A" }, { key: "B", text: "Option B" }],
   })),

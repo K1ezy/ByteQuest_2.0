@@ -109,7 +109,7 @@ def progress_recap(db: Session, student: Profile, days: int, now: datetime | Non
     if state.memory.unlocked:
         happened["recalls"] = [
             _manila(submitted_at) for (submitted_at,) in db.query(ConceptReview.submitted_at).filter(
-                ConceptReview.student_id == student.id, ConceptReview.language == student.enrolled_language,
+                ConceptReview.student_id == student.id,
                 ConceptReview.status == "passed",
             )
         ]

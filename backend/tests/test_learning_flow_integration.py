@@ -1471,7 +1471,7 @@ def test_three_question_concept_gets_a_short_recall_with_a_two_thirds_bar(flow, 
     monkeypatch.setattr(reviews_api, "_utcnow", lambda: now)
     student = _token(users["student"])
 
-    start = client.post("/api/v1/reviews/start", json={"concept": "BQ Short Recall"}, headers=student)
+    start = client.post("/api/v1/reviews/start", json={"language": "python", "concept": "BQ Short Recall"}, headers=student)
     assert start.status_code == 200, start.text
     ids = [question["id"] for question in start.json()["questions"]]
     assert len(ids) == 3
@@ -1488,7 +1488,7 @@ def test_review_is_due_and_private_and_replays_the_same_result(flow, monkeypatch
     _recall_concept(new_session, users, now)
     monkeypatch.setattr(reviews_api, "_utcnow", lambda: now - timedelta(seconds=1))
     student = _token(users["student"])
-    request = {"concept": "BQ Recall"}
+    request = {"language": "python", "concept": "BQ Recall"}
     assert client.post("/api/v1/reviews/start", json=request, headers=student).status_code == 409
     monkeypatch.setattr(reviews_api, "_utcnow", lambda: now)
     overview = client.get("/api/v1/reviews", headers=student).json()
@@ -1533,9 +1533,12 @@ def test_review_is_due_and_private_and_replays_the_same_result(flow, monkeypatch
                 correct=original.correct, total=original.total, xp_awarded=REVIEW_XP, submitted_at=now,
             ))
             db.flush()
+        db.commit()
+    # A review keeps its own language (ADR 0001), so the student's stored language no longer hides it.
+    with new_session() as db:
         db.get(Profile, users["student"]).enrolled_language = ProgrammingLang.java
         db.commit()
-    assert client.get(path, headers=student).status_code == 404
+    assert client.get(path, headers=student).status_code == 200
 
 
 def test_review_steps_down_on_a_miss_then_refreshes_stage_three_without_extra_xp(flow, monkeypatch):
@@ -1546,7 +1549,7 @@ def test_review_steps_down_on_a_miss_then_refreshes_stage_three_without_extra_xp
     monkeypatch.setattr(reviews_api, "_utcnow", lambda: now)
 
     def grade(answer):
-        started = client.post("/api/v1/reviews/start", json={"concept": "BQ Recall"}, headers=student)
+        started = client.post("/api/v1/reviews/start", json={"language": "python", "concept": "BQ Recall"}, headers=student)
         assert started.status_code == 200, started.text
         review_id = started.json()["id"]
         answers = {question["id"]: answer for question in started.json()["questions"]}
@@ -1590,7 +1593,7 @@ def test_simultaneous_review_starts_and_submissions_share_one_xp_award(flow, mon
         quiz_ids = [_quiz(fixture_db, users["instructor"]) for _ in range(2)]
         quizzes = {key: parse_quiz_questions(fixture_db.get(LearningActivity, key).quiz_questions_json) for key in quiz_ids}
     concept = "Concurrent recall"
-    activities = [SimpleNamespace(id=key, topic_concept=concept) for key in quiz_ids]
+    activities = [SimpleNamespace(id=key, language=ProgrammingLang.python, topic_concept=concept) for key in quiz_ids]
     # Use independent PostgreSQL sessions for the actual row locks. Only the
     # rolled-back fixture's content inputs are supplied in memory to these sessions.
     monkeypatch.setattr(reviews_api, "visible_concept_activities", lambda *_args, **_kwargs: (activities, quizzes))
@@ -1622,7 +1625,7 @@ def test_simultaneous_review_starts_and_submissions_share_one_xp_award(flow, mon
 
     try:
         started, repeated = race(lambda db, student: reviews_api.start_review(
-            reviews_api.StartReviewRequest(concept=concept), student, db,
+            reviews_api.StartReviewRequest(language="python", concept=concept), student, db,
         ))
         assert started == repeated
         answers = reviews_api.SubmitReviewRequest(answers={question.id: "A" for question in started.questions})
@@ -1670,7 +1673,7 @@ def test_rollout_uses_manila_day_boundaries_and_keeps_locked_data_private(flow, 
     assert client.get(state_path, headers=student).json()["day"] == 1
     assert client.get("/api/v1/quests/codex", headers=student).json()["categories"] == []
     assert client.get("/api/v1/reviews", headers=student).json()["locked"] is True
-    assert client.post("/api/v1/reviews/start", headers=student, json={"concept": "Unavailable"}).status_code == 409
+    assert client.post("/api/v1/reviews/start", headers=student, json={"language": "python", "concept": "Unavailable"}).status_code == 409
 
     now = first + timedelta(days=UNLOCK_DEFAULTS[CODEX_UNLOCK_KEY])
     codex = client.get("/api/v1/quests/codex", headers=student).json()
@@ -1678,7 +1681,7 @@ def test_rollout_uses_manila_day_boundaries_and_keeps_locked_data_private(flow, 
     assert codex["locked"] is False and len(codex["categories"]) == 4
     now = first + timedelta(days=UNLOCK_DEFAULTS[MEMORY_UNLOCK_KEY])
     assert client.get(state_path, headers=student).json()["memory"]["unlocked"] is True
-    assert client.post("/api/v1/reviews/start", headers=student, json={"concept": "Unavailable"}).status_code == 404
+    assert client.post("/api/v1/reviews/start", headers=student, json={"language": "python", "concept": "Unavailable"}).status_code == 404
     with new_session() as db:
         db.get(Profile, users["student"]).account_status = "deactivated"
         db.commit()
@@ -3706,3 +3709,38 @@ def test_next_up_is_the_soonest_deadline_across_workshops_and_xp_counts_every_la
     assert next_up() == (str(python_quiz), {str(python_quiz)})
     # One XP total: the Python quiz's award (plus any badge bonus) adds to the Java XP.
     assert xp() >= after_java + 25
+
+
+def test_the_same_concept_is_mastered_and_reviewed_separately_in_each_language(flow, monkeypatch):
+    client, new_session, users = flow
+    instructor, student = _token(users["instructor"]), _token(users["student"])
+    now = datetime.now(timezone.utc)
+    with new_session() as db:
+        db.get(PlatformSetting, MEMORY_UNLOCK_KEY).value = 0
+        python_quiz, java_quiz = _quiz(db, users["instructor"]), _quiz(db, users["instructor"])
+        for activity_id in (python_quiz, java_quiz):
+            db.get(LearningActivity, activity_id).topic_concept = "BQ Loops"
+        db.get(LearningActivity, java_quiz).language = ProgrammingLang.java
+        db.commit()
+    for activity_id in (python_quiz, java_quiz):
+        _review_and_publish(new_session, activity_id, users["instructor"], share=False)
+    _add_member(new_session, _class_workshop(client, instructor, "python", python_quiz), users["student"])
+    _add_member(new_session, _class_workshop(client, instructor, "java", java_quiz), users["student"])
+    with new_session() as db:  # only the Python quiz is passed, long enough ago to be due for recall
+        db.add(ActivityAttempt(student_id=users["student"], activity_id=python_quiz, attempt_number=1,
+                               is_successful=True, created_at=now - timedelta(days=REVIEW_INTERVAL_DAYS[0])))
+        db.commit()
+    monkeypatch.setattr(reviews_api, "_utcnow", lambda: now)
+
+    mapped = client.get("/api/v1/quests/mastery-map", headers=student).json()
+    loops = {row["language"]: row for row in mapped["concepts"] if row["concept"] == "BQ Loops"}
+    assert mapped["languages"] == ["java", "python"] and "track" not in mapped
+    assert (loops["python"]["state"], loops["java"]["state"]) == ("mastered", "not_started")
+
+    overview = client.get("/api/v1/reviews", headers=student).json()
+    assert [(item["language"], item["concept"]) for item in overview["concepts"]] == [("python", "BQ Loops")]
+    # Passing Loops in Python does not make Loops in Java reviewable.
+    java = client.post("/api/v1/reviews/start", headers=student, json={"language": "java", "concept": "BQ Loops"})
+    assert java.status_code == 404
+    started = client.post("/api/v1/reviews/start", headers=student, json={"language": "python", "concept": "BQ Loops"})
+    assert started.status_code == 200, started.text

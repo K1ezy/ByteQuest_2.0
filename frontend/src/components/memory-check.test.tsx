@@ -14,14 +14,15 @@ afterEach(() => { cleanup(); mocks.api.mockReset(); mocks.push.mockReset(); });
 it("opens the API's earliest due recall from the memory check", async () => {
   mocks.api.mockResolvedValueOnce({
     due_count: 2,
-    concepts: [{ state: "fading", concept: "Loops" }, { state: "due", concept: "Arrays" }],
+    concepts: [{ state: "fading", language: "java", concept: "Loops" }, { state: "due", language: "python", concept: "Arrays" }],
   }).mockResolvedValueOnce({ id: "review" });
   render(<MemoryCheck userId="student" />);
   expect(await screen.findByText("2 concepts are due for a quick recall.")).toBeTruthy();
+  expect(screen.getByText(/· Java/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Start review" }));
   await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/reviews/review"));
   expect(mocks.api).toHaveBeenLastCalledWith("/reviews/start", {
-    method: "POST", body: JSON.stringify({ concept: "Loops" }),
+    method: "POST", body: JSON.stringify({ language: "java", concept: "Loops" }),
   });
 });
 

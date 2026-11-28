@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, load_only
 
-from app.models.entities import ConceptReview, LearningActivity, Profile
+from app.models.entities import ConceptReview, LearningActivity, Profile, ProgrammingLang
 from app.services.gamification.quiz_content import StoredQuizQuestion
 
 REVIEW_INTERVAL_DAYS = (2, 7, 21, 45)
@@ -21,9 +21,12 @@ REVIEW_XP = 10
 RETRY_INTERVAL_DAYS = 1
 MAX_STAGE = len(REVIEW_INTERVAL_DAYS) - 1
 MemoryState = Literal["fresh", "due", "fading", "long_term"]
+# A concept is learned per language: Loops in Python and Loops in Java are separate (ADR 0001).
+ConceptKey = tuple[ProgrammingLang, str]
 
 
 class MemoryConcept(BaseModel):
+    language: ProgrammingLang
     concept: str
     stage: int
     state: MemoryState
@@ -52,27 +55,27 @@ class ReviewHistory:
             self.earned_stages.add(review.stage)
 
 
-def review_histories(db: Session, student: Profile, *, concept: str | None = None) -> dict[str, ReviewHistory]:
-    query = db.query(ConceptReview).filter(
-        ConceptReview.student_id == student.id, ConceptReview.language == student.enrolled_language
-    )
-    if concept is None:
+def review_histories(
+    db: Session, student: Profile, *, key: ConceptKey | None = None,
+) -> dict[ConceptKey, ReviewHistory]:
+    query = db.query(ConceptReview).filter(ConceptReview.student_id == student.id)
+    if key is None:
         query = query.options(load_only(
-            ConceptReview.id, ConceptReview.concept, ConceptReview.stage, ConceptReview.status,
-            ConceptReview.xp_awarded, ConceptReview.submitted_at,
+            ConceptReview.id, ConceptReview.language, ConceptReview.concept, ConceptReview.stage,
+            ConceptReview.status, ConceptReview.xp_awarded, ConceptReview.submitted_at,
         ))
     else:
-        query = query.filter(ConceptReview.concept == concept).options(load_only(
-            ConceptReview.id, ConceptReview.concept, ConceptReview.stage, ConceptReview.status,
+        query = query.filter(ConceptReview.language == key[0], ConceptReview.concept == key[1]).options(load_only(
+            ConceptReview.id, ConceptReview.language, ConceptReview.concept, ConceptReview.stage, ConceptReview.status,
             ConceptReview.xp_awarded, ConceptReview.submitted_at, ConceptReview.question_refs, ConceptReview.total,
         ))
     histories = defaultdict(ReviewHistory)
     for review in query.order_by(ConceptReview.submitted_at.desc(), ConceptReview.id.desc()):
-        histories[review.concept].record(review)
+        histories[(review.language, review.concept)].record(review)
     return histories
 
 
-def memory_schedule(concept: str, first_success: datetime, history: ReviewHistory, now: datetime) -> MemoryConcept:
+def memory_schedule(key: ConceptKey, first_success: datetime, history: ReviewHistory, now: datetime) -> MemoryConcept:
     latest = history.latest
     stage = min(len(history.earned_stages), MAX_STAGE)
     anchor = max(first_success, latest.submitted_at) if latest else first_success
@@ -90,7 +93,7 @@ def memory_schedule(concept: str, first_success: datetime, history: ReviewHistor
     else:
         state = "fading"
     return MemoryConcept(
-        concept=concept, stage=stage, state=state, due_at=due_at,
+        language=key[0], concept=key[1], stage=stage, state=state, due_at=due_at,
         open_review_id=history.open.id if history.open else None,
     )
 
@@ -99,11 +102,11 @@ def eligible_concepts(
     activities: list[LearningActivity],
     quizzes: dict[uuid.UUID, list[StoredQuizQuestion]],
     completions: dict[uuid.UUID, datetime],
-) -> dict[str, datetime]:
+) -> dict[ConceptKey, datetime]:
     first_success = {}
     question_count = defaultdict(int)
     for activity in activities:
-        topic = activity.topic_concept
+        topic = (activity.language, activity.topic_concept)
         question_count[topic] += len(quizzes.get(activity.id, ()))
         if completed_at := completions.get(activity.id):
             first_success[topic] = min(first_success.get(topic, completed_at), completed_at)
@@ -131,10 +134,10 @@ def review_overview(
     eligible = eligible_concepts(activities, quizzes, completions)
     histories = review_histories(db, student) if eligible else {}
     concepts = [
-        memory_schedule(concept, completed_at, histories.get(concept) or ReviewHistory(), now)
-        for concept, completed_at in eligible.items()
+        memory_schedule(key, completed_at, histories.get(key) or ReviewHistory(), now)
+        for key, completed_at in eligible.items()
     ]
-    concepts.sort(key=lambda item: (item.due_at, item.concept))
+    concepts.sort(key=lambda item: (item.due_at, item.language.value, item.concept))
     return ReviewOverview(concepts=concepts, due_count=sum(review_is_due(item) for item in concepts))
 
 

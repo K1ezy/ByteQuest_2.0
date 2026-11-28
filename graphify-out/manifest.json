@@ -432,9 +432,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_learning_flow_integration.py": {
-    "mtime": 1795843566.3836162,
-    "seen": 1795843757.1511383,
-    "ast_hash": "88f1c9492d1363d19a37d1cadd0d494c",
+    "mtime": 1795856901.6373904,
+    "seen": 1795857429.1686757,
+    "ast_hash": "41919f8b56acc60b2b66e63e027372ec",
     "semantic_hash": ""
   },
   "backend/tests/test_ml_exam_features.py": {
@@ -744,9 +744,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/profile/page.test.tsx": {
-    "mtime": 1795841203.5851872,
-    "seen": 1795841535.3768218,
-    "ast_hash": "05aa0ab8f6aa008793431ab4f3d7d3c1",
+    "mtime": 1795857039.276821,
+    "seen": 1795857429.1957266,
+    "ast_hash": "cd2044912798510c744bf7009f5cae39",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/profile/page.tsx": {
@@ -1104,9 +1104,9 @@
     "semantic_hash": ""
   },
   "frontend/src/lib/types.ts": {
-    "mtime": 1795842760.02863,
-    "seen": 1795843040.6526322,
-    "ast_hash": "d402cc56a6d27efa45e287b8cf738d08",
+    "mtime": 1795857217.162497,
+    "seen": 1795857429.2458928,
+    "ast_hash": "33cf08e53da7377cbc64bda9cfb137fd",
     "semantic_hash": ""
   },
   "frontend/src/lib/useSafeWindowNavigation.ts": {
@@ -1776,9 +1776,9 @@
     "semantic_hash": ""
   },
   "backend/app/services/gamification/codex.py": {
-    "mtime": 1794731027.2148826,
-    "seen": 1795545913.9461555,
-    "ast_hash": "80dc39c14d0bed144c6f6640ea5013fb",
+    "mtime": 1795843930.625583,
+    "seen": 1795857429.1497655,
+    "ast_hash": "86ddfbf82e0db2df1bb30c506fa242a5",
     "semantic_hash": ""
   },
   "frontend/src/components/profile/debugger-codex.test.tsx": {
@@ -1812,9 +1812,9 @@
     "semantic_hash": ""
   },
   "backend/app/services/gamification/mastery_map.py": {
-    "mtime": 1795839033.8009548,
-    "seen": 1795839880.535706,
-    "ast_hash": "5ba96945c2668d8e217fdf8a88635bc3",
+    "mtime": 1795857205.1122432,
+    "seen": 1795857429.1507695,
+    "ast_hash": "947b8631ec81c81eb5f7f3a11e230aa4",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/quests/page.test.tsx": {
@@ -1824,21 +1824,21 @@
     "semantic_hash": ""
   },
   "frontend/src/components/mastery-map.tsx": {
-    "mtime": 1795506318.1341658,
-    "seen": 1795545913.947662,
-    "ast_hash": "b3b9cbd3fab18a360a028e9fc37956ed",
+    "mtime": 1795856940.045973,
+    "seen": 1795857429.2225966,
+    "ast_hash": "2754f560a16c334431c0c9f436e8ff63",
     "semantic_hash": ""
   },
   "backend/app/api/reviews.py": {
-    "mtime": 1794758942.9094627,
-    "seen": 1795545913.9461555,
-    "ast_hash": "69bc9586ccdb104e47644df9a1c16c3f",
+    "mtime": 1795857217.1609797,
+    "seen": 1795857429.1412277,
+    "ast_hash": "4890eed69b65a30d23bf571d041cc13a",
     "semantic_hash": ""
   },
   "backend/app/services/gamification/memory.py": {
-    "mtime": 1794729363.9786074,
-    "seen": 1795545913.9461555,
-    "ast_hash": "02f27ccbedf803161098731fe0f8686d",
+    "mtime": 1795843902.5621374,
+    "seen": 1795857429.1507695,
+    "ast_hash": "b855f7871a3e355664c6849a19c245e1",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/reviews/[id]/page.tsx": {
@@ -1848,27 +1848,27 @@
     "semantic_hash": ""
   },
   "frontend/src/components/memory-check.test.tsx": {
-    "mtime": 1794724845.4921322,
-    "seen": 1795545913.947662,
-    "ast_hash": "e4e03836f922ba9659df976a81f9631c",
+    "mtime": 1795857135.9190955,
+    "seen": 1795857429.2236001,
+    "ast_hash": "2102fe6c7b875d79e8dc800d7d78ead7",
     "semantic_hash": ""
   },
   "frontend/src/components/memory-check.tsx": {
-    "mtime": 1794725377.345125,
-    "seen": 1795545913.947662,
-    "ast_hash": "4a7b21e154acff2fca43b8db5ae48269",
+    "mtime": 1795856940.0469754,
+    "seen": 1795857429.2236001,
+    "ast_hash": "366680343290a592da57af4ab42bf9f5",
     "semantic_hash": ""
   },
   "frontend/src/components/review-runner.test.tsx": {
-    "mtime": 1794724449.6594799,
-    "seen": 1795545913.947662,
-    "ast_hash": "9d6f97415246a43ffc3a9eef0691136a",
+    "mtime": 1795857240.4988315,
+    "seen": 1795857429.2271268,
+    "ast_hash": "67fc6cce7684c4666422add5f8f622a3",
     "semantic_hash": ""
   },
   "frontend/src/components/review-runner.tsx": {
-    "mtime": 1795506404.7791855,
-    "seen": 1795545913.947662,
-    "ast_hash": "4a0e2efe38e3efcfc0763f06f702a51f",
+    "mtime": 1795857217.1810362,
+    "seen": 1795857429.2271268,
+    "ast_hash": "c021dc88b1582588c90041feeb40e499",
     "semantic_hash": ""
   },
   "backend/app/services/gamification/rollout.py": {
@@ -1926,9 +1926,9 @@
     "semantic_hash": ""
   },
   "backend/app/services/gamification/progress_recap.py": {
-    "mtime": 1794733086.1565292,
-    "seen": 1795545913.9461555,
-    "ast_hash": "c8e10ad8361474cc9a6222e736070c16",
+    "mtime": 1795843902.5621374,
+    "seen": 1795857429.1507695,
+    "ast_hash": "dbc502bbf12662dbf7308e059a16b651",
     "semantic_hash": ""
   },
   "frontend/src/components/progress-recap.test.tsx": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795843724.2978232,
-    "seen": 1795843757.2433915,
-    "ast_hash": "02becf76afbb670bbc9595abe07c4451",
+    "mtime": 1795857394.9245572,
+    "seen": 1795857429.2676046,
+    "ast_hash": "539714c3fc7063459cfa1ff59297d2c7",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -3120,9 +3120,9 @@
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/issues/05-class-leaderboard.md": {
-    "mtime": 1795838825.8863587,
-    "seen": 1795839880.6470935,
-    "ast_hash": "23c532228f8f985324376fa77c00c5bf",
+    "mtime": 1795843758.262348,
+    "seen": 1795857429.262097,
+    "ast_hash": "211296b37027943ba7b20fee3041d7e7",
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/issues/06-mastery-and-reviews-across-languages.md": {
@@ -3171,6 +3171,12 @@
     "mtime": 1795835541.8153498,
     "seen": 1795839880.6572318,
     "ast_hash": "d7e50dac17098ccade780750b97517a1",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/mastery-map.test.tsx": {
+    "mtime": 1795857135.9948676,
+    "seen": 1795857429.2225966,
+    "ast_hash": "09f1574d3a6e41c6fa7ff575894d8d0a",
     "semantic_hash": ""
   }
 }

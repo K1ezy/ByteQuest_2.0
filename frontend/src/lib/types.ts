@@ -145,6 +145,8 @@ export type CodexResponse = {
 };
 
 export type MasteryConcept = {
+  /** A concept is learned per language: Loops in Python and Loops in Java are separate (ADR 0001). */
+  language: ProgrammingLanguage;
   concept: string;
   total: number;
   completed: number;
@@ -155,10 +157,11 @@ export type MasteryConcept = {
   activity_ids: string[];
   memory?: MemoryConcept | null;
 };
-export type MasteryMapResponse = { track: ProgrammingLanguage | null; concepts: MasteryConcept[] };
+export type MasteryMapResponse = { languages: ProgrammingLanguage[]; concepts: MasteryConcept[] };
 
 export type MemoryState = "fresh" | "due" | "fading" | "long_term";
 export type MemoryConcept = {
+  language: ProgrammingLanguage;
   concept: string;
   stage: number;
   state: MemoryState;
@@ -189,6 +192,7 @@ export type ReviewResult = {
 };
 export type RecallReview = {
   id: string;
+  language: ProgrammingLanguage;
   concept: string;
   stage: number;
   questions: QuizQuestion[];

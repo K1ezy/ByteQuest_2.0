@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { MechanicIntro, MechanicTeaser } from "@/components/mechanic-rollout";
 import { Button, Notice, useApi } from "@/components/workspace/ui";
 import { apiRequest, getErrorMessage } from "@/lib/api";
-import type { RecallReview, ReviewOverview } from "@/lib/types";
+import { workshopLanguages } from "@/components/workshops/workshop-ui";
+import type { MemoryConcept, RecallReview, ReviewOverview } from "@/lib/types";
 
 export function MemoryCheck({ userId }: { userId: string }) {
   const router = useRouter();
@@ -17,12 +18,12 @@ export function MemoryCheck({ userId }: { userId: string }) {
   const next = data?.concepts.find(({ state, open_review_id }) => open_review_id || state === "due" || state === "fading");
   const showCheck = loading || Boolean(error || data?.locked || next);
 
-  async function start(concept: string) {
+  async function start({ language, concept }: MemoryConcept) {
     setStarting(true);
     setStartError("");
     try {
       const review = await apiRequest<RecallReview>("/reviews/start", {
-        method: "POST", body: JSON.stringify({ concept }),
+        method: "POST", body: JSON.stringify({ language, concept }),
       });
       router.push(`/reviews/${review.id}`);
     } catch (cause) {
@@ -44,9 +45,9 @@ export function MemoryCheck({ userId }: { userId: string }) {
         <>
           {data.due_count > 0
             ? <p>{data.due_count === 1 ? "1 concept is" : `${data.due_count} concepts are`} due for a quick recall.</p> : null}
-          <p className="ws-muted">Up next: <strong>{next.concept}</strong></p>
+          <p className="ws-muted">Up next: <strong>{next.concept}</strong> · {workshopLanguages[next.language]}</p>
           {startError ? <Notice tone="error">{startError}</Notice> : null}
-          <Button onClick={() => void start(next.concept)} disabled={starting} aria-busy={starting}>
+          <Button onClick={() => void start(next)} disabled={starting} aria-busy={starting}>
             {starting ? "Opening review…" : next.open_review_id ? "Resume review" : "Start review"}
           </Button>
         </>
