@@ -29,7 +29,7 @@ from app.models.entities import (
     Profile,
     ReviewState,
 )
-from app.services.attempt_visibility import learner_visible_attempt_clause
+from app.services.attempt_visibility import activity_has_opened, learner_visible_attempt_clause
 from app.services.course_access import (
     require_course_instructor,
     resolve_workspace_course,
@@ -255,7 +255,7 @@ def _snapshot(
                 for activity in activities
                 if activity.id not in successful[student.id]
                 and activity.activity_type == ActivityKind.challenge
-                and activity.language == student.enrolled_language
+                and activity_has_opened(activity)  # same rule next_course_activity applies
             ),
             None,
         )

@@ -23,6 +23,7 @@ from app.models.entities import (
     ActivityKind,
     WorkshopMember,
 )
+from app.services.attempt_visibility import student_visible_activity_clause
 from app.services.ml_predictor.consent import consented_student_ids
 from app.services.ml_predictor.predictor import (
     ModelArtifactError,
@@ -76,7 +77,6 @@ def capture_assignment_predictions(db: Session, target: LearningActivity, assign
     roster = db.query(Profile).join(CourseMember, CourseMember.profile_id == Profile.id).filter(
         CourseMember.course_id == target.course_id, CourseMember.member_role == "student",
         CourseMember.status == "active", Profile.account_status == "active", Profile.role == UserRole.student,
-        Profile.enrolled_language == target.language,
     )
     if workshop_id is not None:
         roster = roster.join(WorkshopMember, WorkshopMember.profile_id == Profile.id).filter(WorkshopMember.workshop_id == workshop_id)
@@ -88,6 +88,10 @@ def capture_assignment_predictions(db: Session, target: LearningActivity, assign
             consented = consented_student_ids(db, [student.id for student in students])
             for student in students:
                 if student.id not in consented or not has_required_prediction_history(db, student, target, assigned_at):
+                    continue
+                # Workshops, not a chosen language, decide who is assigned the challenge (ADR 0001).
+                if not db.query(LearningActivity.id).filter(
+                        LearningActivity.id == target.id, student_visible_activity_clause(student.id)).first():
                     continue
                 if db.query(ActivityAttempt.id).filter_by(student_id=student.id, activity_id=target.id, exam_attempt_id=None).first():
                     continue

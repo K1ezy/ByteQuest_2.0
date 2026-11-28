@@ -1,4 +1,4 @@
-"""Select a learner's next published programming challenge inside one course."""
+"""Select a learner's next published programming challenge inside one course, in any language (ADR 0001)."""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ def next_course_activity(db: Session, student: Profile, course_id: uuid.UUID) ->
         LearningActivity.course_id == course_id,
         # Models predict challenge outcomes; quizzes are history, never targets.
         LearningActivity.activity_type == ActivityKind.challenge,
-        LearningActivity.language == student.enrolled_language,
         LearningActivity.review_status == ReviewState.published,
         student_visible_activity_clause(student.id),
         activity_accepts_submissions_clause(),

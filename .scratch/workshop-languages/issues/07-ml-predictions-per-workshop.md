@@ -4,9 +4,9 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #13
 
-- [ ] Targets for a student in two Workshops are computed separately per Workshop (test)
-- [ ] Existing instructor ML tests pass
-- [ ] The synthetic ML scenario seed and its predictions still run
+- [x] Targets for a student in two Workshops are computed separately per Workshop (test)
+- [x] Existing instructor ML tests pass
+- [x] The synthetic ML scenario seed and its predictions still run

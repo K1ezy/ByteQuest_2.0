@@ -3744,3 +3744,26 @@ def test_the_same_concept_is_mastered_and_reviewed_separately_in_each_language(f
     assert java.status_code == 404
     started = client.post("/api/v1/reviews/start", headers=student, json={"language": "python", "concept": "BQ Loops"})
     assert started.status_code == 200, started.text
+
+
+def test_prediction_targets_come_from_each_class_whatever_the_students_language(flow):
+    from app.services.ml_predictor.targets import next_course_activity
+
+    _, new_session, users = flow
+    with new_session() as db:
+        targets = {}
+        for language in (ProgrammingLang.python, ProgrammingLang.java):
+            course = Course(code=uuid.uuid4().hex[:24], title=f"{language.value} class")
+            db.add(course)
+            db.flush()
+            db.add(CourseMember(course_id=course.id, profile_id=users["student"], member_role="student"))
+            challenge = db.get(LearningActivity, _challenge(db, users["instructor"]))
+            challenge.language, challenge.course_id = language, course.id
+            challenge.review_status, challenge.judge0_verified = ReviewState.published, True
+            targets[course.id] = challenge.id
+        student = db.get(Profile, users["student"])
+        student.enrolled_language = None  # students choose no language (ADR 0001)
+        db.commit()
+        # Each class predicts its own next challenge, in its own language.
+        for course_id, challenge_id in targets.items():
+            assert next_course_activity(db, student, course_id).id == challenge_id
