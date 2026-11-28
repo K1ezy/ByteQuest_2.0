@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #22
 
-- [ ] Component test: legend text and badge (i) content render and are keyboard reachable
+- [x] Component test: legend text and badge (i) content render and are keyboard reachable

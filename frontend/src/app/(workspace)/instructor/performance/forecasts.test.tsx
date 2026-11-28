@@ -371,3 +371,16 @@ it("shows the class first-try trend weekly by default, with a takeaway and a dai
   fireEvent.click(within(scale).getByRole("button", { name: "Daily" }));
   expect(mocks.useApi).toHaveBeenCalledWith(expect.stringContaining("scale=daily"), true);
 });
+
+it("explains the Outlook bands above the column and each learner's badge on demand", () => {
+  const low = { ...forecast, probability: 0.38, label: "May need support" };
+  useApiReturning(dashboard({ students: [student({ forecast: low })] }));
+  render(<Page />);
+  const legend = screen.getByText(/Advisory only: grades and progress follow the configured rules\./).closest("p")!;
+  expect(legend.textContent).toContain("Likely to pass · 60% or higher");
+  expect(legend.textContent).toContain("Continue practicing · 40–60%");
+  expect(legend.textContent).toContain("May need support · below 40%");
+  const info = screen.getByRole("button", { name: "What does Outlook for Ada mean?" });
+  fireEvent.click(info);
+  expect(screen.getByRole("note").textContent).toBe(`Estimated chance of passing ${low.target_activity}: 38%. Advisory only.`);
+});

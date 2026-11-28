@@ -1,5 +1,6 @@
 "use client";
 
+import { MetricInfo } from "@/components/insights/metric-card";
 import { classPassedSentence, notStartedSentence, weekChange } from "@/lib/takeaway";
 import { MetricCard } from "@/components/insights/metric-card";
 import Link from "next/link";
@@ -34,7 +35,7 @@ import { metrics } from "@/lib/insight-metrics";
 import { PageHeader, Section, RowSkeleton, InlineError, InlineEmpty } from "@/components/instructor/course-ui";
 import { MeasureDefinitions, UpdatedAt } from "@/components/insights/ui";
 import { type Dashboard, type Detail, PERIODS, READINESS_MESSAGES, isPeriod } from "../ml/types";
-import { LearnerForecast, Trend, compareNumbers, outlookOf, forecastTone } from "./forecasts";
+import { LearnerForecast, OutlookLegend, Trend, compareNumbers, outlookOf, forecastTone } from "./forecasts";
 
 /** One advisory note wherever forecasts appear, so instructors read them the same way. */
 const OUTLOOK_NOTE = "Outlook estimates each consented learner's chance that their first submission on their next coding challenge passes. It is advisory, for instructors only: students never see it, and it changes no grade or access.";
@@ -201,6 +202,7 @@ function FacultyPerformance() {
       {data.summary.as_of && <UpdatedAt at={data.summary.as_of}/>}</>}
       {!loading && data && !rows.length && <InlineEmpty>{hasFilters ? "No learners match these filters" : "No students enrolled yet"} {hasFilters && <Button onClick={clear}>Clear filters</Button>}</InlineEmpty>}
       <div id="instructor-roster">
+      {rows.length > 0 && available ? <OutlookLegend /> : null}
       {rows.length > 0 ? (
         <div className="ws-table-wrap">
           <table className="ws-table analysis-table roster-table">
@@ -235,7 +237,9 @@ function FacultyPerformance() {
                     {row.latest_score === null ? "—" : `${row.latest_score}%`}
                     <span className="ws-row-meta">{row.latest_at ? formatDateTime(row.latest_at) : "No attempts"}</span>
                   </td>
-                  {available && <td data-label="Outlook">{forecast ? <><StatusChip state="ready" label={forecast.label} tone={forecastTone(forecast.label)}/><span className="ws-row-meta">{Math.round(forecast.probability*100)}% estimated chance of passing</span></> : "Unavailable"}</td>}
+                  {available && <td data-label="Outlook">{forecast ? <><StatusChip state="ready" label={forecast.label} tone={forecastTone(forecast.label)}/>
+                    <MetricInfo label={"Outlook for " + (row.display_name || row.username || row.pseudonym)}
+                      text={`Estimated chance of passing ${forecast.target_activity}: ${Math.round(forecast.probability * 100)}%. Advisory only.`} /><span className="ws-row-meta">{Math.round(forecast.probability*100)}% estimated chance of passing</span></> : "Unavailable"}</td>}
                   <td data-label="Action">
                     <Button variant="outline" data-tooltip="View this learner's attempt history" onClick={() => void openStudent(row.student_id)}>
                       View history

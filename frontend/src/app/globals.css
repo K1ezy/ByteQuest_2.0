@@ -5213,3 +5213,4 @@ html[data-contrast="high"] { --chart-series: CanvasText; --chart-series-2: Canva
 .profile-activity-legend .level-4 span { background: var(--purple); }
 .mastery-node-caption { font-size: var(--text-sm); color: var(--muted); }
 .metric-card-change { margin: 0; font-size: var(--text-sm); color: var(--ink); font-weight: 600; }
+.outlook-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 8px 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: var(--text-sm); overflow-wrap: anywhere; }

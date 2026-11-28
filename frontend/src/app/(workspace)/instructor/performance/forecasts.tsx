@@ -49,6 +49,16 @@ export function Trend({ points, events, timezone, label, scale }: {points: Trend
       <tbody>{points.map(p => <tr key={p.date}><th scope="row">{p.date}</th>
         {scoreSeries.map(s => <td key={s.key}>{scoreText(s.key, p)}</td>)}</tr>)}</tbody></table>} />;
 }
+export function OutlookLegend() {
+  return <p className="outlook-legend">
+    <strong>Outlook</strong>{" "}
+    <span className="tag">Likely to pass · 60% or higher</span>{" "}
+    <span className="tag">Continue practicing · 40–60%</span>{" "}
+    <span className="tag">May need support · below 40%</span>{" "}
+    <span>Advisory only: grades and progress follow the configured rules.</span>
+  </p>;
+}
+
 export function outlookOf(row?: StudentRow): string {
   if (!row?.forecast) return "unavailable";
   if (row.forecast.label === "May need support") return "support";

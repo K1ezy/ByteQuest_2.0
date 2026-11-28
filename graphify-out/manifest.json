@@ -708,9 +708,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/instructor/performance/page.tsx": {
-    "mtime": 1795881057.3707354,
-    "seen": 1795881956.7355783,
-    "ast_hash": "fc703e31e43838c9946c0c93727f7de2",
+    "mtime": 1795882077.6870003,
+    "seen": 1795882245.691524,
+    "ast_hash": "40cc5b87ac8690adcc8df1eca1af3e2d",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/instructor/preview/page.tsx": {
@@ -2496,15 +2496,15 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/instructor/performance/forecasts.test.tsx": {
-    "mtime": 1795881127.1535442,
-    "seen": 1795881956.7355783,
-    "ast_hash": "a9fb76c30fe7b8d4ca083a61ae099e0f",
+    "mtime": 1795882110.2469223,
+    "seen": 1795882245.691524,
+    "ast_hash": "bcb44805bcb7637e140ee5d89fd1acc9",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/instructor/performance/forecasts.tsx": {
-    "mtime": 1795881057.3697453,
-    "seen": 1795881956.7355783,
-    "ast_hash": "5c1e4d73b6f363080cb542abd9b7242b",
+    "mtime": 1795882077.655425,
+    "seen": 1795882245.691524,
+    "ast_hash": "605a805e91c6a309c0f3e119ded57bcc",
     "semantic_hash": ""
   },
   "frontend/src/components/admin/course-health.test.tsx": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795881918.143664,
-    "seen": 1795881956.8345842,
-    "ast_hash": "4ccc7974870c0d95fea35ebb30b19db2",
+    "mtime": 1795882205.4056785,
+    "seen": 1795882245.7913525,
+    "ast_hash": "96fae6838a96acaf66809949d45a468f",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -3216,9 +3216,9 @@
     "semantic_hash": ""
   },
   ".scratch/insight-clarity/issues/06-instructor-class-trend.md": {
-    "mtime": 1795861953.1286707,
-    "seen": 1795862611.7694468,
-    "ast_hash": "51936715ecc3d56bc18a531b7925f466",
+    "mtime": 1795881958.1441092,
+    "seen": 1795882245.7824233,
+    "ast_hash": "2232a75a0f048834ac8c9d7b16982279",
     "semantic_hash": ""
   },
   ".scratch/insight-clarity/issues/07-outlook-legend.md": {
@@ -3258,9 +3258,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/insights/metric-card.tsx": {
-    "mtime": 1795865100.0066516,
-    "seen": 1795880178.3365796,
-    "ast_hash": "497a82835956fdfbbcee3a3996b1cf25",
+    "mtime": 1795882077.654288,
+    "seen": 1795882245.7153482,
+    "ast_hash": "2e4e0f6cbb914854d83ec86ff5c0a2b3",
     "semantic_hash": ""
   },
   "frontend/src/lib/takeaway.test.tsx": {

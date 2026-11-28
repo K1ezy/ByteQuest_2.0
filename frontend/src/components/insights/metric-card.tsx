@@ -4,13 +4,14 @@ import { useId, useState, type ReactNode } from "react";
 import { metrics, type MetricKey } from "@/lib/insight-metrics";
 
 /** An (i) button that explains a metric on hover, tap or keyboard, and closes on Escape or blur. */
-export function MetricInfo({ metric }: { metric: MetricKey }) {
+export function MetricInfo({ metric, label: ownLabel, text }: { metric?: MetricKey; label?: string; text?: string }) {
   // Hover shows it; a click or tap pins it, so the click that follows a hover never closes it again.
   const [hovered, setHovered] = useState(false);
   const [pinned, setPinned] = useState(false);
   const open = hovered || pinned;
   const id = useId();
-  const { label, definition } = metrics[metric];
+  const label = ownLabel ?? (metric ? metrics[metric].label : "");
+  const definition = text ?? (metric ? metrics[metric].definition : "");
   return <span className="metric-info">
     <button type="button" className="metric-info-button" aria-label={`What does ${label} mean?`}
       aria-expanded={open} aria-controls={id} onClick={() => setPinned(!pinned)}
