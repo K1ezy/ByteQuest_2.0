@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Annotated
+from typing import Literal, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func
@@ -100,11 +100,18 @@ def _forecast(prediction: MLPrediction | None, target: LearningActivity | None) 
     }
 
 
-def _trend(events: list[dict]) -> list[dict]:
+def _trend(events: list[dict], *, first_tries_only: bool = False, scale: str = "daily") -> list[dict]:
+    """Average scores per day, or per Monday-starting week, by activity type.
+
+    The class trend uses first tries only, so retries of one hard activity can't swing it (spec #15).
+    """
     daily: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for event in events:
-        if event["at"]:
-            daily[event["at"][:10]][event["kind"]].append(event["score_percentage"])
+        if not event["at"] or (first_tries_only and not event.get("first_try")):
+            continue
+        day = date.fromisoformat(event["at"][:10])
+        bucket = day - timedelta(days=day.weekday()) if scale == "weekly" else day
+        daily[bucket.isoformat()][event["kind"]].append(event["score_percentage"])
     return [
         {
             "date": day,
@@ -136,6 +143,7 @@ def _snapshot(
     period: str,
     *,
     only_student: uuid.UUID | None = None,
+    scale: str = "weekly",
 ) -> dict:
     """Build course rows, or one enrolled learner's full detail.
 
@@ -187,6 +195,7 @@ def _snapshot(
                 "score_percentage": round(float(attempt.score_percentage), 1),
                 "at": iso(attempt.created_at),
                 "activity_id": str(activity.id),
+                "first_try": attempt.attempt_number == 1,
             }
         )
         course_history[(attempt.student_id, activity.language)].add(activity.id)
@@ -378,7 +387,8 @@ def _snapshot(
                 else None
             ),
         },
-        "trend": _trend(all_events),
+        "trend": _trend(all_events, first_tries_only=True, scale=scale),
+        "trend_scale": scale,
         "thresholds": {
             "support_below": REMEDIAL_PROBABILITY,
             "likely_at_or_above": ADVANCE_PROBABILITY,
@@ -400,8 +410,9 @@ def dashboard(
     db: Annotated[Session, Depends(get_db)],
     course_id: uuid.UUID | None = None,
     period: str = "all",
+    scale: Literal["weekly", "daily"] = "weekly",
 ):
-    result = _snapshot(db, request, user, course_id, period)
+    result = _snapshot(db, request, user, course_id, period, scale=scale)
     result.pop("details")
     return result
 

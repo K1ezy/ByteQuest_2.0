@@ -19,6 +19,8 @@ export interface ChartProps {
   rows: ChartRow[]; series: Series[]; label: string; summary: string; xLabel: string;
   /** Marks each point; the legend, tooltip and table then say what the marker means. */
   pointState?: (row: ChartRow) => PointState | undefined;
+  /** What the point markers mean, when they aren't passed / not passed yet. */
+  pointLegend?: string;
   formatX?: (value: string | number) => string; domain: [number, number];
   numericX?: boolean; connectGaps?: boolean;
   references?: { label: string; x?: string | number; y?: number; diagonal?: boolean }[];
@@ -44,7 +46,7 @@ export function InsightLineChart(props: ChartProps & { table?: ReactNode; loadin
     {/* A figure, not role="img": the chart inside is focusable so the keyboard can move its tooltip. */}
     <figure className="insight-figure" aria-label={props.label + ". " + props.summary}><Plot {...props} /></figure>
     <p className="insight-legend">{props.series.map(s => <span key={s.key}><SeriesSwatch series={s}/> {s.label}</span>)}
-      {props.pointState && <span className="insight-legend-points">● passed · ○ not passed yet</span>}</p>
+      {props.pointState && <span className="insight-legend-points">{props.pointLegend ?? "● passed · ○ not passed yet"}</span>}</p>
     <details className="insights-table-toggle"><summary>View as table</summary><div className="ws-table-wrap">
       {props.table ?? <table className="ws-table analysis-table"><caption>{props.label}</caption>
         <thead><tr><th scope="col">{props.xLabel}</th>{props.series.map(s => <th scope="col" key={s.key}>{s.label}</th>)}

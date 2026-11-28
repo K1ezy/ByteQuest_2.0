@@ -105,6 +105,8 @@ export type Dashboard = {
     need_support: number | null;
   };
   trend: TrendPoint[];
+  /** Class trend bucket: Monday-starting weeks (default) or days, first tries only. */
+  trend_scale?: "weekly" | "daily";
   thresholds: Thresholds;
   students: StudentRow[];
 };

@@ -4,8 +4,8 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #21
 
-- [ ] API test: weekly and daily first-try averages per activity type with counts
-- [ ] Component test: the switch changes the scale; small-sample points are faded and their tooltip says so; the takeaway leads
+- [x] API test: weekly and daily first-try averages per activity type with counts
+- [x] Component test: the switch changes the scale; small-sample points are faded and their tooltip says so; the takeaway leads

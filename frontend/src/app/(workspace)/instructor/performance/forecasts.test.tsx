@@ -73,6 +73,7 @@ function dashboard(overrides: Record<string, unknown> = {}) {
   return {
     course: { id: "coursealpha", code: "CS1", title: "Python", status: "active" },
     period: "all",
+    trend_scale: "weekly",
     aggregation_timezone: "UTC",
     readiness: { status: "ready", forecasts_available: true, active_model_version: "v2.0.0" },
     summary: {
@@ -151,8 +152,8 @@ it("labels the average as activity history and states the aggregation timezone",
   useApiReturning(dashboard());
   render(<Page />);
   expect(screen.getAllByText("Latest activity average").length).toBeGreaterThan(0);
-  expect(screen.getByText(/daily averages in UTC/)).toBeTruthy();
-  expect(screen.getByText(/Repeated attempts count as separate recorded results/)).toBeTruthy();
+  expect(screen.getByText(/First-try averages per week in UTC/)).toBeTruthy();
+  expect(screen.getByText(/faded points have fewer than 5 results/)).toBeTruthy();
 });
 
 it("shows an empty enrollment state", () => {
@@ -325,7 +326,7 @@ it("keeps the period in the URL and requests it from the API", () => {
   useApiReturning(dashboard({ period: "30d" }));
   render(<Page />);
   expect(mocks.useApi).toHaveBeenCalledWith(
-    "/faculty/ml?course_id=coursealpha&period=30d", true,
+    "/faculty/ml?course_id=coursealpha&period=30d&scale=weekly", true,
   );
   fireEvent.change(screen.getByLabelText("Historical period"), { target: { value: "7d" } });
   expect(mocks.replace).toHaveBeenCalledWith(
@@ -352,4 +353,21 @@ it("leads each class number with a sentence, its total, the change since last we
   expect(mocks.replace).toHaveBeenCalledWith(expect.stringContaining("notStarted=1"), expect.anything());
   expect(screen.getByRole("region", { name: "Activities passed" }).firstElementChild?.textContent)
     .toBe("On average, learners have passed 50% of the 2 published activities.");
+});
+
+it("shows the class first-try trend weekly by default, with a takeaway and a daily switch", () => {
+  const week = (date: string, challenge: number, n: number) => ({ date, quiz: null, challenge, exam: null, quiz_count: 0, challenge_count: n, exam_count: 0 });
+  useApiReturning(dashboard({ trend_scale: "weekly", trend: [
+    week("2026-10-26", 50, 9), week("2026-11-02", 52, 8), week("2026-11-09", 90, 2),
+    week("2026-11-16", 61, 7), week("2026-11-23", 66, 9), week("2026-11-30", 70, 8)] }));
+  render(<Page />);
+  // The 2-result week is left out of the takeaway: 50, 52, 61, 66, 70 is a rise.
+  expect(screen.getByRole("heading", { name: /^First-try challenge scores are rising/ })).toBeTruthy();
+  // It is faded, and the legend and table say why in words.
+  expect(screen.getByText("Faded points: fewer than 5 results")).toBeTruthy();
+  expect(screen.getAllByRole("cell", { hidden: true }).filter(cell => cell.textContent === "fewer than 5 results")).toHaveLength(1);
+  const scale = screen.getByRole("group", { name: "Time scale" });
+  expect(within(scale).getByRole("button", { name: "Weekly" }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(within(scale).getByRole("button", { name: "Daily" }));
+  expect(mocks.useApi).toHaveBeenCalledWith(expect.stringContaining("scale=daily"), true);
 });

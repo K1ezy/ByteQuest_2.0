@@ -1211,6 +1211,22 @@ def test_trend_reports_how_many_results_each_daily_average_uses():
     ]
 
 
+def test_class_trend_averages_first_tries_by_week_or_day():
+    events = [
+        {"at": "2026-11-17T01:00:00Z", "kind": "challenge", "score_percentage": 40.0, "first_try": True},
+        {"at": "2026-11-17T02:00:00Z", "kind": "challenge", "score_percentage": 100.0, "first_try": False},  # a retry
+        {"at": "2026-11-19T10:00:00Z", "kind": "challenge", "score_percentage": 60.0, "first_try": True},
+        {"at": "2026-11-24T10:00:00Z", "kind": "quiz", "score_percentage": 100.0, "first_try": True},
+    ]
+    # Weeks start on Monday (Nov 16 and Nov 23, 2026); retries never enter the class trend.
+    assert faculty_ml_api._trend(events, first_tries_only=True, scale="weekly") == [
+        {"date": "2026-11-16", "quiz": None, "challenge": 50.0, "exam": None, "quiz_count": 0, "challenge_count": 2, "exam_count": 0},
+        {"date": "2026-11-23", "quiz": 100.0, "challenge": None, "exam": None, "quiz_count": 1, "challenge_count": 0, "exam_count": 0},
+    ]
+    daily = faculty_ml_api._trend(events, first_tries_only=True, scale="daily")
+    assert [(p["date"], p["challenge"], p["challenge_count"]) for p in daily][:2] == [("2026-11-17", 40.0, 1), ("2026-11-19", 60.0, 1)]
+
+
 def test_forecast_history_and_quality_never_cross_course_boundaries(workspace, monkeypatch):
     client, db_session, ids = workspace
     monkeypatch.setattr(settings, "RESEARCH_CONSENT_ACTIVE", True)

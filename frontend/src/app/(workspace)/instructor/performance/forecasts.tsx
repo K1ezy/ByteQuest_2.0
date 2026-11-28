@@ -1,4 +1,5 @@
 import { InsightLineChart } from "@/components/insights/line-chart";
+import { MIN_SAMPLE, trendTakeaway } from "@/lib/takeaway";
 import { formatDateTime } from "@/lib/workspace";
 import { isLegacy, type SavedForecast, type StudentRow, type TrendPoint, type Detail, FORECAST_REASONS, TEACHING_ACTIONS } from "../ml/types";
 
@@ -12,11 +13,31 @@ const counted: Record<string, string> = { quiz: "attempt", challenge: "attempt",
 export function scoreText(kind: string, point: Record<string, unknown>): string {
   const average = point[kind];
   const count = Number(point[kind + "_count"] ?? 0);
-  return average == null ? "no results" : `${average}% average · ${count} ${counted[kind]}${count === 1 ? "" : "s"}`;
+  return average == null ? "no results"
+    : `${average}% average · ${count} ${counted[kind]}${count === 1 ? "" : "s"}${count < MIN_SAMPLE ? " (too few to trust)" : ""}`;
 }
 
-export function Trend({ points, events, timezone, label }: {points: TrendPoint[]; events:number; timezone:string; label:string}) {
+/** A point built from fewer than MIN_SAMPLE results is faded, never hidden. */
+const resultCount = (p: Record<string, unknown>) => scoreSeries.reduce((n, s) => n + Number(p[s.key + "_count"] ?? 0), 0);
+
+export function Trend({ points, events, timezone, label, scale }: {points: TrendPoint[]; events:number; timezone:string; label:string;
+  /** Set for the class trend: weekly or daily first-try averages with a takeaway title. */ scale?: "weekly" | "daily"}) {
   if (!points.length) return <p>No graded results in this period.</p>;
+  if (scale) {
+    const trusted = points.filter(p => Number(p.challenge_count ?? 0) >= MIN_SAMPLE && p.challenge != null).map(p => Number(p.challenge));
+    const takeaway = trendTakeaway(trusted, "First-try challenge scores");
+    const bucket = scale === "weekly" ? "Week of " : "";
+    return <>
+      <h3 className="metric-card-sentence">{takeaway}</h3>
+      <InsightLineChart rows={points.map(p => ({ ...p, x: Date.parse(p.date) }))}
+        label={label} summary={takeaway + " First-try averages per " + (scale === "weekly" ? "week" : "day") + " in " + timezone + "; faded points have fewer than " + MIN_SAMPLE + " results."}
+        series={scoreSeries} numericX domain={[0,100]} xLabel={scale === "weekly" ? "Week starting" : "Date"}
+        formatX={x => new Date(Number(x)).toISOString().slice(0,10)}
+        pointState={row => resultCount(row) < MIN_SAMPLE ? "faded" : undefined}
+        pointLegend={"Faded points: fewer than " + MIN_SAMPLE + " results"}
+        tooltip={{ title: row => bucket + new Date(Number(row.x)).toISOString().slice(0,10), value: (s, row) => scoreText(s.key, row) }} />
+    </>;
+  }
   const day = (x: string | number) => new Date(Number(x)).toLocaleDateString("en-US",
     { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: timezone }) + ` (${timezone} day)`;
   return <InsightLineChart rows={points.map(p => ({ ...p, x: Date.parse(p.date) }))}

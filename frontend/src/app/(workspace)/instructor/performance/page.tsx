@@ -50,8 +50,9 @@ function FacultyPerformance() {
   const inactive = searchParams.get("inactive") === "1";
   const rawPeriod = searchParams.get("period");
   const period = isPeriod(rawPeriod) ? rawPeriod : "all";
-  const ml = useApi<Dashboard>(courseId ? "/faculty/ml?" + new URLSearchParams({ course_id: courseId, period }) : null, true);
-  const forecastData = ml.data?.period === period ? ml.data : null;
+  const [scale, setScale] = useState<"weekly" | "daily">("weekly");
+  const ml = useApi<Dashboard>(courseId ? "/faculty/ml?" + new URLSearchParams({ course_id: courseId, period, scale }) : null, true);
+  const forecastData = ml.data?.period === period && ml.data.trend_scale === scale ? ml.data : null;
   const available = forecastData?.readiness.forecasts_available;
   const [outlook, setOutlook] = useState("");
   const [sort, setSort] = useState("name");
@@ -140,7 +141,12 @@ function FacultyPerformance() {
           options={PERIODS.map(p => ({ ...p }))}/>
         <p className="ws-muted">The period changes reported history only. It never changes model inputs, the next activity, or whether a forecast is available.</p>
         {ml.error && <InlineError onRetry={ml.reload}/>}
-        {forecastData ? <Trend points={forecastData.trend} events={forecastData.summary.graded_events} timezone={forecastData.aggregation_timezone} label="Class score trend"/> : ml.loading && <RowSkeleton/>}
+        <div className="quest-filters" role="group" aria-label="Time scale">
+          {(["weekly", "daily"] as const).map(value => <button type="button" key={value} className="filter-button"
+            aria-pressed={scale === value} onClick={() => setScale(value)}>{value === "weekly" ? "Weekly" : "Daily"}</button>)}
+        </div>
+        {forecastData ? <Trend points={forecastData.trend} events={forecastData.summary.graded_events} timezone={forecastData.aggregation_timezone}
+          label="Class first-try average" scale={scale}/> : ml.loading && <RowSkeleton/>}
         {forecastData && !available && <p className="ws-muted">{READINESS_MESSAGES[forecastData.readiness.status] || READINESS_MESSAGES.unavailable} Once it&apos;s on, an Outlook column appears. {OUTLOOK_NOTE} <Link href={"/instructor/ml?course=" + courseId}>Model evaluation</Link></p>}
       </Section>
       <Toolbar label="Performance filters">
