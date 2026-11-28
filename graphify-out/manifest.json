@@ -36,9 +36,9 @@
     "semantic_hash": ""
   },
   "backend/app/api/profiles.py": {
-    "mtime": 1795862375.281703,
-    "seen": 1795862611.642375,
-    "ast_hash": "73e6df6396243bc7ef014e0fc486ef32",
+    "mtime": 1795862813.8444443,
+    "seen": 1795863312.6324773,
+    "ast_hash": "dbe3a7e7a1966a220fc1ea1459530a8c",
     "semantic_hash": ""
   },
   "backend/app/api/quests_gamification.py": {
@@ -198,9 +198,9 @@
     "semantic_hash": ""
   },
   "backend/app/services/gamification/progression.py": {
-    "mtime": 1795839724.6452506,
-    "seen": 1795839880.536237,
-    "ast_hash": "cf895596de6d600182a57ae880224a1f",
+    "mtime": 1795862813.8434455,
+    "seen": 1795863312.6458268,
+    "ast_hash": "e1f5c1ad21c38d67682def959c073508",
     "semantic_hash": ""
   },
   "backend/app/services/gamification/quiz_content.py": {
@@ -432,9 +432,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_learning_flow_integration.py": {
-    "mtime": 1795862356.0292978,
-    "seen": 1795862611.676907,
-    "ast_hash": "197833f04cf18db742c988729bdc7c9f",
+    "mtime": 1795862813.8434455,
+    "seen": 1795863312.6649992,
+    "ast_hash": "8d11f8160ca5ba1700a5aec1f257bf30",
     "semantic_hash": ""
   },
   "backend/tests/test_ml_exam_features.py": {
@@ -744,9 +744,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/profile/page.test.tsx": {
-    "mtime": 1795862481.7602324,
-    "seen": 1795862611.7050827,
-    "ast_hash": "820ffd43804d6811b606ad5ac2b358a9",
+    "mtime": 1795863026.396971,
+    "seen": 1795863312.6918242,
+    "ast_hash": "bd4237e99f42d841659ab67c293e8441",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/profile/page.tsx": {
@@ -1116,9 +1116,9 @@
     "semantic_hash": ""
   },
   "frontend/src/lib/workspace.ts": {
-    "mtime": 1795862481.7582207,
-    "seen": 1795862611.7602174,
-    "ast_hash": "ebf409053f79444f5d3c1db89666ab1c",
+    "mtime": 1795862905.501202,
+    "seen": 1795863312.7672687,
+    "ast_hash": "6f1c1ce1fd2f8c9334350c7568341f07",
     "semantic_hash": ""
   },
   "frontend/src/next-config.test.tsx": {
@@ -2544,9 +2544,9 @@
     "semantic_hash": ""
   },
   "frontend/src/lib/insight-metrics.ts": {
-    "mtime": 1795338632.858943,
-    "seen": 1795545913.947662,
-    "ast_hash": "75c2943ccfa732b6ebdfd415ebe2afea",
+    "mtime": 1795862876.6936128,
+    "seen": 1795863312.7597523,
+    "ast_hash": "f209ef3a35e7b82ead36c0c7d3be46bd",
     "semantic_hash": ""
   },
   "docs/prompts/chatgpt-insights-admin.md": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795862583.4137583,
-    "seen": 1795862611.775444,
-    "ast_hash": "95b9af32f1b07ad3b9d24dfae8ab51f4",
+    "mtime": 1795863283.9254458,
+    "seen": 1795863312.7971036,
+    "ast_hash": "620314b27a57a3be8177e52261f0f439",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -2952,9 +2952,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/profile/student-progress.tsx": {
-    "mtime": 1795862487.0833116,
-    "seen": 1795862611.7346265,
-    "ast_hash": "627a3f3fc14c9cd2877d6a838401ae3b",
+    "mtime": 1795863205.7874348,
+    "seen": 1795863312.73397,
+    "ast_hash": "7f6581ab49c794d489a345ed45186860",
     "semantic_hash": ""
   },
   "frontend/src/components/student-exam-list.tsx": {
@@ -3186,9 +3186,9 @@
     "semantic_hash": ""
   },
   ".scratch/insight-clarity/issues/01-topic-averages-per-language.md": {
-    "mtime": 1795861926.9764183,
-    "seen": 1795862611.7694468,
-    "ast_hash": "2605833a1a802e98362a578b86538d1f",
+    "mtime": 1795862612.7661166,
+    "seen": 1795863312.7805755,
+    "ast_hash": "e7cd39c3280527bea5c8e89195e7bfe4",
     "semantic_hash": ""
   },
   ".scratch/insight-clarity/issues/02-student-headline-cards.md": {
@@ -3249,6 +3249,30 @@
     "mtime": 1795859231.0994658,
     "seen": 1795862611.7900343,
     "ast_hash": "4a8f8870a0aa2a929dc66c80a3ca532c",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/insights/metric-card.test.tsx": {
+    "mtime": 1795863205.788434,
+    "seen": 1795863312.7170274,
+    "ast_hash": "027597d2b8e2d1a8daec2481455a6dd8",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/insights/metric-card.tsx": {
+    "mtime": 1795863205.7874348,
+    "seen": 1795863312.7170274,
+    "ast_hash": "27932c360a725618a7adece38ec125c0",
+    "semantic_hash": ""
+  },
+  "frontend/src/lib/takeaway.test.tsx": {
+    "mtime": 1795863205.7674346,
+    "seen": 1795863312.766273,
+    "ast_hash": "9beafc426cc3b22bbaaf70b107026e05",
+    "semantic_hash": ""
+  },
+  "frontend/src/lib/takeaway.ts": {
+    "mtime": 1795863205.766434,
+    "seen": 1795863312.766273,
+    "ast_hash": "e17ec4cbbe1f388625e04a8bac7b0f9a",
     "semantic_hash": ""
   }
 }

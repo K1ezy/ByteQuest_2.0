@@ -3784,3 +3784,20 @@ def test_topic_averages_are_kept_apart_per_language(flow):
     topics = client.get("/api/v1/profile/me/analytics", headers=_token(users["student"])).json()["student"]["by_topic"]
     loops = {row["language"]: row["average_score"] for row in topics if row["topic"] == "BQ Loops"}
     assert loops == {"python": 100, "java": 40}
+
+
+def test_progress_counts_activities_passed_and_first_try_passes(flow):
+    client, new_session, users = flow
+    with new_session() as db:
+        first, retried, open_one = (_quiz(db, users["instructor"]) for _ in range(3))
+        for activity_id in (first, retried, open_one):
+            _published_activity(db, activity_id)
+        db.add_all([
+            ActivityAttempt(student_id=users["student"], activity_id=first, attempt_number=1, is_successful=True, score_percentage=100),
+            ActivityAttempt(student_id=users["student"], activity_id=retried, attempt_number=1, is_successful=False, score_percentage=33),
+            ActivityAttempt(student_id=users["student"], activity_id=retried, attempt_number=2, is_successful=True, score_percentage=100),
+        ])
+        db.commit()
+    progress = client.get("/api/v1/profile/me/analytics", headers=_token(users["student"])).json()["student"]
+    # Activities passed counts each activity once, however many tries it took; a first-try pass needs attempt 1.
+    assert (progress["quests_completed"], progress["first_try_passes"]) == (2, 1)

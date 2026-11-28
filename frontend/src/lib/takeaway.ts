@@ -1,0 +1,44 @@
+/**
+ * Takeaways: the one sentence above a chart or metric that says what it shows (GLOSSARY.md).
+ * Fixed rules, never AI-written, so the same data always gives the same sentence.
+ */
+
+/** Fewer values than this and we say so instead of describing a trend. */
+export const MIN_SAMPLE = 5;
+/** A change smaller than this many percentage points reads as steady. */
+const CHANGE_POINTS = 5;
+
+export function notEnoughData(count: number): string {
+  return `Not enough data yet — based on ${count}.`;
+}
+
+/** Compare the latest half of the values with the earliest half: rising, falling or steady. */
+export function trendTakeaway(values: number[], subject: string): string {
+  if (values.length < MIN_SAMPLE) return notEnoughData(values.length);
+  const half = Math.floor(values.length / 2);
+  const mean = (xs: number[]) => xs.reduce((sum, x) => sum + x, 0) / xs.length;
+  const change = Math.round(mean(values.slice(-half)) - mean(values.slice(0, half)));
+  if (change >= CHANGE_POINTS) return `${subject} are rising (up about ${change} points).`;
+  if (change <= -CHANGE_POINTS) return `${subject} are falling (down about ${-change} points).`;
+  return `${subject} are steady.`;
+}
+
+/** "1 activity", "3 activities". */
+export function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/** Headline for Activities passed: value, total and what is left. */
+export function activitiesPassedSentence(passed: number, total: number, language?: string): string {
+  if (total === 0) return "Your workshops haven't shared an activity yet.";
+  const where = language ? ` in ${language}` : "";
+  const left = total - passed;
+  return `You passed ${passed} of ${plural(total, "activity", "activities")}${where}.`
+    + (left > 0 ? ` ${left} more ${left === 1 ? "is" : "are"} open.` : " Every activity is passed.");
+}
+
+/** Headline for First-try passes, out of the activities already passed. */
+export function firstTrySentence(firstTry: number, passed: number): string {
+  if (passed === 0) return "Pass an activity to see how many go through on the first try.";
+  return `${firstTry} of the ${plural(passed, "activity", "activities")} you passed went through on the first try.`;
+}

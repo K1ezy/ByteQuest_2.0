@@ -1082,6 +1082,8 @@ export interface StudentAnalytics {
   xp_to_next_level: number;
   level_progress_percent: number;
   quests_completed?: number;
+  /** Of quests_completed, how many passed on the first attempt. */
+  first_try_passes?: number;
   quests_total?: number;
   active_days_30: number;
   current_streak: number;

@@ -1,5 +1,7 @@
 "use client";
 
+import { activitiesPassedSentence, firstTrySentence } from "@/lib/takeaway";
+import { MetricCard } from "@/components/insights/metric-card";
 import { languageList, workshopLanguages } from "@/components/workshops/workshop-ui";
 import Link from "next/link";
 import { useState } from "react";
@@ -28,14 +30,12 @@ function ProgressOverview({ a, languages }: { a: StudentAnalytics; languages: Pr
   const completion = done !== undefined && total ? Math.round(done / total * 100) : 0;
   return (
     <div className="profile-progress-overview">
-      {done !== undefined && total !== undefined ? <section className="ws-panel" aria-labelledby="quest-completion-title">
-        <h2 id="quest-completion-title">Quest completion</h2>
-        <p><strong>{done} of {total} complete</strong>{language ? ` · ${language}` : ""} · {completion}%</p>
-        <progress aria-labelledby="quest-completion-title" value={completion} max={100} />
-        {language && total === 0 ? <p className="ws-muted">No workshop activities have been shared yet.</p> : null}
+      {done !== undefined && total !== undefined ? <MetricCard metric="student_activities_passed" value={`${completion}%`}
+        sentence={language ? activitiesPassedSentence(done, total, language) : "Join a workshop to see its activities."}>
+        <progress aria-label={`${done} of ${total} activities passed`} value={completion} max={100} />
         {language ? <Link className="insight-practice" href="/quests">Open Quest Map</Link>
           : <Link className="insight-practice" href="/workshops">Join a workshop to see its activities</Link>}
-      </section> : null}
+      </MetricCard> : null}
       <section className="ws-panel" aria-labelledby="xp-progress-title">
         <h2 id="xp-progress-title">Level {a.current_level}</h2>
         <p><strong>{a.xp_points.toLocaleString()} XP</strong> · {a.xp_to_next_level} XP to Level {a.current_level + 1}</p>
@@ -125,7 +125,9 @@ export function StudentProgress({ a, profile }: { a: StudentAnalytics; profile: 
       <ProgressOverview a={a} languages={profile.workshop_languages} />
       <ProgressRecap userId={profile.id} />
       <div className="ws-stat-grid">
-        <StatCard label={metrics.attempts_passed.label} value={a.total_attempts ? Math.round(a.pass_rate) + "%" : "—"} hint={a.successful_attempts + " of " + a.total_attempts + " passed"} />
+        <MetricCard metric="first_try_passes"
+          value={a.quests_completed ? `${Math.round(100 * (a.first_try_passes ?? 0) / a.quests_completed)}%` : "—"}
+          sentence={firstTrySentence(a.first_try_passes ?? 0, a.quests_completed ?? 0)} />
         <StatCard label={metrics.average_attempt_score.label} value={a.total_attempts ? Math.round(a.average_score) + "%" : "—"} hint={a.total_attempts ? "Best " + Math.round(a.best_score) + "%" : "No attempts yet"} />
         <StatCard label="Practice time" value={duration(a.total_time_seconds)} hint="Time recorded for visible attempts" />
       </div>

@@ -4,10 +4,10 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #17
 
-- [ ] Unit tests for the takeaway rules: rising, falling, steady, the 5-point boundary, fewer than 5 values, counting takeaways
-- [ ] Component test: the metric card shows the sentence first, the total, and an (i) definition that opens on click and keyboard and closes on Escape
-- [ ] API test: analytics returns activities passed, activities open and first-try passes over activities the student can open
-- [ ] Profile → Progress no longer shows "Attempts passed"
+- [x] Unit tests for the takeaway rules: rising, falling, steady, the 5-point boundary, fewer than 5 values, counting takeaways
+- [x] Component test: the metric card shows the sentence first, the total, and an (i) definition that opens on click and keyboard and closes on Escape
+- [x] API test: analytics returns activities passed, activities open and first-try passes over activities the student can open
+- [x] Profile → Progress no longer shows "Attempts passed"

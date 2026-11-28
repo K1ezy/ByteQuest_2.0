@@ -1,4 +1,12 @@
 export const metrics = {
+  "student_activities_passed": {
+    "label": "Activities passed",
+    "definition": "Activities you have passed at least once, out of all the activities your Workshops shared with you"
+  },
+  "first_try_passes": {
+    "label": "Passed on the first try",
+    "definition": "Activities whose first attempt reached that activity's pass mark"
+  },
   "activities_passed": {
     "label": "Activities passed",
     "definition": "Average share of published activities each learner has passed"

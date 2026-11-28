@@ -18,7 +18,7 @@ from app.services.profile_attention import (
     instructor_course_ids,
     personal_audit,
 )
-from app.services.gamification.progression import XP_PER_LEVEL, quest_completion
+from app.services.gamification.progression import XP_PER_LEVEL, first_try_passes, quest_completion
 from app.services.gamification.sequencer import determine_recommendation
 from app.services.gamification.solve_quality import help_pattern
 from app.services.attempt_visibility import published_student_clause
@@ -379,6 +379,7 @@ class StudentAnalytics(BaseModel):
     level_progress_percent: float
     quests_completed: int
     quests_total: int
+    first_try_passes: int = 0  # of quests_completed, how many passed on the first attempt
     active_days_30: int
     current_streak: int
     longest_streak: int
@@ -596,6 +597,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
         level_progress_percent=round(100.0 * xp_into_level / XP_PER_LEVEL, 1),
         quests_completed=completed,
         quests_total=total,
+        first_try_passes=first_try_passes(db, user),
         active_days_30=sum(1 for item in activity_days if item.attempts > 0),
         current_streak=current_streak,
         longest_streak=longest_streak,

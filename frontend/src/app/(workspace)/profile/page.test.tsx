@@ -266,7 +266,9 @@ it("uses the activity URL for progress details and hides retired exams", async (
   render(<ProfilePage />);
 
   expect((await screen.findByRole("link", { name: "Progress" })).getAttribute("aria-current")).toBe("page");
-  expect((await screen.findByRole("progressbar", { name: "Quest completion" })).getAttribute("value")).toBe("56");
+  expect((await screen.findByRole("progressbar", { name: "5 of 9 activities passed" })).getAttribute("value")).toBe("56");
+  expect(screen.getByText(/You passed 5 of 9 activities.* 4 more are open\./)).toBeTruthy();
+  expect(screen.queryByText("Attempts passed")).toBeNull();
   expect(screen.getByRole("progressbar", { name: "XP toward level 3" }).getAttribute("value")).toBe("125");
   expect(screen.getByRole("heading", { name: "Recent attempts" })).toBeTruthy();
   expect(await screen.findByRole("heading", { name: "How you solve challenges" })).toBeTruthy();
