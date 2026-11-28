@@ -298,6 +298,7 @@ class TypeBreakdown(BaseModel):
 
 
 class TopicBreakdown(BaseModel):
+    language: ProgrammingLang  # a topic is tracked per Workshop language (ADR 0001)
     topic: str
     attempts: int
     average_score: float
@@ -476,20 +477,21 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
 
     topic_rows = (
         db.query(
+            LearningActivity.language,
             LearningActivity.topic_concept,
             func.count(ActivityAttempt.id),
             func.coalesce(func.avg(ActivityAttempt.score_percentage), 0.0),
         )
         .join(LearningActivity, LearningActivity.id == ActivityAttempt.activity_id)
         .filter(visible_attempt_filter)
-        .group_by(LearningActivity.topic_concept)
+        .group_by(LearningActivity.language, LearningActivity.topic_concept)
         .order_by(func.count(ActivityAttempt.id).desc())
         .limit(8)
         .all()
     )
     by_topic = [
-        TopicBreakdown(topic=topic or "General", attempts=int(count), average_score=round(float(avg), 1))
-        for topic, count, avg in topic_rows
+        TopicBreakdown(language=language, topic=topic or "General", attempts=int(count), average_score=round(float(avg), 1))
+        for language, topic, count, avg in topic_rows
     ]
 
     attempt_rows = (

@@ -4,8 +4,8 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #16
 
-- [ ] API test: a student with a Python and a Java attempt on the same topic gets two topic rows, each with its language
-- [ ] Progress shows the language beside each topic (component test)
+- [x] API test: a student with a Python and a Java attempt on the same topic gets two topic rows, each with its language
+- [x] Progress shows the language beside each topic (component test)

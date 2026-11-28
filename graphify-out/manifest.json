@@ -36,9 +36,9 @@
     "semantic_hash": ""
   },
   "backend/app/api/profiles.py": {
-    "mtime": 1795842635.4297383,
-    "seen": 1795843040.5403807,
-    "ast_hash": "4f46c1452c6fbd5c46ee7b66e9af151a",
+    "mtime": 1795862375.281703,
+    "seen": 1795862611.642375,
+    "ast_hash": "73e6df6396243bc7ef014e0fc486ef32",
     "semantic_hash": ""
   },
   "backend/app/api/quests_gamification.py": {
@@ -432,9 +432,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_learning_flow_integration.py": {
-    "mtime": 1795858026.5602727,
-    "seen": 1795858326.1301708,
-    "ast_hash": "c047b7181082eb7ebcd56363f7ff0296",
+    "mtime": 1795862356.0292978,
+    "seen": 1795862611.676907,
+    "ast_hash": "197833f04cf18db742c988729bdc7c9f",
     "semantic_hash": ""
   },
   "backend/tests/test_ml_exam_features.py": {
@@ -744,9 +744,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/profile/page.test.tsx": {
-    "mtime": 1795857039.276821,
-    "seen": 1795857429.1957266,
-    "ast_hash": "cd2044912798510c744bf7009f5cae39",
+    "mtime": 1795862481.7602324,
+    "seen": 1795862611.7050827,
+    "ast_hash": "820ffd43804d6811b606ad5ac2b358a9",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/profile/page.tsx": {
@@ -1116,9 +1116,9 @@
     "semantic_hash": ""
   },
   "frontend/src/lib/workspace.ts": {
-    "mtime": 1795841203.608631,
-    "seen": 1795841535.4221697,
-    "ast_hash": "ce0d1c037a1d32c5408565f91cb039ce",
+    "mtime": 1795862481.7582207,
+    "seen": 1795862611.7602174,
+    "ast_hash": "ebf409053f79444f5d3c1db89666ab1c",
     "semantic_hash": ""
   },
   "frontend/src/next-config.test.tsx": {
@@ -2532,9 +2532,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/insights/ui.tsx": {
-    "mtime": 1795192842.664742,
-    "seen": 1795545913.947662,
-    "ast_hash": "509ba2abdeecebf171974c4b0d16931c",
+    "mtime": 1795862481.7582207,
+    "seen": 1795862611.7236755,
+    "ast_hash": "bd27161b432dccd4c3c5f78a3c2d1d09",
     "semantic_hash": ""
   },
   "frontend/src/components/insights/widgets.test.tsx": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795858298.1436608,
-    "seen": 1795858326.2300735,
-    "ast_hash": "b2f0d7f62a15520ac6d88ff49dc5410c",
+    "mtime": 1795862583.4137583,
+    "seen": 1795862611.775444,
+    "ast_hash": "95b9af32f1b07ad3b9d24dfae8ab51f4",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -2952,9 +2952,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/profile/student-progress.tsx": {
-    "mtime": 1795841203.5976145,
-    "seen": 1795841535.403104,
-    "ast_hash": "13fa8e906217e841d255bef46e94d368",
+    "mtime": 1795862487.0833116,
+    "seen": 1795862611.7346265,
+    "ast_hash": "627a3f3fc14c9cd2877d6a838401ae3b",
     "semantic_hash": ""
   },
   "frontend/src/components/student-exam-list.tsx": {
@@ -3042,9 +3042,9 @@
     "semantic_hash": ""
   },
   "GLOSSARY.md": {
-    "mtime": 1795842878.4624007,
-    "seen": 1795843040.6677706,
-    "ast_hash": "441bc4c7698d822919af3e06ad9c61d7",
+    "mtime": 1795860511.3934662,
+    "seen": 1795862611.7732606,
+    "ast_hash": "2bbf5fd31c708e376cea5bfd8d680e14",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/instructor/predictions/page.tsx": {
@@ -3138,9 +3138,9 @@
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/issues/08-finish-verify-codex-checkpoint.md": {
-    "mtime": 1795838848.8526533,
-    "seen": 1795839880.6470935,
-    "ast_hash": "2f34d1078439f02e8d12ee9e580745bf",
+    "mtime": 1795858327.1682518,
+    "seen": 1795862611.7714417,
+    "ast_hash": "094f1d61a0bc08d2d37ae1f6e005c390",
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/spec.md": {
@@ -3183,6 +3183,72 @@
     "mtime": 1795858283.8793063,
     "seen": 1795858326.2370741,
     "ast_hash": "7005cc015f41f5c6fdc381f641fc74b4",
+    "semantic_hash": ""
+  },
+  ".scratch/insight-clarity/issues/01-topic-averages-per-language.md": {
+    "mtime": 1795861926.9764183,
+    "seen": 1795862611.7694468,
+    "ast_hash": "2605833a1a802e98362a578b86538d1f",
+    "semantic_hash": ""
+  },
+  ".scratch/insight-clarity/issues/02-student-headline-cards.md": {
+    "mtime": 1795861931.3231473,
+    "seen": 1795862611.7694468,
+    "ast_hash": "4ddcdeb90dc08f25a62eea0b64713b39",
+    "semantic_hash": ""
+  },
+  ".scratch/insight-clarity/issues/03-student-first-try-chart.md": {
+    "mtime": 1795861937.4495714,
+    "seen": 1795862611.7694468,
+    "ast_hash": "bd01b351a4a0de043ced8d041e415d60",
+    "semantic_hash": ""
+  },
+  ".scratch/insight-clarity/issues/04-student-clarity-fixes.md": {
+    "mtime": 1795861942.3654642,
+    "seen": 1795862611.7694468,
+    "ast_hash": "62a8ecb5cda4eb199fd7c91b1d7ddcce",
+    "semantic_hash": ""
+  },
+  ".scratch/insight-clarity/issues/05-instructor-summary-cards.md": {
+    "mtime": 1795861947.4137604,
+    "seen": 1795862611.7694468,
+    "ast_hash": "56943ed70ce5bfbecc3f041109b236ad",
+    "semantic_hash": ""
+  },
+  ".scratch/insight-clarity/issues/06-instructor-class-trend.md": {
+    "mtime": 1795861953.1286707,
+    "seen": 1795862611.7694468,
+    "ast_hash": "51936715ecc3d56bc18a531b7925f466",
+    "semantic_hash": ""
+  },
+  ".scratch/insight-clarity/issues/07-outlook-legend.md": {
+    "mtime": 1795861958.148719,
+    "seen": 1795862611.7694468,
+    "ast_hash": "0541c7f0057bc182e4329e5aaaeb92c8",
+    "semantic_hash": ""
+  },
+  ".scratch/insight-clarity/issues/08-activity-and-gamification-insights.md": {
+    "mtime": 1795861964.7784622,
+    "seen": 1795862611.7694468,
+    "ast_hash": "f3301f5bec11bbd5025abf22a5d063fc",
+    "semantic_hash": ""
+  },
+  ".scratch/insight-clarity/issues/09-layout-tests-and-wrap-up.md": {
+    "mtime": 1795861977.4905443,
+    "seen": 1795862611.7694468,
+    "ast_hash": "bb14300e974a8b388032128e261534aa",
+    "semantic_hash": ""
+  },
+  ".scratch/insight-clarity/spec.md": {
+    "mtime": 1795861443.889548,
+    "seen": 1795862611.7694468,
+    "ast_hash": "76fbcfb215a0d01b9cda64b7992a8470",
+    "semantic_hash": ""
+  },
+  "docs/verification/manuscript-alignment-2026-11-28.md": {
+    "mtime": 1795859231.0994658,
+    "seen": 1795862611.7900343,
+    "ast_hash": "4a8f8870a0aa2a929dc66c80a3ca532c",
     "semantic_hash": ""
   }
 }

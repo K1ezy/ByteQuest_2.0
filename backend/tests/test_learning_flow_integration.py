@@ -3768,3 +3768,19 @@ def test_prediction_targets_come_from_each_class_whatever_the_students_language(
         # Each class predicts its own next challenge, in its own language.
         for course_id, challenge_id in targets.items():
             assert next_course_activity(db, student, course_id).id == challenge_id
+
+
+def test_topic_averages_are_kept_apart_per_language(flow):
+    client, new_session, users = flow
+    with new_session() as db:
+        python_quiz, java_quiz = _quiz(db, users["instructor"]), _quiz(db, users["instructor"])
+        for activity_id, language, score in ((python_quiz, ProgrammingLang.python, 100), (java_quiz, ProgrammingLang.java, 40)):
+            activity = db.get(LearningActivity, activity_id)
+            activity.language, activity.topic_concept = language, "BQ Loops"
+            activity.review_status = ReviewState.published
+            db.add(ActivityAttempt(student_id=users["student"], activity_id=activity_id, attempt_number=1,
+                                   is_successful=score == 100, score_percentage=score))
+        db.commit()
+    topics = client.get("/api/v1/profile/me/analytics", headers=_token(users["student"])).json()["student"]["by_topic"]
+    loops = {row["language"]: row["average_score"] for row in topics if row["topic"] == "BQ Loops"}
+    assert loops == {"python": 100, "java": 40}

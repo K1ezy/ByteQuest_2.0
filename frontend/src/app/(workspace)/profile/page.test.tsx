@@ -431,12 +431,13 @@ it("links recorded topics, shows badge descriptions and provides a score trend t
       activity_type: "quiz", score_percentage: 85, is_successful: true, created_at: "2026-11-24T04:00:00Z",
       can_open_quest: index !== 5, is_exam: index === 5,
     })),
-    by_topic:["Strings & files","General"].map(topic => ({topic,attempts:1,average_score:40})),
+    by_topic:["Strings & files","General"].map(topic => ({language:"java",topic,attempts:1,average_score:40})),
     score_trend:[{title:"Intro",created_at:"2026-11-05T00:00:00Z",score_percentage:40},{title:"Practice",created_at:"2026-11-06T00:00:00Z",score_percentage:85}],
     badges:[{code:"first",name:"First steps",description:"Finish one quest.",xp_bonus:5,icon_url:"/badge.svg"}],
   }});
   render(<ProfilePage/>);
-  expect((await screen.findByRole("link",{name:"Practise Strings & files"})).getAttribute("href")).toBe("/quests?concept=Strings%20%26%20files");
+  expect((await screen.findByRole("link",{name:"Practise Strings & files"})).getAttribute("href")).toBe("/quests?concept=Strings%20%26%20files&language=java");
+  expect(screen.getByText("Strings & files · Java")).toBeTruthy();
   expect(screen.queryByRole("link",{name:"Practise General"})).toBeNull();
   expect(screen.getByText("Finish one quest.")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Practice quiz 0" }).getAttribute("href")).toBe("/quiz/quiz-0");

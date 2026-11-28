@@ -35,6 +35,7 @@ export function MeterList({ rows, label }: { rows: { id?: string; name: string; 
 }
 
 
-export function PracticeLink({ topic }: { topic: string }) {
-  return <Link className="insight-practice" href={"/quests?concept=" + encodeURIComponent(topic)}>Practise {topic}</Link>;
+export function PracticeLink({ topic, language }: { topic: string; language?: string }) {
+  const href = "/quests?concept=" + encodeURIComponent(topic) + (language ? "&language=" + language : "");
+  return <Link className="insight-practice" href={href}>Practise {topic}</Link>;
 }

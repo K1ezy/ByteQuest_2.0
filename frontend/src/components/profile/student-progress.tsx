@@ -1,6 +1,6 @@
 "use client";
 
-import { languageList } from "@/components/workshops/workshop-ui";
+import { languageList, workshopLanguages } from "@/components/workshops/workshop-ui";
 import Link from "next/link";
 import { useState } from "react";
 import { InsightLineChart } from "@/components/insights/line-chart";
@@ -203,8 +203,9 @@ export function StudentProgress({ a, profile }: { a: StudentAnalytics; profile: 
               </div>
             </div>
             <MeterList label="Average score by topic" rows={a.by_topic.map(t => ({
-              name: t.topic, value: t.average_score, total: 100, figure: Math.round(t.average_score) + "%",
-              detail: <>{t.attempts} tries {t.topic !== "General" && <PracticeLink topic={t.topic} />}</>,
+              id: `${t.language}:${t.topic}`, name: `${t.topic} · ${workshopLanguages[t.language]}`, value: t.average_score, total: 100,
+              figure: Math.round(t.average_score) + "%",
+              detail: <>{t.attempts} tries {t.topic !== "General" && <PracticeLink topic={t.topic} language={t.language} />}</>,
             }))} />
           </section>
         </div>

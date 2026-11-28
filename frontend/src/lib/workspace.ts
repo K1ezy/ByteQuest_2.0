@@ -1014,6 +1014,8 @@ export interface TypeBreakdown {
 }
 
 export interface TopicBreakdown {
+  /** Topics are tracked per Workshop language: Loops in Python and Loops in Java are separate rows. */
+  language: ProgrammingLanguage;
   topic: string;
   attempts: number;
   average_score: number;
