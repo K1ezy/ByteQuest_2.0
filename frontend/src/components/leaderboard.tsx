@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { useApi } from "@/components/workspace/ui";
+import { workshopLanguages } from "@/components/workshops/workshop-ui";
+import type { ProgrammingLanguage } from "@/lib/types";
 
 interface LeaderboardEntry {
   rank: number;
@@ -19,14 +21,21 @@ interface LeaderboardStanding {
   current_level: number;
 }
 
+interface LeaderboardWorkshop {
+  id: string;
+  name: string;
+  language: ProgrammingLanguage;
+}
+
+/** One Workshop's Class leaderboard (ADR 0001), plus the caller's Workshops to switch between. */
 export interface LeaderboardData {
-  track: string | null;
+  workshop: LeaderboardWorkshop | null;
+  workshops: LeaderboardWorkshop[];
   entries: LeaderboardEntry[];
   you: LeaderboardStanding | null;
   total_ranked: number;
 }
 
-const TRACK_LABEL: Record<string, string> = { python: "Python", cpp: "C++", java: "Java" };
 const MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 export const CHOOSE_HANDLE_HREF = "/profile?edit=handle";
 
@@ -85,8 +94,10 @@ function Standing({ you, total }: { you: LeaderboardStanding; total: number }) {
 }
 
 export function Leaderboard() {
-  const { data, loading, error, reload } = useApi<LeaderboardData>("/quests/leaderboard");
-  const track = data?.track ? TRACK_LABEL[data.track] ?? data.track.toUpperCase() : null;
+  const [workshopId, setWorkshopId] = useState<string | null>(null);
+  const { data, loading, error, reload } = useApi<LeaderboardData>(
+    workshopId ? `/quests/leaderboard?workshop_id=${encodeURIComponent(workshopId)}` : "/quests/leaderboard", true);
+  const workshop = data?.workshop ?? null;
   const entries = data?.entries ?? [];
   const you = data?.you ?? null;
   const youOutsideTop = Boolean(you?.rank) && !entries.some((entry) => entry.is_me);
@@ -96,8 +107,18 @@ export function Leaderboard() {
       <div className="leaderboard-header-row">
         <div>
           <h2>Leaderboard</h2>
-          {track && <p className="leaderboard-desc">Top learners on the {track} track. Earn XP by passing code challenges and concept quizzes.</p>}
+          {workshop && <p className="leaderboard-desc">Top learners in {workshop.name}. Earn XP by passing code challenges and concept quizzes.</p>}
         </div>
+        {data && data.workshops.length > 1 ? (
+          <label className="ws-field leaderboard-workshop-picker">
+            <span>Workshop</span>
+            <select value={workshop?.id ?? ""} onChange={(event) => setWorkshopId(event.target.value)}>
+              {data.workshops.map((item) => (
+                <option key={item.id} value={item.id}>{item.name} · {workshopLanguages[item.language]}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </div>
 
       {loading && !data ? (
@@ -110,9 +131,9 @@ export function Leaderboard() {
           <p className="notice warning" role="alert">{error}</p>
           <button type="button" className="button button-outline small" onClick={reload}>Try again</button>
         </section>
-      ) : data && !track ? (
+      ) : data && !workshop ? (
         <section className="panel leaderboard-panel">
-          <p>Join a workshop to choose your language and see its leaderboard.</p>
+          <p>Join a workshop to see your class leaderboard.</p>
           <Link className="button button-outline small" href="/workshops">Go to Workshops</Link>
         </section>
       ) : data ? (
@@ -123,7 +144,7 @@ export function Leaderboard() {
             <h3 id="top-learners-title" className="sr-only">Top learners</h3>
             {entries.length === 0 ? (
               <div className="leaderboard-empty">
-                <p>No one on the {track} track has earned XP yet.</p>
+                <p>No one in {workshop?.name} has earned XP yet.</p>
                 <Link className="button button-primary small" href="/quests">Start a quest to claim the top spot</Link>
               </div>
             ) : (

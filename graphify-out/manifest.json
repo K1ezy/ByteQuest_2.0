@@ -42,9 +42,9 @@
     "semantic_hash": ""
   },
   "backend/app/api/quests_gamification.py": {
-    "mtime": 1795842902.6030557,
-    "seen": 1795843040.5403807,
-    "ast_hash": "b4fcb79dc56663e01b5c09e8b0ed73f5",
+    "mtime": 1795843352.5366213,
+    "seen": 1795843757.120008,
+    "ast_hash": "0b6d2ce87491e5c6a6fe93a1ce015b12",
     "semantic_hash": ""
   },
   "backend/app/api/rag_instructor.py": {
@@ -432,9 +432,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_learning_flow_integration.py": {
-    "mtime": 1795842742.223044,
-    "seen": 1795843040.5734217,
-    "ast_hash": "caabcebe3956054b578c1e3190e0f271",
+    "mtime": 1795843566.3836162,
+    "seen": 1795843757.1511383,
+    "ast_hash": "88f1c9492d1363d19a37d1cadd0d494c",
     "semantic_hash": ""
   },
   "backend/tests/test_ml_exam_features.py": {
@@ -912,9 +912,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/leaderboard.tsx": {
-    "mtime": 1795512257.7838376,
-    "seen": 1795545913.947662,
-    "ast_hash": "426577faf1572939e6e9a1bb3e8b4edf",
+    "mtime": 1795843696.9810033,
+    "seen": 1795843757.2012928,
+    "ast_hash": "7819d815b031e12443de53d8669df362",
     "semantic_hash": ""
   },
   "frontend/src/components/legacy-quest-redirect.tsx": {
@@ -1734,9 +1734,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/leaderboard.test.tsx": {
-    "mtime": 1794715812.7760725,
-    "seen": 1795545913.947662,
-    "ast_hash": "de9e7047377f469191b135392fada518",
+    "mtime": 1795843696.9820116,
+    "seen": 1795843757.2012928,
+    "ast_hash": "baaf36598ad15884e8077d319cbed518",
     "semantic_hash": ""
   },
   "frontend/src/components/profile/profile-header.tsx": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795843010.3337073,
-    "seen": 1795843040.6707761,
-    "ast_hash": "74357f68fe9fbe64a2b2d91ab64a4743",
+    "mtime": 1795843724.2978232,
+    "seen": 1795843757.2433915,
+    "ast_hash": "02becf76afbb670bbc9595abe07c4451",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -3114,9 +3114,9 @@
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/issues/04-one-xp-and-next-up.md": {
-    "mtime": 1795838821.7430618,
-    "seen": 1795839880.6470935,
-    "ast_hash": "19387de3f89f3271bb74f3bbc46d4606",
+    "mtime": 1795843041.6563718,
+    "seen": 1795843757.2383974,
+    "ast_hash": "81809673909225e821f5d5d2684e8b7f",
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/issues/05-class-leaderboard.md": {
@@ -3150,9 +3150,9 @@
     "semantic_hash": ""
   },
   "docs/adr/0001-workshops-decide-what-students-see.md": {
-    "mtime": 1795838527.8428729,
-    "seen": 1795839880.6572318,
-    "ast_hash": "35901acf675e06b77b43a51db7fe566a",
+    "mtime": 1795843086.894149,
+    "seen": 1795843757.248919,
+    "ast_hash": "953169eb54d04f2d15e4b97a89f3370f",
     "semantic_hash": ""
   },
   "docs/agents/domain.md": {

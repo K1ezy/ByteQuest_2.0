@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -24,6 +24,8 @@ from app.models.entities import (
     StudentBadge,
     TestCase,
     UserRole,
+    Workshop,
+    WorkshopMember,
 )
 from app.services.activity_preview import ActivityPreview, practice_preview
 from app.services.gamification.badges import award_badges
@@ -145,14 +147,23 @@ class LeaderboardEntry(BaseModel):
 class LeaderboardStanding(BaseModel):
     """The caller's own position, present even when outside the top entries."""
 
-    rank: Optional[int]  # None until the caller has earned XP on this track
+    rank: Optional[int]  # None until the caller has earned XP
     handle: Optional[str]
     xp_points: int
     current_level: int
 
 
+class LeaderboardWorkshop(BaseModel):
+    id: uuid.UUID
+    name: str
+    language: ProgrammingLang
+
+
 class LeaderboardResponse(BaseModel):
-    track: ProgrammingLang | None
+    """One Workshop's Class leaderboard (ADR 0001), plus the caller's Workshops to switch between."""
+
+    workshop: Optional[LeaderboardWorkshop]  # None when the caller has no active Workshop
+    workshops: list[LeaderboardWorkshop]
     entries: list[LeaderboardEntry]
     you: Optional[LeaderboardStanding]  # None for staff, who are never ranked
     total_ranked: int
@@ -513,20 +524,30 @@ LEADERBOARD_SIZE = 10
 
 @router.get("/leaderboard", response_model=LeaderboardResponse)
 def get_gamification_leaderboard(
+    workshop_id: uuid.UUID | None = None,
     current_user: Profile = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaderboardResponse:
-    """Rank active students on the caller's track who have earned XP.
+    """Rank one Workshop's active students who have earned XP: its Class leaderboard.
 
-    Ties share a rank (1, 2, 2, 4). The caller's own standing is always returned,
-    so a learner outside the top entries still sees where they are.
+    Students see the Workshops they belong to; staff see the Workshops they own. Without
+    a workshop_id the first of those (by name) is shown. Ties share a rank (1, 2, 2, 4),
+    and the caller's own standing is always returned.
     """
-    track = current_user.enrolled_language
-    if track is None:
-        return LeaderboardResponse(track=None, entries=[], you=None, total_ranked=0)
+    member_of = db.query(WorkshopMember.workshop_id).filter(WorkshopMember.profile_id == current_user.id)
+    own = (db.query(Workshop).filter(Workshop.archived_at.is_(None),
+                                     or_(Workshop.id.in_(member_of), Workshop.created_by == current_user.id))
+           .order_by(Workshop.name.asc(), Workshop.id.asc()).all())
+    workshops = [LeaderboardWorkshop(id=w.id, name=w.name, language=w.language) for w in own]
+    if workshop_id is not None and workshop_id not in {w.id for w in own}:
+        raise HTTPException(404, "Workshop not found.")
+    selected = next((w for w in workshops if w.id == workshop_id), workshops[0] if workshops else None)
+    if selected is None:
+        return LeaderboardResponse(workshop=None, workshops=[], entries=[], you=None, total_ranked=0)
+    classmates = db.query(WorkshopMember.profile_id).filter(WorkshopMember.workshop_id == selected.id)
     ranked = (
         Profile.role == UserRole.student,
-        Profile.enrolled_language == track,
+        Profile.id.in_(classmates),
         Profile.account_status == "active",
         Profile.xp_points > 0,
     )
@@ -544,7 +565,7 @@ def get_gamification_leaderboard(
         return profile.username if profile.handle_chosen else None
 
     you = None
-    if current_user.role == UserRole.student:
+    if current_user.role == UserRole.student:  # staff are never ranked
         own_rank = None
         if current_user.xp_points > 0 and current_user.account_status == "active":
             own_rank = next((int(r) for student, r in top if student.id == current_user.id), None)
@@ -560,7 +581,8 @@ def get_gamification_leaderboard(
         )
 
     return LeaderboardResponse(
-        track=track,
+        workshop=selected,
+        workshops=workshops,
         entries=[
             LeaderboardEntry(
                 rank=int(r),

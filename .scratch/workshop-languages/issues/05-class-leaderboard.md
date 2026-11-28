@@ -4,9 +4,9 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #11
 
-- [ ] A Workshop's leaderboard lists only its members, ranked by XP (API test)
-- [ ] A student is refused another Workshop's leaderboard
-- [ ] The profile Rankings tab switches between the student's Workshops (component test)
+- [x] A Workshop's leaderboard lists only its members, ranked by XP (API test)
+- [x] A student is refused another Workshop's leaderboard
+- [x] The profile Rankings tab switches between the student's Workshops (component test)

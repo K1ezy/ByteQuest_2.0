@@ -1057,7 +1057,7 @@ def _share_with_fixture_class(db: Session, activity: LearningActivity) -> None:
         db.add(WorkshopActivity(workshop_id=workshop.id, activity_id=activity.id))
 
 
-def _ranked_student(db: Session, xp: int, *, handle: str | None = None,
+def _ranked_student(db: Session, xp: int, *, handle: str | None = None, workshop_id: uuid.UUID | None = None,
                     language: ProgrammingLang = ProgrammingLang.python, status: str = "active") -> Profile:
     user_id = uuid.uuid4()
     db.execute(
@@ -1071,6 +1071,9 @@ def _ranked_student(db: Session, xp: int, *, handle: str | None = None,
         profile.username = handle
     db.add(profile)
     db.flush()
+    if workshop_id:
+        db.add(WorkshopMember(workshop_id=workshop_id, profile_id=user_id))
+        db.flush()
     return profile
 
 
@@ -1081,15 +1084,18 @@ def _letters(prefix: str) -> str:
 def test_leaderboard_ranks_ties_hides_private_ids_and_reports_own_standing(flow):
     client, new_session, users = flow
     student_id = users["student"]
-    base = 1_500_000_000  # far above any local data, so these rows own the top ranks
     alpha, gamma = _letters("alpha"), _letters("gamma")
+    instructor = _token(users["instructor"])
+    workshop_id = uuid.UUID(_class_workshop(client, instructor, "python"))
+    other_class = uuid.UUID(_class_workshop(client, instructor, "java"))
     with new_session() as db:
-        leader = _ranked_student(db, base + 30, handle=alpha)
-        unnamed = _ranked_student(db, base + 20)
-        tied = _ranked_student(db, base + 20, handle=gamma)
-        fourth = _ranked_student(db, base + 10, handle=_letters("delta"))
-        _ranked_student(db, base + 50, handle=_letters("gone"), status="deactivated")
-        _ranked_student(db, base + 60, handle=_letters("java"), language=ProgrammingLang.java)
+        db.add(WorkshopMember(workshop_id=workshop_id, profile_id=student_id))
+        leader = _ranked_student(db, 30, handle=alpha, workshop_id=workshop_id)
+        unnamed = _ranked_student(db, 20, workshop_id=workshop_id)
+        tied = _ranked_student(db, 20, handle=gamma, workshop_id=workshop_id)
+        fourth = _ranked_student(db, 10, handle=_letters("delta"), workshop_id=workshop_id)
+        _ranked_student(db, 50, handle=_letters("gone"), status="deactivated", workshop_id=workshop_id)
+        _ranked_student(db, 60, handle=_letters("elsewhere"), workshop_id=other_class)  # another class
         unnamed_username, unnamed_pseudonym = unnamed.username, unnamed.pseudonym_id
         # Equal XP is ordered by id, so the two rank-2 rows come back in id order.
         tie_order = [None if row_id == unnamed.id else gamma for row_id in sorted([unnamed.id, tied.id])]
@@ -1099,40 +1105,60 @@ def test_leaderboard_ranks_ties_hides_private_ids_and_reports_own_standing(flow)
     response = client.get("/api/v1/quests/leaderboard", headers=_token(student_id))
     assert response.status_code == 200, response.text
     body = response.json()
-    top = body["entries"][:4]
-    assert [row["rank"] for row in top] == [1, 2, 2, 4]
-    assert [row["handle"] for row in top] == expected_handles
+    assert [row["rank"] for row in body["entries"]] == [1, 2, 2, 4]
+    assert [row["handle"] for row in body["entries"]] == expected_handles
     assert all(set(row) == {"rank", "handle", "xp_points", "current_level", "is_me"} for row in body["entries"])
     assert unnamed_username not in response.text and unnamed_pseudonym not in response.text
     assert all(row["xp_points"] > 0 and not row["is_me"] for row in body["entries"])
     assert body["you"] == {"rank": None, "handle": None, "xp_points": 0, "current_level": 1}
-    assert body["track"] == "python"
+    assert body["workshop"]["id"] == str(workshop_id) and body["total_ranked"] == 4
+    assert "track" not in body
 
     with new_session() as db:
-        for _ in range(7):  # 4 + 7 learners ahead push the caller out of the top 10
-            _ranked_student(db, base + 1)
-        me = db.get(Profile, student_id)
-        me.xp_points = 5
+        for _ in range(7):  # 4 + 7 classmates ahead push the caller out of the top 10
+            _ranked_student(db, 15, workshop_id=workshop_id)
+        db.get(Profile, student_id).xp_points = 5
         db.commit()
-    with new_session() as db:
-        ahead = db.query(func.count(Profile.id)).filter(
-            Profile.role == UserRole.student, Profile.enrolled_language == ProgrammingLang.python,
-            Profile.account_status == "active", Profile.xp_points > 5).scalar()
-        ranked = db.query(func.count(Profile.id)).filter(
-            Profile.role == UserRole.student, Profile.enrolled_language == ProgrammingLang.python,
-            Profile.account_status == "active", Profile.xp_points > 0).scalar()
     body = client.get("/api/v1/quests/leaderboard", headers=_token(student_id)).json()
     assert len(body["entries"]) == 10 and not any(row["is_me"] for row in body["entries"])
-    assert body["you"]["rank"] == ahead + 1
-    assert body["total_ranked"] == ranked
+    assert body["you"]["rank"] == 12 and body["total_ranked"] == 12
 
     with new_session() as db:
-        db.get(Profile, student_id).xp_points = base + 40
+        db.get(Profile, student_id).xp_points = 40
         db.commit()
     body = client.get("/api/v1/quests/leaderboard", headers=_token(student_id)).json()
     assert body["entries"][0]["is_me"] is True and body["entries"][0]["rank"] == 1
     assert body["you"]["rank"] == 1
     assert body["entries"][1]["rank"] == 2 and body["entries"][1]["handle"] == alpha
+
+
+def test_each_workshop_has_its_own_class_leaderboard(flow):
+    client, new_session, users = flow
+    instructor, student = _token(users["instructor"]), _token(users["student"])
+    python_class = _class_workshop(client, instructor, "python")
+    java_class = _class_workshop(client, instructor, "java")
+    strangers = _class_workshop(client, _token(users["other_instructor"]), "cpp")
+    with new_session() as db:
+        for workshop_id in (python_class, java_class):
+            db.add(WorkshopMember(workshop_id=uuid.UUID(workshop_id), profile_id=users["student"]))
+        db.get(Profile, users["student"]).xp_points = 25
+        python_peer = _ranked_student(db, 90, handle=_letters("pythonpeer"), workshop_id=uuid.UUID(python_class))
+        java_peer = _ranked_student(db, 10, handle=_letters("javapeer"), workshop_id=uuid.UUID(java_class))
+        python_handle, java_handle = python_peer.username, java_peer.username
+        db.commit()
+
+    def board(headers, workshop_id):
+        return client.get(f"/api/v1/quests/leaderboard?workshop_id={workshop_id}", headers=headers)
+
+    python_board, java_board = board(student, python_class).json(), board(student, java_class).json()
+    assert [row["handle"] for row in python_board["entries"]][0] == python_handle and python_board["you"]["rank"] == 2
+    assert [row["handle"] for row in java_board["entries"]][-1] == java_handle and java_board["you"]["rank"] == 1
+    assert {w["id"] for w in python_board["workshops"]} == {python_class, java_class}
+    # A student only sees the leaderboards of their own Workshops; the owner sees theirs.
+    assert board(student, strangers).status_code == 404
+    owner_view = board(instructor, java_class)
+    assert owner_view.status_code == 200 and owner_view.json()["you"] is None
+    assert board(_token(users["other_instructor"]), java_class).status_code == 404
 
 
 def _reveal_reviewed_hint(client: TestClient, headers: dict[str, str], new_session, activity_id: uuid.UUID) -> None:
@@ -2222,7 +2248,7 @@ def test_one_challenge_reads_the_same_to_admin_instructor_and_student(flow, monk
     solves it at the instructor's pass mark, and the instructor, admin, leaderboard
     and profile all report that one result consistently.
     """
-    client, _, users = flow
+    client, new_session, users = flow
     admin, instructor = _token(users["admin"]), _token(users["instructor"])
     student, outsider = _token(users["student"]), _token(users["other_track"])
 
@@ -2286,6 +2312,8 @@ def test_one_challenge_reads_the_same_to_admin_instructor_and_student(flow, monk
     assert result["new_badges_unlocked"] and result["badge_xp_awarded"] > 0
     assert result["new_total_xp"] == total
     assert client.get("/api/v1/profile/me", headers=student).json()["xp_points"] == total
+    # The Class leaderboard ranks Workshop members (ADR 0001), so place the student in a class.
+    _add_member(new_session, _class_workshop(client, instructor, "python"), users["student"])
     board = client.get("/api/v1/quests/leaderboard", headers=student).json()
     assert board["you"]["xp_points"] == total and board["you"]["rank"] is not None
     assert client.get("/api/v1/quests/leaderboard", headers=instructor).json()["you"] is None
