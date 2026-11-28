@@ -20,7 +20,9 @@ const workshop = {
   is_owner: false, archived: false,
   activities: [quiz, challenge].map(({ id, added_at }, index) => ({ activity_id: id, added_at, topic: "Functions", position: index })),
 };
-const trackQuest = { ...quiz, id: "track", title: "Track practice quiz" };
+const javaQuiz = { ...quiz, id: "java-quiz", title: "Java concept check", language: "java" };
+const javaWorkshop = { ...workshop, id: "f0000000-0000-4000-8000-000000000004", name: "Java Workshop", language: "java",
+  activities: [{ activity_id: javaQuiz.id, added_at: javaQuiz.added_at, topic: "Functions", position: 0 }] };
 
 test("a learner can find a shared quest, open it from its Workshop and return", async ({ page }, info) => {
   await page.addInitScript(({ id, enlarge }) => {
@@ -36,12 +38,12 @@ test("a learner can find a shared quest, open it from its Workshop and return", 
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/profile/me")) return route.fulfill({ json: {
       id: studentId, role: "student", username: "layout-test", pseudonym_id: "layout-student",
-      workshop_languages: ["python"], xp_points: 0, current_level: 1,
+      workshop_languages: ["java", "python"], xp_points: 0, current_level: 1,
     } });
-    if (path.endsWith("/quests")) return route.fulfill({ json: [quiz, challenge, trackQuest] });
+    if (path.endsWith("/quests")) return route.fulfill({ json: [quiz, challenge, javaQuiz] });
     if (path.endsWith(`/workshops/${workshopId}/activities`)) return route.fulfill({ json: [quiz, challenge] });
     if (path.endsWith(`/workshops/${workshopId}`)) return route.fulfill({ json: workshop });
-    if (path.endsWith("/workshops")) return route.fulfill({ json: [workshop] });
+    if (path.endsWith("/workshops")) return route.fulfill({ json: [workshop, javaWorkshop] });
     return route.abort();
   });
 
@@ -51,24 +53,27 @@ test("a learner can find a shared quest, open it from its Workshop and return", 
   await expect(workshopLink).toBeVisible();
   await expect(page.getByRole("heading", { name: challenge.title })).toBeVisible();
   await expect(page.getByText("✓ Completed before sharing")).toBeVisible();
-  await expect(page.getByRole("heading", { name: trackQuest.title })).toHaveCount(0);
-  await expectContentToFit(page, quizCard, ["h2", ".quest-workshop-sources", ".quest-workshop-sources a", ".quest-card-actions"]);
-  await expectContentToFit(page, page.getByRole("group", { name: "Activity source" }), ["button"]);
+  // Every Workshop language is listed together, each card labelled with its language (ADR 0001).
+  await expect(page.getByRole("heading", { name: javaQuiz.title })).toBeVisible();
+  await expect(page.getByRole("button", { name: "All track practice" })).toHaveCount(0);
+  await expectContentToFit(page, quizCard, ["h2", ".quest-language", ".quest-workshop-sources", ".quest-workshop-sources a", ".quest-card-actions"]);
+  const languages = page.getByRole("group", { name: "Language" });
+  await expectContentToFit(page, languages, ["button"]);
 
   const questNavigation = "**/quests?*";
   await page.route(questNavigation, (route) => route.abort());
-  const trackButton = page.getByRole("button", { name: "All track practice" });
-  const workshopButton = page.getByRole("button", { name: "Workshop activities" });
-  await trackButton.click();
-  await expect(trackButton).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("heading", { name: trackQuest.title })).toBeVisible();
-  await workshopButton.click();
-  await expect(workshopButton).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("heading", { name: trackQuest.title })).toHaveCount(0);
+  const allButton = languages.getByRole("button", { name: "All languages" });
+  const javaButton = languages.getByRole("button", { name: "Java" });
+  await javaButton.click();
+  await expect(javaButton).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: quiz.title })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: javaQuiz.title })).toBeVisible();
+  await allButton.click();
+  await expect(allButton).toHaveAttribute("aria-pressed", "true");
   await page.goBack();
-  await expect(trackButton).toHaveAttribute("aria-pressed", "true");
+  await expect(javaButton).toHaveAttribute("aria-pressed", "true");
   await page.goForward();
-  await expect(workshopButton).toHaveAttribute("aria-pressed", "true");
+  await expect(allButton).toHaveAttribute("aria-pressed", "true");
   await page.unroute(questNavigation);
 
   await workshopLink.click();

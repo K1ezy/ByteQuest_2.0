@@ -756,9 +756,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/quests/page.tsx": {
-    "mtime": 1795841322.5080295,
-    "seen": 1795841535.3768218,
-    "ast_hash": "4ff10aa4904479ae5e5a822b44a29a3c",
+    "mtime": 1795842110.4838898,
+    "seen": 1795842210.0140405,
+    "ast_hash": "3880d24b0735ba5dc9cb03623627dd7f",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/quiz/[id]/page.tsx": {
@@ -1818,9 +1818,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/quests/page.test.tsx": {
-    "mtime": 1795841203.5871887,
-    "seen": 1795841535.3768218,
-    "ast_hash": "268b53f9e69b509fe374f7505b3ede2e",
+    "mtime": 1795841852.2085752,
+    "seen": 1795842210.0140405,
+    "ast_hash": "97ef2c69117532539361192568c6ac1d",
     "semantic_hash": ""
   },
   "frontend/src/components/mastery-map.tsx": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795841507.1502893,
-    "seen": 1795841535.438166,
-    "ast_hash": "a6307ad4e30b6b09a39a84f187af2b03",
+    "mtime": 1795842179.6519406,
+    "seen": 1795842210.0826337,
+    "ast_hash": "666d93763a697e1945a5fec03e9dacd9",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -2664,9 +2664,9 @@
     "semantic_hash": ""
   },
   "frontend/src/components/quest-card.tsx": {
-    "mtime": 1795830271.0212574,
-    "seen": 1795830467.8082025,
-    "ast_hash": "bfe8c93a0ff058d7936ec4caf947679b",
+    "mtime": 1795842110.4838898,
+    "seen": 1795842210.0450442,
+    "ast_hash": "8c6e79f0a2d8893994796ae97ca0da6d",
     "semantic_hash": ""
   },
   "frontend/src/components/workshops/workshop-activities.test.tsx": {
@@ -3084,9 +3084,9 @@
     "semantic_hash": ""
   },
   "frontend/layout-tests/quest-workshop-flow.layout.ts": {
-    "mtime": 1795841203.574663,
-    "seen": 1795841535.3596597,
-    "ast_hash": "fe6608d25e53c9a5a3784900a06a98d9",
+    "mtime": 1795841935.2772524,
+    "seen": 1795842209.9838812,
+    "ast_hash": "51f1bf93a4ad43ef885051059ee67685",
     "semantic_hash": ""
   },
   "backend/scripts/seed_local_fundamentals_bank.py": {
@@ -3102,9 +3102,9 @@
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/issues/02-join-by-code-and-workshop-languages.md": {
-    "mtime": 1795838810.4822652,
-    "seen": 1795839880.6470935,
-    "ast_hash": "6d5041adab3b4532f595012f92fb3e11",
+    "mtime": 1795841536.4540415,
+    "seen": 1795842210.0765662,
+    "ast_hash": "15af918dd43a6993348c37b8a063d3a8",
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/issues/03-quest-map-across-languages.md": {

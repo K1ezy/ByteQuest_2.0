@@ -9,7 +9,8 @@ import { ActivityDateFilter } from "@/components/activity-date-filter";
 import { activityDateMatches } from "@/lib/activity-date";
 import { QuestCard, questHref, questNumber, type QuestWorkshopSource } from "@/components/quest-card";
 import { ActivityPerformancePreview } from "@/components/activity-performance-preview";
-import type { Quest, Workshop } from "@/lib/types";
+import { workshopLanguages } from "@/components/workshops/workshop-ui";
+import type { ProgrammingLanguage, Quest, Workshop } from "@/lib/types";
 
 type QuestStatusFilter = "all" | "next" | "completed";
 
@@ -23,15 +24,15 @@ type PracticeCategory = (typeof categories)[number][0];
 
 function QuestsPageContent() {
   const searchParams = useSearchParams();
-  const { role } = useShellProfile();
+  const { role, workshop_languages: studentLanguages } = useShellProfile();
   const isStudent = role === "student";
-  const source = searchParams.get("source");
-  // Profile links can open a concept from any practice the learner has access to.
-  const allPractice = !isStudent || source === "all" || (source !== "workshops" && searchParams.has("concept"));
   const requestedCategory = searchParams.get("category");
   const category = categories.find(([value]) => value === requestedCategory)?.[0] ?? "";
+  // Workshops decide what a student sees (ADR 0001); the language filter only narrows that list.
+  const requestedLanguage = searchParams.get("language");
+  const language = studentLanguages.find((value) => value === requestedLanguage) ?? null;
 
-  function selectFilter(key: "source" | "category", value: string) {
+  function selectFilter(key: "language" | "category", value: string) {
     const query = new URLSearchParams(searchParams);
     if (value) query.set(key, value);
     else query.delete(key);
@@ -48,15 +49,13 @@ function QuestsPageContent() {
           </div>
         </div>
         <div className="quest-map-toolbar">
-          {isStudent && <div className="quest-filters" role="group" aria-label="Activity source">
-            <button type="button" className="filter-button" aria-pressed={!allPractice}
-              onClick={() => { if (allPractice) selectFilter("source", searchParams.has("concept") ? "workshops" : ""); }}>
-              Workshop activities
-            </button>
-            <button type="button" className="filter-button" aria-pressed={allPractice}
-              onClick={() => { if (!allPractice) selectFilter("source", "all"); }}>
-              All track practice
-            </button>
+          {isStudent && studentLanguages.length > 1 && <div className="quest-filters" role="group" aria-label="Language">
+            {[null, ...studentLanguages].map((value) => (
+              <button type="button" key={value ?? "all"} className="filter-button" aria-pressed={language === value}
+                onClick={() => { if (language !== value) selectFilter("language", value ?? ""); }}>
+                {value ? workshopLanguages[value] : "All languages"}
+              </button>
+            ))}
           </div>}
           <div className="quest-filters" role="group" aria-label="Activity type">
             {categories.map(([value, label, description]) => (
@@ -67,13 +66,13 @@ function QuestsPageContent() {
             ))}
           </div>
         </div>
-        <PracticeQuestList category={category} allPractice={allPractice} />
+        <PracticeQuestList category={category} language={language} />
       </div>
     </div>
   );
 }
 
-function PracticeQuestList({ category, allPractice }: { category: PracticeCategory; allPractice: boolean }) {
+function PracticeQuestList({ category, language }: { category: PracticeCategory; language: ProgrammingLanguage | null }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -148,8 +147,8 @@ function PracticeQuestList({ category, allPractice }: { category: PracticeCatego
     }
     return sources;
   }, [workshops]);
-  const scopedQuests = useMemo(() => allPractice ? quests : quests.filter((quest) => workshopsByQuest.has(quest.id)),
-    [allPractice, quests, workshopsByQuest]);
+  const scopedQuests = useMemo(() => language ? quests.filter((quest) => quest.language === language) : quests,
+    [language, quests]);
   const nextQuest = scopedQuests.find((quest) => !quest.is_completed);
   // Interactive selection state (Von Restorff + Direct Manipulation)
   const [selectedQuestId, setSelectedQuestId] = useState<string | null>(null);
@@ -196,7 +195,7 @@ function PracticeQuestList({ category, allPractice }: { category: PracticeCatego
   const visibleQuests = filteredQuests.filter((quest) => category === "code-challenge"
     ? quest.activity_type === "challenge" : category === "lessons-review"
       ? quest.activity_type === "quiz" : true);
-  const hasFilters = Boolean(category || selectedConcept || search.trim() || questFilter !== "all" || dateRange.from || dateRange.to);
+  const hasFilters = Boolean(category || language || selectedConcept || search.trim() || questFilter !== "all" || dateRange.from || dateRange.to);
   if (selectedQuestId && !visibleQuests.some((quest) => quest.id === selectedQuestId)) setSelectedQuestId(null);
 
   // Keyboard navigation & activation (Enter launches selected card; arrows navigate grid)
@@ -272,7 +271,6 @@ function PracticeQuestList({ category, allPractice }: { category: PracticeCatego
   }
 
   function clearConcept(query: URLSearchParams) {
-    if (query.has("concept") && !query.has("source") && isStudent) query.set("source", "all");
     query.delete("concept");
   }
 
@@ -283,16 +281,16 @@ function PracticeQuestList({ category, allPractice }: { category: PracticeCatego
       <Link className="button button-primary" href="/workshops">Go to Workshops</Link>
     </section>;
   }
-  if (isError || (!allPractice && workshopError !== null)) {
+  if (isError || (isStudent && workshopError !== null)) {
     return <section className="panel">
       <p role="alert">{isError ? message : workshopError}</p>
       <button type="button" className="button button-outline" onClick={() => void loadData()}>Retry</button>
     </section>;
   }
-  if (loading || (!allPractice && workshops === null)) {
+  if (loading || (isStudent && workshops === null)) {
     return <section className="panel" role="status">Loading quest map…</section>;
   }
-  if (!allPractice && !scopedQuests.length) {
+  if (isStudent && !quests.length) {
     return <section className="empty-state quest-filter-empty">
       <h2>No Workshop activities yet</h2>
       <p>When your instructor shares an activity in a Workshop you’ve joined, it appears here once it opens.</p>

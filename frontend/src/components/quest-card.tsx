@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { SolveStars } from "@/components/solve-stars";
 import { formatActivityDate, formatManilaDateTime } from "@/lib/activity-date";
+import { workshopLanguages } from "@/components/workshops/workshop-ui";
 import type { Quest, Workshop } from "@/lib/types";
 
 export type QuestWorkshopSource = Pick<Workshop, "id" | "name"> & { sharedAt: string };
@@ -70,6 +71,7 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
         <div className="quest-card-badges">
           {!workshop && <span className="activity-number">#{questNumber(quest)}</span>}
           <span className="tag">{challenge ? "CODE CHALLENGE" : "Concept check quiz"}</span>
+          {!workshop && <span className="tag quest-language"><span className="sr-only">Language: </span>{workshopLanguages[quest.language]}</span>}
           {next && <span className="next-badge" aria-label="Next recommended quest">
             <span className="status-dot pulsing" aria-hidden="true" /> NEXT UP
           </span>}
@@ -90,7 +92,7 @@ export function QuestCard({ quest, learner, next = false, selected = false, onSe
               <Link href={`/workshops/${id}/activities#quest-${quest.id}`}>{name}</Link>
             </li>)}
           </ul>
-        </> : <span>Track practice</span>}
+        </> : <span>Course activity</span>}
       </div>}
       <Heading id={`quest-title-${quest.id}`}>{quest.title || concept}</Heading>
       {quest.added_at && <p className="activity-added-date">

@@ -4,10 +4,10 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #9
 
-- [ ] Cards from Python and Java Workshops appear together with language badges (component test)
-- [ ] The language filter narrows the list; 'All languages' is the default
-- [ ] The track-practice toggle is gone
-- [ ] Playwright Quest Map layout test passes at desktop, narrow and large-text sizes
+- [x] Cards from Python and Java Workshops appear together with language badges (component test)
+- [x] The language filter narrows the list; 'All languages' is the default
+- [x] The track-practice toggle is gone
+- [x] Playwright Quest Map layout test passes at desktop, narrow and large-text sizes
