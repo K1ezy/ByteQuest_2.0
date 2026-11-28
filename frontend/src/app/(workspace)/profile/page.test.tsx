@@ -434,7 +434,9 @@ it("links recorded topics, shows badge descriptions and provides a score trend t
       can_open_quest: index !== 5, is_exam: index === 5,
     })),
     by_topic:["Strings & files","General"].map(topic => ({language:"java",topic,attempts:1,average_score:40})),
-    score_trend:[{title:"Intro",created_at:"2026-11-05T00:00:00Z",score_percentage:40},{title:"Practice",created_at:"2026-11-06T00:00:00Z",score_percentage:85}],
+    score_trend:[],
+    first_tries:[{activity_id:"a",title:"Intro",language:"python",created_at:"2026-11-05T00:00:00Z",score_percentage:40,passed:false},
+      {activity_id:"b",title:"Practice",language:"java",created_at:"2026-11-06T00:00:00Z",score_percentage:100,passed:true}],
     badges:[{code:"first",name:"First steps",description:"Finish one quest.",xp_bonus:5,icon_url:"/badge.svg"}],
   }});
   render(<ProfilePage/>);
@@ -447,7 +449,10 @@ it("links recorded topics, shows badge descriptions and provides a score trend t
   fireEvent.click(screen.getByRole("button", { name: "Show 6 recent attempts" }));
   expect(screen.getByText("Practice quiz 5")).toBeTruthy();
   expect(screen.queryByRole("link", { name: "Practice quiz 5" })).toBeNull();
-  expect(screen.getByRole("figure",{name:/From 40% to 85% across 2 attempts/})).toBeTruthy();
+  // The chart's title is its takeaway; each first try reads passed or not passed yet without the picture.
+  expect(screen.getByRole("heading",{name:"1 of your last 2 first tries passed. Not enough data yet — based on 2."})).toBeTruthy();
+  expect(screen.getByText("● passed · ○ not passed yet")).toBeTruthy();
+  expect(screen.getAllByRole("cell").map(cell => cell.textContent)).toEqual(expect.arrayContaining(["not passed yet", "passed"]));
   fireEvent.click(screen.getByText("View as table"));
-  expect(screen.getByRole("table",{name:"Recent score trend"})).toBeTruthy();
+  expect(screen.getByRole("table",{name:"First-try score per activity"})).toBeTruthy();
 });

@@ -4,9 +4,9 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #18
 
-- [ ] API test: analytics returns the per-activity first-try series (activity, language, score, passed) in order
-- [ ] Component test: filled and hollow markers have a text equivalent; the takeaway leads the title, summary and table
-- [ ] Fewer than 5 points shows the not-enough-data message
+- [x] API test: analytics returns the per-activity first-try series (activity, language, score, passed) in order
+- [x] Component test: filled and hollow markers have a text equivalent; the takeaway leads the title, summary and table
+- [x] Fewer than 5 points shows the not-enough-data message

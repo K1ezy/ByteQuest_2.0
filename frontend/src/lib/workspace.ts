@@ -1021,6 +1021,15 @@ export interface TopicBreakdown {
   average_score: number;
 }
 
+export interface FirstTry {
+  activity_id: string;
+  title: string;
+  language: ProgrammingLanguage;
+  created_at: string;
+  score_percentage: number;
+  passed: boolean;
+}
+
 export interface TrendPoint {
   created_at: string;
   score_percentage: number;
@@ -1094,6 +1103,8 @@ export interface StudentAnalytics {
   by_type: TypeBreakdown[];
   by_topic: TopicBreakdown[];
   score_trend: TrendPoint[];
+  /** One point per activity: its first attempt, oldest first (the latest 20). */
+  first_tries?: FirstTry[];
   recent_attempts?: {
     attempt_id: string;
     activity_id: string;

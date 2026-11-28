@@ -304,6 +304,16 @@ class TopicBreakdown(BaseModel):
     average_score: float
 
 
+class FirstTry(BaseModel):
+    """An activity's first attempt: one point per activity on the student's first-try chart."""
+    activity_id: uuid.UUID
+    title: str
+    language: ProgrammingLang
+    created_at: datetime
+    score_percentage: float
+    passed: bool
+
+
 class TrendPoint(BaseModel):
     created_at: datetime
     score_percentage: float
@@ -389,6 +399,7 @@ class StudentAnalytics(BaseModel):
     by_type: list[TypeBreakdown]
     by_topic: list[TopicBreakdown]
     score_trend: list[TrendPoint]
+    first_tries: list[FirstTry] = []  # oldest first, the latest 20
     recent_attempts: list[RecentAttempt]
     exam_history: list[ExamHistoryEntry]
     badges: list[BadgeEntry]
@@ -528,6 +539,20 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
         )
         for row in attempt_rows
     ]
+    first_try_rows = (
+        db.query(ActivityAttempt, LearningActivity)
+        .join(LearningActivity, LearningActivity.id == ActivityAttempt.activity_id)
+        .filter(visible_attempt_filter, ActivityAttempt.attempt_number == 1)
+        .order_by(ActivityAttempt.created_at.desc(), ActivityAttempt.id.desc())
+        .limit(20)
+        .all()
+    )
+    first_tries = [
+        FirstTry(activity_id=activity.id, title=activity.title or activity.topic_concept, language=activity.language,
+                 created_at=attempt.created_at, score_percentage=float(attempt.score_percentage or 0.0),
+                 passed=bool(attempt.is_successful))
+        for attempt, activity in reversed(first_try_rows)
+    ]
     score_trend = [
         TrendPoint(created_at=row.created_at, score_percentage=float(row.score_percentage or 0.0), title=row.title)
         for row in reversed(attempt_rows[:15])
@@ -614,6 +639,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
         by_type=by_type,
         by_topic=by_topic,
         score_trend=score_trend,
+        first_tries=first_tries,
         recent_attempts=recent_attempts,
         exam_history=[],
         badges=badges,

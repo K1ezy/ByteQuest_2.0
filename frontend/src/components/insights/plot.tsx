@@ -21,7 +21,7 @@ export function ChartTooltip({ row, series, text, formatX }: {
   </div>;
 }
 
-export default function Plot({ rows, series, domain, numericX, formatX, references, connectGaps, label, summary, tooltip }: ChartProps) {
+export default function Plot({ rows, series, domain, numericX, formatX, references, connectGaps, label, summary, tooltip, pointState }: ChartProps) {
   const { preferences } = useAccessibility();
   const animate = !preferences.reducedMotion;
   return <div className="insight-plot"><ResponsiveContainer width="100%" height="100%" minWidth={0}>
@@ -42,7 +42,12 @@ export default function Plot({ rows, series, domain, numericX, formatX, referenc
       {series.map(s => <Line key={s.key} dataKey={s.key} stroke={s.token} strokeDasharray={s.dash} strokeWidth={2}
         connectNulls={connectGaps ?? false} isAnimationActive={animate} animationDuration={220}
         // Solid outlines: dots would otherwise inherit the line's dash and look broken.
-        dot={{r:3, strokeDasharray:"0"}} activeDot={{r:5, strokeDasharray:"0"}} />)}
+        dot={pointState ? (dot: { cx?: number; cy?: number; index?: number; payload?: ChartRow }) => {
+          const state = dot.payload ? pointState(dot.payload) : undefined;
+          // Filled when passed, hollow when not yet, faded when the sample is too small to trust.
+          return <circle key={`${s.key}-${dot.index}`} cx={dot.cx} cy={dot.cy} r={5} stroke={s.token} strokeWidth={2}
+            fill={state === "open" ? "var(--surface, #fff)" : s.token} opacity={state === "faded" ? 0.35 : 1} />;
+        } : {r:3, strokeDasharray:"0"}} activeDot={pointState ? false : {r:5, strokeDasharray:"0"}} />)}
     </LineChart>
   </ResponsiveContainer></div>;
 }

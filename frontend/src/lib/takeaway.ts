@@ -42,3 +42,12 @@ export function firstTrySentence(firstTry: number, passed: number): string {
   if (passed === 0) return "Pass an activity to see how many go through on the first try.";
   return `${firstTry} of the ${plural(passed, "activity", "activities")} you passed went through on the first try.`;
 }
+
+/** Title of the student's first-try chart: how many of the latest eight passed, then the trend. */
+export function firstTryHeadline(tries: { score: number; passed: boolean }[]): string {
+  if (!tries.length) return "Your first tries will appear here once you attempt an activity.";
+  const latest = tries.slice(-8);
+  const passed = latest.filter((t) => t.passed).length;
+  return `${passed} of your last ${plural(latest.length, "first try", "first tries")} passed. `
+    + trendTakeaway(latest.map((t) => t.score), "Your first-try scores");
+}

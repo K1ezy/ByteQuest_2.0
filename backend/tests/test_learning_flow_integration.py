@@ -3801,3 +3801,26 @@ def test_progress_counts_activities_passed_and_first_try_passes(flow):
     progress = client.get("/api/v1/profile/me/analytics", headers=_token(users["student"])).json()["student"]
     # Activities passed counts each activity once, however many tries it took; a first-try pass needs attempt 1.
     assert (progress["quests_completed"], progress["first_try_passes"]) == (2, 1)
+
+
+def test_progress_lists_each_activitys_first_try_in_order(flow):
+    client, new_session, users = flow
+    start = datetime.now(timezone.utc) - timedelta(days=3)
+    with new_session() as db:
+        early, later = _quiz(db, users["instructor"]), _quiz(db, users["instructor"])
+        db.get(LearningActivity, later).language = ProgrammingLang.java
+        for activity_id in (early, later):
+            _published_activity(db, activity_id)
+        db.add_all([
+            ActivityAttempt(student_id=users["student"], activity_id=later, attempt_number=1, is_successful=False,
+                            score_percentage=33, created_at=start + timedelta(days=1)),
+            ActivityAttempt(student_id=users["student"], activity_id=later, attempt_number=2, is_successful=True,
+                            score_percentage=100, created_at=start + timedelta(days=2)),
+            ActivityAttempt(student_id=users["student"], activity_id=early, attempt_number=1, is_successful=True,
+                            score_percentage=100, created_at=start),
+        ])
+        db.commit()
+    series = client.get("/api/v1/profile/me/analytics", headers=_token(users["student"])).json()["student"]["first_tries"]
+    # One point per activity, its first attempt only, oldest first; retries never add points.
+    assert [(row["activity_id"], row["language"], row["score_percentage"], row["passed"]) for row in series] == [
+        (str(early), "python", 100, True), (str(later), "java", 33, False)]

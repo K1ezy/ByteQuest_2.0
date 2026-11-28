@@ -1,6 +1,6 @@
 "use client";
 
-import { activitiesPassedSentence, firstTrySentence } from "@/lib/takeaway";
+import { activitiesPassedSentence, firstTryHeadline, firstTrySentence } from "@/lib/takeaway";
 import { MetricCard } from "@/components/insights/metric-card";
 import { languageList, workshopLanguages } from "@/components/workshops/workshop-ui";
 import Link from "next/link";
@@ -120,6 +120,8 @@ function SolvingHabits({ pattern }: { pattern: HelpPattern }) {
 
 export function StudentProgress({ a, profile }: { a: StudentAnalytics; profile: Profile }) {
   const typeLabel = (t: string) => (t === "quiz" ? "Quizzes" : t === "challenge" ? "Coding challenges" : t);
+  const firstTries = a.first_tries ?? [];
+  const firstTryTitle = firstTryHeadline(firstTries.map(t => ({ score: t.score_percentage, passed: t.passed })));
   return (
     <>
       <ProgressOverview a={a} languages={profile.workshop_languages} />
@@ -160,28 +162,23 @@ export function StudentProgress({ a, profile }: { a: StudentAnalytics; profile: 
         <section className="ws-panel" aria-labelledby="trend-title">
           <div className="ws-panel-head">
             <div>
-              <p className="eyebrow-label">TREND</p>
-              <h2 id="trend-title">Recent score trend</h2>
+              <p className="eyebrow-label">FIRST TRIES</p>
+              <h2 id="trend-title">{firstTryTitle}</h2>
+              <p className="ws-muted">First-try score per activity, in the order you did them</p>
             </div>
           </div>
-          <InsightLineChart label="Recent score trend" xLabel="Attempt date" domain={[0,100]} numericX
-            formatX={time => formatDateTime(new Date(Number(time)).toISOString())}
-            rows={a.score_trend.map(p => ({ x: Date.parse(p.created_at), score: p.score_percentage, title: p.title }))}
-            series={[{ key: "score", label: "Score (%)", token: "var(--chart-series)" }]}
-            tooltip={{ title: row => (row.title || "Activity") + " · " + formatManilaDateTime(new Date(Number(row.x)).toISOString()),
-              value: (_, row) => Math.round(Number(row.score)) + "%" }}
-            summary={a.score_trend.length ? "From " + Math.round(a.score_trend[0].score_percentage) + "% to "
-              + Math.round(a.score_trend[a.score_trend.length - 1].score_percentage) + "% across " + a.score_trend.length + " attempts." : ""} />
-          {a.score_trend.length > 0 ? (
-            <ul className="ws-compact-list profile-recent">
-              {[...a.score_trend].reverse().slice(0, 6).map((point, index) => (
-                <li key={index}>
-                  <strong>{point.title || "Activity"}</strong>
-                  <span>{Math.round(point.score_percentage)}% · {formatDateTime(point.created_at)}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
+          <InsightLineChart label="First-try score per activity" xLabel="Activity" domain={[0,100]} numericX
+            formatX={x => "Activity " + x}
+            rows={firstTries.map((t, i) => ({ x: i + 1, score: t.score_percentage, title: t.title, language: t.language, passed: t.passed ? 1 : 0 }))}
+            series={[{ key: "score", label: "First-try score (%)", token: "var(--chart-series)" }]}
+            pointState={row => row.passed ? "passed" : "open"}
+            tooltip={{ title: row => row.title + " · " + workshopLanguages[row.language as keyof typeof workshopLanguages],
+              value: (_, row) => Math.round(Number(row.score)) + "% · " + (row.passed ? "passed" : "not passed yet") }}
+            summary={firstTryTitle}
+            table={<table className="ws-table analysis-table"><caption>First-try score per activity</caption>
+              <thead><tr><th scope="col">Activity</th><th scope="col">Language</th><th scope="col">First-try score</th><th scope="col">Result</th></tr></thead>
+              <tbody>{firstTries.map(t => <tr key={t.activity_id}><th scope="row">{t.title}</th><td>{workshopLanguages[t.language]}</td>
+                <td>{Math.round(t.score_percentage)}%</td><td>{t.passed ? "passed" : "not passed yet"}</td></tr>)}</tbody></table>} />
         </section>
 
         <div className="ws-stack">

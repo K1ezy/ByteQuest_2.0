@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { MIN_SAMPLE, activitiesPassedSentence, firstTrySentence, notEnoughData, trendTakeaway } from "./takeaway";
+import { MIN_SAMPLE, activitiesPassedSentence, firstTryHeadline, firstTrySentence, notEnoughData, trendTakeaway } from "./takeaway";
 
 it("needs at least five values before describing a trend", () => {
   expect(MIN_SAMPLE).toBe(5);
@@ -26,4 +26,14 @@ it("writes the counting headlines with correct plurals and edge cases", () => {
   expect(firstTrySentence(8, 13)).toBe("8 of the 13 activities you passed went through on the first try.");
   expect(firstTrySentence(1, 1)).toBe("1 of the 1 activity you passed went through on the first try.");
   expect(firstTrySentence(0, 0)).toBe("Pass an activity to see how many go through on the first try.");
+});
+
+it("headlines the first-try chart with a count, then the trend or a not-enough-data note", () => {
+  const tries = (scores: number[]) => scores.map((score) => ({ score, passed: score === 100 }));
+  expect(firstTryHeadline([])).toBe("Your first tries will appear here once you attempt an activity.");
+  expect(firstTryHeadline(tries([100, 50]))).toBe("1 of your last 2 first tries passed. Not enough data yet — based on 2.");
+  expect(firstTryHeadline(tries([50, 50, 67, 100, 100, 100, 100, 100])))
+    .toBe("5 of your last 8 first tries passed. Your first-try scores are rising (up about 33 points).");
+  expect(firstTryHeadline(tries([100, 100, 100, 100, 100, 100, 100, 100, 100, 50])))
+    .toBe("7 of your last 8 first tries passed. Your first-try scores are falling (down about 12 points).");
 });
