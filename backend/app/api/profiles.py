@@ -19,7 +19,7 @@ from app.services.profile_attention import (
     personal_audit,
 )
 from app.services.gamification.progression import XP_PER_LEVEL, quest_completion
-from app.services.gamification.sequencer import determine_track_recommendation
+from app.services.gamification.sequencer import determine_recommendation
 from app.services.gamification.solve_quality import help_pattern
 from app.services.attempt_visibility import published_student_clause
 from app.services.usernames import normalize_username
@@ -576,7 +576,7 @@ def _student_analytics(db: Session, user: Profile) -> StudentAnalytics:
 
     xp_into_level = max(0, int(user.xp_points or 0)) % XP_PER_LEVEL
     completed, total = quest_completion(db, user)
-    recommendation = determine_track_recommendation(db, user)
+    recommendation = determine_recommendation(db, user)
     target = db.get(LearningActivity, recommendation["target_activity_id"]) if recommendation["target_activity_id"] else None
 
     return StudentAnalytics(

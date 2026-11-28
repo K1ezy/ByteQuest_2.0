@@ -30,21 +30,21 @@
     "semantic_hash": ""
   },
   "backend/app/api/pilot.py": {
-    "mtime": 1795839042.4369571,
-    "seen": 1795839880.525396,
-    "ast_hash": "20eaec1190713acf0d1755bd3d3b2ab4",
+    "mtime": 1795842635.4100828,
+    "seen": 1795843040.5403807,
+    "ast_hash": "b8b389018bf6b012a8a8967c5ec42f4b",
     "semantic_hash": ""
   },
   "backend/app/api/profiles.py": {
-    "mtime": 1795841203.5636568,
-    "seen": 1795841535.3219786,
-    "ast_hash": "121a464333f8a77a5235f1f161324731",
+    "mtime": 1795842635.4297383,
+    "seen": 1795843040.5403807,
+    "ast_hash": "4f46c1452c6fbd5c46ee7b66e9af151a",
     "semantic_hash": ""
   },
   "backend/app/api/quests_gamification.py": {
-    "mtime": 1795839033.7146146,
-    "seen": 1795839880.525396,
-    "ast_hash": "460661b9dec24669a00d3f7d886ff573",
+    "mtime": 1795842902.6030557,
+    "seen": 1795843040.5403807,
+    "ast_hash": "b4fcb79dc56663e01b5c09e8b0ed73f5",
     "semantic_hash": ""
   },
   "backend/app/api/rag_instructor.py": {
@@ -210,9 +210,9 @@
     "semantic_hash": ""
   },
   "backend/app/services/gamification/sequencer.py": {
-    "mtime": 1795841322.5070274,
-    "seen": 1795841535.3340957,
-    "ast_hash": "1f819fc12b0d92a1999c0751d2f33ae4",
+    "mtime": 1795842635.2214925,
+    "seen": 1795843040.5542707,
+    "ast_hash": "8907f17c1423a6247c41e7dac9d16106",
     "semantic_hash": ""
   },
   "backend/app/services/judge0/__init__.py": {
@@ -432,9 +432,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_learning_flow_integration.py": {
-    "mtime": 1795841203.5716658,
-    "seen": 1795841535.355647,
-    "ast_hash": "bc1a47d4bf64960e9ed6712977169f4b",
+    "mtime": 1795842742.223044,
+    "seen": 1795843040.5734217,
+    "ast_hash": "caabcebe3956054b578c1e3190e0f271",
     "semantic_hash": ""
   },
   "backend/tests/test_ml_exam_features.py": {
@@ -756,9 +756,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/quests/page.tsx": {
-    "mtime": 1795842110.4838898,
-    "seen": 1795842210.0140405,
-    "ast_hash": "3880d24b0735ba5dc9cb03623627dd7f",
+    "mtime": 1795842760.0292442,
+    "seen": 1795843040.6026382,
+    "ast_hash": "7e7577416a0b128d73b451cdf1ff9810",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/quiz/[id]/page.tsx": {
@@ -1104,9 +1104,9 @@
     "semantic_hash": ""
   },
   "frontend/src/lib/types.ts": {
-    "mtime": 1795841203.6076317,
-    "seen": 1795841535.4211662,
-    "ast_hash": "ffb2ac06841247a1fadbc94ffebe0791",
+    "mtime": 1795842760.02863,
+    "seen": 1795843040.6526322,
+    "ast_hash": "d402cc56a6d27efa45e287b8cf738d08",
     "semantic_hash": ""
   },
   "frontend/src/lib/useSafeWindowNavigation.ts": {
@@ -1818,9 +1818,9 @@
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/quests/page.test.tsx": {
-    "mtime": 1795841852.2085752,
-    "seen": 1795842210.0140405,
-    "ast_hash": "97ef2c69117532539361192568c6ac1d",
+    "mtime": 1795842767.3357022,
+    "seen": 1795843040.6026382,
+    "ast_hash": "fb0fabe02d2d7907d16f773bde685139",
     "semantic_hash": ""
   },
   "frontend/src/components/mastery-map.tsx": {
@@ -2586,9 +2586,9 @@
     "semantic_hash": ""
   },
   "docs/BYTEQUEST_SYSTEM_STATUS_2026-11-21.md": {
-    "mtime": 1795842179.6519406,
-    "seen": 1795842210.0826337,
-    "ast_hash": "666d93763a697e1945a5fec03e9dacd9",
+    "mtime": 1795843010.3337073,
+    "seen": 1795843040.6707761,
+    "ast_hash": "74357f68fe9fbe64a2b2d91ab64a4743",
     "semantic_hash": ""
   },
   "docs/ML_IMPROVEMENT_PLAN.md": {
@@ -3042,9 +3042,9 @@
     "semantic_hash": ""
   },
   "GLOSSARY.md": {
-    "mtime": 1795838249.0553432,
-    "seen": 1795839880.6481,
-    "ast_hash": "a27e4d18487409bed3509c26a05abba8",
+    "mtime": 1795842878.4624007,
+    "seen": 1795843040.6677706,
+    "ast_hash": "441bc4c7698d822919af3e06ad9c61d7",
     "semantic_hash": ""
   },
   "frontend/src/app/(workspace)/instructor/predictions/page.tsx": {
@@ -3108,9 +3108,9 @@
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/issues/03-quest-map-across-languages.md": {
-    "mtime": 1795838816.2563205,
-    "seen": 1795839880.6470935,
-    "ast_hash": "d430186740957c2a539dbd844eb3d1b1",
+    "mtime": 1795842211.155499,
+    "seen": 1795843040.6646743,
+    "ast_hash": "d18f67c86cc751298ef334eec3276d97",
     "semantic_hash": ""
   },
   ".scratch/workshop-languages/issues/04-one-xp-and-next-up.md": {

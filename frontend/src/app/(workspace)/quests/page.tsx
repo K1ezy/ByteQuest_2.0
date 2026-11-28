@@ -149,7 +149,7 @@ function PracticeQuestList({ category, language }: { category: PracticeCategory;
   }, [workshops]);
   const scopedQuests = useMemo(() => language ? quests.filter((quest) => quest.language === language) : quests,
     [language, quests]);
-  const nextQuest = scopedQuests.find((quest) => !quest.is_completed);
+  const nextQuest = scopedQuests.find((quest) => quest.next_up);
   // Interactive selection state (Von Restorff + Direct Manipulation)
   const [selectedQuestId, setSelectedQuestId] = useState<string | null>(null);
 

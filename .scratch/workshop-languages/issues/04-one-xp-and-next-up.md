@@ -4,10 +4,10 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 GitHub: #10
 
-- [ ] XP sums attempts from a Python and a Java activity (API test)
-- [ ] Next up picks the soonest deadline across two Workshops, then the lowest position
-- [ ] Dashboard and Quest Map show the same Next up
-- [ ] No Next up for a student in no Workshop
+- [x] XP sums attempts from a Python and a Java activity (API test)
+- [x] Next up picks the soonest deadline across two Workshops, then the lowest position
+- [x] Dashboard and Quest Map show the same Next up
+- [x] No Next up for a student in no Workshop

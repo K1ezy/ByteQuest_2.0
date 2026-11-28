@@ -24,3 +24,8 @@ _Avoid_: track practice, quest (for the shared item)
 
 The XP ranking of one Workshop's members against each other.
 _Avoid_: track leaderboard
+
+**Next up**
+
+The one activity a student is recommended to do next across all their Workshops: the open, unfinished Workshop activity due soonest.
+_Avoid_: next quest on your track

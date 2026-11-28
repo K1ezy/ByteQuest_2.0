@@ -43,7 +43,7 @@ from app.services.gamification.quiz_content import (
 )
 from app.services.gamification.sequencer import (
     QUIZ_MASTERY_SCORE,
-    determine_track_recommendation,
+    determine_recommendation,
     determine_next_task_rule_based,
 )
 from app.services.attempt_visibility import (
@@ -96,6 +96,8 @@ class QuestCard(BaseModel):
     problem_statement: Optional[str] = None
     starter_code: Optional[str] = None
     is_completed: bool
+    # The one recommended "Next up" activity; the Dashboard recommends the same one.
+    next_up: bool = False
     completed_at: datetime | None = None
     # Best solve-quality stars (1-3) on a solved code challenge; None otherwise.
     stars: Optional[int] = None
@@ -287,6 +289,9 @@ def list_published_quests(
         completions = {}
         challenge_stars = {}
 
+    # A single-card detail request needs no recommendation.
+    next_up_id = (determine_recommendation(db, current_user)["target_activity_id"]
+                  if current_user.role == UserRole.student and details_for is None else None)
     detail_challenge_ids = [
         activity.id for activity in activities
         if activity.activity_type == ActivityKind.challenge and (details_for is None or activity.id == details_for)
@@ -339,6 +344,7 @@ def list_published_quests(
                 problem_statement=activity.problem_statement if include_detail else None,
                 starter_code=activity.starter_code if include_detail else None,
                 is_completed=activity.id in completions,
+                next_up=activity.id == next_up_id,
                 completed_at=as_aware(completions.get(activity.id)),
                 stars=challenge_stars.get(activity.id),
                 is_closed=activity_is_closed(activity, now),
@@ -631,6 +637,6 @@ def get_student_progress(
     ]
 
     recommendation = NextStepRecommendation(
-        **determine_track_recommendation(db, current_user)
+        **determine_recommendation(db, current_user)
     )
     return StudentProgress(total_attempts=total_attempts, attempts=attempts, badges=badges, next_recommendation=recommendation)

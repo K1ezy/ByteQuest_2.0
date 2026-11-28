@@ -24,7 +24,7 @@ from app.services.ai_rag.retrieval import passages_block, tutoring_document_ids,
 from app.services.ai_rag.solution_guard import WITHHELD_HINT, reveals_solution
 from app.services.ai_rag.gemini_client import GEMINI_DISABLED
 from app.services.gamification.progression import quest_completion
-from app.services.gamification.sequencer import determine_track_recommendation
+from app.services.gamification.sequencer import determine_recommendation
 from app.services.course_access import active_membership_course_ids, may_manage_instructional_content
 from app.services.attempt_visibility import (
     activity_is_closed,
@@ -89,7 +89,7 @@ def student_announcements(user: Profile = Depends(get_current_user), db: Session
 @router.get("/dashboard")
 def dashboard(user: Profile = Depends(get_current_user), db: Session = Depends(get_db)):
     student_only(user)
-    recommendation = determine_track_recommendation(db, user)
+    recommendation = determine_recommendation(db, user)
     target = db.get(LearningActivity, recommendation["target_activity_id"]) if recommendation["target_activity_id"] else None
     completed, total = quest_completion(db, user)
     pending = db.query(SubmissionJob).filter(

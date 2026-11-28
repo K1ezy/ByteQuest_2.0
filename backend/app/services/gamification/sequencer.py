@@ -69,33 +69,8 @@ def determine_next_task_rule_based(
     )
 
     if is_mastered:
-        next_activity = (
-            db.query(LearningActivity)
-            .filter(
-                LearningActivity.language == completed_activity.language,
-                LearningActivity.review_status == ReviewState.published,
-                student_visible_activity_clause(student.id),
-                activity_accepts_submissions_clause(),
-                LearningActivity.sequence_order > completed_activity.sequence_order,
-                ~successful_activity,
-            )
-            .order_by(
-                LearningActivity.sequence_order.asc(),
-                LearningActivity.difficulty_level.asc(),
-                LearningActivity.id.asc(),
-            )
-            .first()
-        )
-        if next_activity is None:
-            # Check earlier quests too. A learner can start anywhere on the map.
-            return determine_track_recommendation(db, student, consider_latest=False)
-
-        return {
-            "sequencer_mode": "rule_based",
-            "recommended_action": "advance_next_level",
-            "target_activity_id": next_activity.id,
-            "rationale": "Mastery criteria met. Continue to the next published activity.",
-        }
+        # Mastered: move on to whatever is due soonest across every Workshop (ADR 0001).
+        return determine_recommendation(db, student, consider_latest=False)
 
     remedial_activity = (
         db.query(LearningActivity)
@@ -118,7 +93,7 @@ def determine_next_task_rule_based(
     )
 
     if remedial_activity is None and activity_is_closed(completed_activity):
-        return determine_track_recommendation(db, student, consider_latest=False)
+        return determine_recommendation(db, student, consider_latest=False)
 
     return {
         "sequencer_mode": "rule_based",
@@ -130,18 +105,23 @@ def determine_next_task_rule_based(
     }
 
 
-def determine_track_recommendation(
+def next_up_order():
+    """One "Next up" across all Workshops: soonest deadline first, then the lowest number."""
+    return (
+        LearningActivity.closes_at.asc().nulls_last(),
+        LearningActivity.sequence_order.asc(),
+        LearningActivity.difficulty_level.asc(),
+        LearningActivity.id.asc(),
+    )
+
+
+def determine_recommendation(
     db: Session,
     student: Profile,
     *,
     consider_latest: bool = True,
 ) -> dict[str, Any]:
-    """Recommend the next action for the student's currently selected language.
-
-    Attempt history and XP are account-wide, but a quest-map recommendation must
-    be based only on the student's enrolled language. This keeps attempts made
-    while exploring another language from incorrectly marking this track done.
-    """
+    """Recommend the student's next action across every activity their Workshops share (ADR 0001)."""
     if not student.workshop_languages:
         return {
             "sequencer_mode": "rule_based",
@@ -159,17 +139,13 @@ def determine_track_recommendation(
         )
         .exists()
     )
-    track_activities = db.query(LearningActivity).filter(
+    activities = db.query(LearningActivity).filter(
         LearningActivity.review_status == ReviewState.published,
         student_visible_activity_clause(student.id),
     )
     first_uncompleted = (
-        track_activities.filter(~successful_activity, activity_accepts_submissions_clause())
-        .order_by(
-            LearningActivity.sequence_order.asc(),
-            LearningActivity.difficulty_level.asc(),
-            LearningActivity.id.asc(),
-        )
+        activities.filter(~successful_activity, activity_accepts_submissions_clause())
+        .order_by(*next_up_order())
         .first()
     )
 
@@ -192,16 +168,16 @@ def determine_track_recommendation(
                 "sequencer_mode": "rule_based",
                 "recommended_action": "start_track" if consider_latest else "advance_next_level",
                 "target_activity_id": first_uncompleted.id,
-                "rationale": "Start this language track with its first uncompleted published activity.",
+                "rationale": "Start with the activity that is due soonest.",
             }
-        if track_activities.first() is None:
+        if activities.first() is None:
             return {
                 "sequencer_mode": "rule_based",
                 "recommended_action": "no_published_activities",
                 "target_activity_id": None,
-                "rationale": "There are no published activities in your selected language track yet.",
+                "rationale": "Your workshops have not shared an activity yet.",
             }
-        if track_activities.filter(~successful_activity).first() is not None:
+        if activities.filter(~successful_activity).first() is not None:
             return {
                 "sequencer_mode": "rule_based",
                 "recommended_action": "no_open_activities",
@@ -212,7 +188,7 @@ def determine_track_recommendation(
             "sequencer_mode": "rule_based",
             "recommended_action": "completed_track",
             "target_activity_id": None,
-            "rationale": "You completed all published activities in this language track.",
+            "rationale": "You completed every activity your workshops have shared.",
         }
 
     latest_attempt, latest_activity = latest_attempt_row

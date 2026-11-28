@@ -3636,3 +3636,45 @@ def test_a_published_activity_outside_every_workshop_reaches_no_student(flow):
         quiz_id = _quiz(db, users["instructor"])
     _review_and_publish(new_session, quiz_id, users["instructor"], share=False)
     assert str(quiz_id) not in _quest_ids(client, _token(users["student"]))
+
+
+def test_next_up_is_the_soonest_deadline_across_workshops_and_xp_counts_every_language(flow):
+    client, new_session, users = flow
+    instructor, student = _token(users["instructor"]), _token(users["student"])
+    now = datetime.now(timezone.utc)
+    with new_session() as db:
+        python_quiz = _quiz(db, users["instructor"])
+        java_challenge = _challenge(db, users["instructor"], reference="print(2 * int(input()))")
+        later = _quiz(db, users["instructor"])
+        db.get(LearningActivity, java_challenge).language = ProgrammingLang.java
+        db.get(LearningActivity, later).closes_at = now + timedelta(days=5)
+        db.get(LearningActivity, java_challenge).closes_at = now + timedelta(days=1)
+        db.commit()
+    for activity_id in (python_quiz, java_challenge, later):
+        _review_and_publish(new_session, activity_id, users["instructor"], share=False)
+    with new_session() as db:  # the undated quiz comes first in list order
+        db.get(LearningActivity, python_quiz).sequence_order = 1
+        db.get(LearningActivity, later).sequence_order = 2
+        db.get(LearningActivity, java_challenge).sequence_order = 3
+        db.commit()
+    for language, activities in (("python", (python_quiz, later)), ("java", (java_challenge,))):
+        _add_member(new_session, _class_workshop(client, instructor, language, *activities), users["student"])
+
+    def next_up() -> tuple[str | None, set[str]]:
+        dashboard = client.get("/api/v1/pilot/dashboard", headers=student).json()
+        flagged = {row["id"] for row in client.get("/api/v1/quests", headers=student).json() if row["next_up"]}
+        return (dashboard["next_activity"] or {}).get("id"), flagged
+
+    # The Java challenge is due first, so it leads across both Workshops; undated work comes last.
+    assert next_up() == (str(java_challenge), {str(java_challenge)})
+    assert _graded_job(client, student, java_challenge, "print(2 * int(input()))")["xp_awarded"] == 40
+    assert next_up() == (str(later), {str(later)})
+    xp = lambda: client.get("/api/v1/profile/me", headers=student).json()["xp_points"]  # noqa: E731
+    after_java = xp()
+    assert after_java >= 40
+    quiz = client.post("/api/v1/quests/submit-quiz", headers=student, json={
+        "activity_id": str(later), "answers": {"q1": "A", "q2": "A", "q3": "A"}})
+    assert quiz.status_code == 200, quiz.text
+    assert next_up() == (str(python_quiz), {str(python_quiz)})
+    # One XP total: the Python quiz's award (plus any badge bonus) adds to the Java XP.
+    assert xp() >= after_java + 25

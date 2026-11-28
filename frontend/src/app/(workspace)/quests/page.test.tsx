@@ -83,6 +83,17 @@ it("narrows the Quest Map to one Workshop language and back to all languages", a
   expect(screen.getByRole("heading", { name: quest.title! })).toBeTruthy();
 });
 
+it("marks the server's one Next up activity, not simply the first unfinished card", async () => {
+  const first = { ...quest, is_completed: false };
+  const dueSoon = { ...quest, id: "due-soon", title: "Due soon", is_completed: false, next_up: true };
+  mockQuests([first, dueSoon]);
+  render(<QuestsPage />);
+  const dueCard = (await screen.findByRole("heading", { name: "Due soon" })).closest("article")!;
+  expect(within(dueCard).getByLabelText("Next recommended quest")).toBeTruthy();
+  const firstCard = screen.getByRole("heading", { name: quest.title! }).closest("article")!;
+  expect(within(firstCard).queryByLabelText("Next recommended quest")).toBeNull();
+});
+
 it("shows no language filter to a student whose Workshops all use one language", async () => {
   mockQuests([quest]);
   render(<QuestsPage />);
