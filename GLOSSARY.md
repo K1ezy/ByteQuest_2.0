@@ -29,3 +29,23 @@ _Avoid_: track leaderboard
 
 The one activity a student is recommended to do next across all their Workshops: the open, unfinished Workshop activity due soonest.
 _Avoid_: next quest on your track
+
+**Pass mark**
+
+The score an attempt must reach for its activity to count as passed. It is set per activity; a coding challenge with none set must pass every test.
+_Avoid_: passing grade, cutoff (cutoff is the prediction threshold)
+
+**Activities passed**
+
+How many of the activities a student can open they have passed at least once, out of all of them.
+_Avoid_: attempts passed, completion rate
+
+**First-try pass**
+
+An activity whose first graded attempt reached its pass mark.
+_Avoid_: first-attempt success
+
+**Takeaway**
+
+The one sentence above a chart or metric that says what it shows, written by fixed rules from the data.
+_Avoid_: insight, summary (summary is the screen-reader description)
